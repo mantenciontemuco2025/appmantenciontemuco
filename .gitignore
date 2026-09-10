@@ -1,0 +1,99 @@
+# -----------------------------------------------------------------------------
+# Secrets and environment files
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Google, OAuth and deployment credentials
+backend/credentials/
+**/credentials/
+**/*credentials*.json
+**/*-credentials.json
+**/service-account*.json
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+**/.secrets/
+
+# -----------------------------------------------------------------------------
+# Python / FastAPI
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+ENV/
+env/
+dist/
+build/
+.eggs/
+pip-wheel-metadata/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+coverage.xml
+htmlcov/
+
+# -----------------------------------------------------------------------------
+# Node / Next.js / Vercel
+# -----------------------------------------------------------------------------
+node_modules/
+.next/
+out/
+.turbo/
+.vercel/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# -----------------------------------------------------------------------------
+# Local databases, PostgreSQL and backups
+# -----------------------------------------------------------------------------
+pgdata/
+*.sqlite
+*.sqlite3
+*.db
+backups/
+*.dump
+*.backup
+*.sql
+
+# -----------------------------------------------------------------------------
+# Logs and temporary files
+# -----------------------------------------------------------------------------
+logs/
+*.log
+*.tmp
+*.temp
+*.bak
+*.tsbuildinfo
+
+# Informes y salidas generadas localmente por diagnósticos/pruebas
+backend/_diag*.txt
+backend/*_output.txt
+
+# -----------------------------------------------------------------------------
+# Docker local overrides
+# -----------------------------------------------------------------------------
+docker-compose.override.yml
+
+# -----------------------------------------------------------------------------
+# IDE and operating system files
+# -----------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini
