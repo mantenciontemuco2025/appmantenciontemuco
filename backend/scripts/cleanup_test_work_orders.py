@@ -96,16 +96,8 @@ async def _delete_database_rows(work_order_ids: list[int]) -> None:
         await db.commit()
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--confirm",
-        action="store_true",
-        help="perform the deletion after displaying the exact targets",
-    )
-    args = parser.parse_args()
-
-    work_orders, registers = asyncio.run(_load_data())
+async def _run(args: argparse.Namespace) -> None:
+    work_orders, registers = await _load_data()
     names = set(TEST_OT_NUMBERS)
     drive_files = _drive_files_by_name(names)
     monthly_rows = _monthly_rows(_monthly_spreadsheet_ids(registers), names)
@@ -141,8 +133,19 @@ def main() -> None:
     for file in drive_files:
         drive.files().delete(fileId=file["id"]).execute()
 
-    asyncio.run(_delete_database_rows([work_order.id for work_order in work_orders]))
+    await _delete_database_rows([work_order.id for work_order in work_orders])
     print("\nLimpieza completada.")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="perform the deletion after displaying the exact targets",
+    )
+    args = parser.parse_args()
+    asyncio.run(_run(args))
 
 
 if __name__ == "__main__":
