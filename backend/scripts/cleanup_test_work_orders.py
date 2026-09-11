@@ -11,10 +11,11 @@ import argparse
 import asyncio
 from collections.abc import Iterable
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 
 from app.db.session import async_session
 from app.models.monthly_register import GoogleMonthlyRegister
+from app.models.notification import Notification
 from app.models.sync_job import ExternalSyncJob
 from app.models.work_order import WorkOrder
 from app.models.work_order_participants import work_order_participants
@@ -75,29 +76,53 @@ async def _load_data():
         )
         work_orders = list(result.scalars().all())
         registers = list((await db.execute(select(GoogleMonthlyRegister))).scalars().all())
-        return work_orders, registers
+        notification_filters = [
+            condition
+            for ot_number in TEST_OT_NUMBERS
+            for condition in (
+                Notification.message.contains(ot_number),
+                Notification.link.contains(ot_number),
+            )
+        ]
+        notifications = list(
+            (
+                await db.execute(
+                    select(Notification).where(or_(*notification_filters))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return work_orders, registers, notifications
 
 
-async def _delete_database_rows(work_order_ids: list[int]) -> None:
-    if not work_order_ids:
+async def _delete_database_rows(
+    work_order_ids: list[int], notification_ids: list[int]
+) -> None:
+    if not work_order_ids and not notification_ids:
         return
     async with async_session() as db:
-        await db.execute(
-            delete(ExternalSyncJob).where(
-                ExternalSyncJob.work_order_id.in_(work_order_ids)
+        if notification_ids:
+            await db.execute(
+                delete(Notification).where(Notification.id.in_(notification_ids))
             )
-        )
-        await db.execute(
-            delete(work_order_participants).where(
-                work_order_participants.c.work_order_id.in_(work_order_ids)
+        if work_order_ids:
+            await db.execute(
+                delete(ExternalSyncJob).where(
+                    ExternalSyncJob.work_order_id.in_(work_order_ids)
+                )
             )
-        )
-        await db.execute(delete(WorkOrder).where(WorkOrder.id.in_(work_order_ids)))
+            await db.execute(
+                delete(work_order_participants).where(
+                    work_order_participants.c.work_order_id.in_(work_order_ids)
+                )
+            )
+            await db.execute(delete(WorkOrder).where(WorkOrder.id.in_(work_order_ids)))
         await db.commit()
 
 
 async def _run(args: argparse.Namespace) -> None:
-    work_orders, registers = await _load_data()
+    work_orders, registers, notifications = await _load_data()
     names = set(TEST_OT_NUMBERS)
     drive_files = _drive_files_by_name(names)
     monthly_rows = _monthly_rows(_monthly_spreadsheet_ids(registers), names)
@@ -108,6 +133,12 @@ async def _run(args: argparse.Namespace) -> None:
         print(
             f"  id={work_order.id} {work_order.ot_number} "
             f"drive={work_order.google_ot_file_id or '(sin archivo)'}"
+        )
+    print("\nNotificaciones asociadas:")
+    for notification in notifications:
+        print(
+            f"  id={notification.id} user={notification.user_id} "
+            f"type={notification.type} message={notification.message}"
         )
     print("\nArchivos de Google Drive que coinciden exactamente:")
     for file in drive_files:
@@ -133,7 +164,10 @@ async def _run(args: argparse.Namespace) -> None:
     for file in drive_files:
         drive.files().delete(fileId=file["id"]).execute()
 
-    await _delete_database_rows([work_order.id for work_order in work_orders])
+    await _delete_database_rows(
+        [work_order.id for work_order in work_orders],
+        [notification.id for notification in notifications],
+    )
     print("\nLimpieza completada.")
 
 
