@@ -5,13 +5,13 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user, require_roles
-from app.core.security import hash_password
+from app.core.security import hash_password, verify_password
 from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.models.area import Area
 from app.models.audit_log import AuditLog
 from app.models.work_order import WorkOrder
-from app.schemas.user import UserCreate, UserResponse, UserUpdate
+from app.schemas.user import PasswordChange, UserCreate, UserResponse, UserUpdate
 from app.services.audit_service import create_audit_log
 from app.services.signatures import delete_signature, get_signature_image, upload_signature
 
@@ -235,6 +235,35 @@ async def create_user(
     )
     await db.refresh(user)
     return user
+
+
+@router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)
+async def change_my_password(
+    payload: PasswordChange,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Change the authenticated user's password after verifying the old one."""
+    if not verify_password(payload.current_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La contraseÃ±a actual es incorrecta.",
+        )
+    if verify_password(payload.new_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La nueva contraseÃ±a debe ser diferente.",
+        )
+
+    current_user.password_hash = hash_password(payload.new_password)
+    await create_audit_log(
+        db,
+        user_id=current_user.id,
+        action="UPDATE",
+        entity_type="User",
+        entity_id=current_user.id,
+        new_data={"password_changed": True},
+    )
 
 
 @router.patch("/{user_id}", response_model=UserResponse)

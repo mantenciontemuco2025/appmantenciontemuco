@@ -1,8 +1,8 @@
 "use client";
 
-import { ChangeEvent, useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ImagePlus, Loader2, Mail, ShieldCheck, Trash2, UserRound, CalendarDays, MapPin } from "lucide-react";
+import { ImagePlus, Loader2, LockKeyhole, Mail, ShieldCheck, Trash2, UserRound, CalendarDays, MapPin } from "lucide-react";
 import { Shell } from "@/components/layout/shell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -35,6 +35,11 @@ export default function ProfilePage() {
   const [message, setMessage] = useState<{ variant: "success" | "error"; text: string } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [changingPassword, setChangingPassword] = useState(false);
+  const [passwordMessage, setPasswordMessage] = useState<{ variant: "success" | "error"; text: string } | null>(null);
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
@@ -94,6 +99,30 @@ export default function ProfilePage() {
     }
   }
 
+  async function handleChangePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (newPassword !== confirmPassword) {
+      setPasswordMessage({ variant: "error", text: "Las contraseñas nuevas no coinciden." });
+      return;
+    }
+    setChangingPassword(true);
+    setPasswordMessage(null);
+    try {
+      await api.post<void>("/api/users/me/password", {
+        current_password: currentPassword,
+        new_password: newPassword,
+      });
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setPasswordMessage({ variant: "success", text: "Contraseña actualizada correctamente." });
+    } catch (error) {
+      setPasswordMessage({ variant: "error", text: error instanceof Error ? error.message : "No se pudo cambiar la contraseña." });
+    } finally {
+      setChangingPassword(false);
+    }
+  }
+
   if (loading || !user) {
     return <PageLoading message={loading ? "Validando sesión..." : "Redirigiendo al inicio de sesión..."} />;
   }
@@ -150,6 +179,35 @@ export default function ProfilePage() {
               </div>
             </li>
           </ul>
+        </CardContent>
+      </Card>
+
+      <Card className="mb-6 max-w-2xl">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <LockKeyhole className="h-5 w-5" /> Cambiar contraseña
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {passwordMessage && <InlineAlert variant={passwordMessage.variant}>{passwordMessage.text}</InlineAlert>}
+          <form onSubmit={handleChangePassword} className="space-y-4">
+            <div className="space-y-1.5">
+              <label htmlFor="current-password" className="text-sm font-medium">Contraseña actual</label>
+              <Input id="current-password" type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} required autoComplete="current-password" />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="new-password" className="text-sm font-medium">Nueva contraseña</label>
+              <Input id="new-password" type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} minLength={6} required autoComplete="new-password" />
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="confirm-password" className="text-sm font-medium">Repetir nueva contraseña</label>
+              <Input id="confirm-password" type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} minLength={6} required autoComplete="new-password" />
+            </div>
+            <Button type="submit" disabled={changingPassword}>
+              {changingPassword && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Guardar nueva contraseña
+            </Button>
+          </form>
         </CardContent>
       </Card>
 

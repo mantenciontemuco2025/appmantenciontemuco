@@ -34,6 +34,18 @@ class UserUpdate(BaseModel):
         return v
 
 
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def new_password_min_length(cls, v: str) -> str:
+        if len(v) < 6:
+            raise ValueError("La contraseña debe tener al menos 6 caracteres.")
+        return v
+
+
 class UserResponse(UserBase):
     id: int
     area_name: str | None = None
