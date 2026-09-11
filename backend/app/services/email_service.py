@@ -1,6 +1,7 @@
 """Reliable email delivery for durable in-app notifications."""
 
 import asyncio
+import html
 import logging
 import smtplib
 from datetime import datetime, timedelta, timezone
@@ -28,13 +29,11 @@ _SUBJECTS = {
 
 
 def _message_for(notification: Notification, user: User) -> EmailMessage:
+    subject_label = _SUBJECTS.get(notification.type, "Nueva notificación")
     message = EmailMessage()
     message["From"] = settings.SMTP_FROM
     message["To"] = user.email
-    message["Subject"] = (
-        "Mantención Temuco — "
-        f"{_SUBJECTS.get(notification.type, 'Nueva notificación')}"
-    )
+    message["Subject"] = f"Mantención Temuco — {subject_label}"
     if settings.SMTP_REPLY_TO:
         message["Reply-To"] = settings.SMTP_REPLY_TO
 
@@ -42,11 +41,57 @@ def _message_for(notification: Notification, user: User) -> EmailMessage:
     if url.startswith("/"):
         url = f"{settings.EMAIL_APP_URL.rstrip('/')}{url}"
 
+    recipient_name = user.full_name or user.email
+    safe_name = html.escape(recipient_name)
+    safe_message = html.escape(notification.message).replace("\n", "<br>")
+    safe_url = html.escape(url, quote=True)
+    safe_label = html.escape(subject_label)
+
     message.set_content(
-        f"Hola {user.full_name or user.email},\n\n"
+        f"Hola {recipient_name},\n\n"
         f"{notification.message}\n\n"
         f"Puedes revisar la información aquí:\n{url}\n\n"
         "Este correo fue enviado automáticamente por Mantención Temuco."
+    )
+    message.add_alternative(
+        f"""\
+<!doctype html>
+<html lang="es">
+  <body style="margin:0;background:#f3f6fb;font-family:Arial,Helvetica,sans-serif;color:#172033;">
+    <div style="padding:32px 12px;">
+      <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="max-width:600px;margin:0 auto;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 18px rgba(23,32,51,.10);">
+        <tr>
+          <td style="background:#253b80;padding:26px 32px;color:#ffffff;">
+            <div style="font-size:13px;letter-spacing:1.4px;text-transform:uppercase;opacity:.82;">Mantención Temuco</div>
+            <div style="font-size:25px;font-weight:700;margin-top:8px;">{safe_label}</div>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding:32px;">
+            <p style="font-size:17px;margin:0 0 18px;">Hola <strong>{safe_name}</strong>,</p>
+            <div style="background:#f0f5ff;border-left:4px solid #2f6fed;border-radius:8px;padding:18px 20px;font-size:16px;line-height:1.55;">
+              {safe_message}
+            </div>
+            <p style="margin:28px 0;text-align:center;">
+              <a href="{safe_url}" style="display:inline-block;background:#1769e0;color:#ffffff;text-decoration:none;font-weight:700;padding:13px 24px;border-radius:8px;">Ver información</a>
+            </p>
+            <p style="font-size:13px;line-height:1.5;color:#667085;margin:0;">
+              Si el botón no funciona, copia este enlace en tu navegador:<br>
+              <a href="{safe_url}" style="color:#1769e0;word-break:break-all;">{safe_url}</a>
+            </p>
+          </td>
+        </tr>
+        <tr>
+          <td style="border-top:1px solid #e5e7eb;padding:18px 32px;color:#667085;font-size:12px;line-height:1.5;">
+            Este correo fue enviado automáticamente por Mantención Temuco. No respondas si no necesitas contactar al equipo.
+          </td>
+        </tr>
+      </table>
+    </div>
+  </body>
+</html>
+""",
+        subtype="html",
     )
     return message
 
