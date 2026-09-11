@@ -342,6 +342,30 @@ def test_copy_template_removes_template_parent_not_ot_root(monkeypatch, tmp_path
     assert fake_drive._last_remove_parent != OT_ROOT
 
 
+def test_copy_template_reuses_existing_ot(monkeypatch, tmp_path):
+    """A retry must reuse an existing Drive file with the same OT number."""
+    from app.services import google_drive
+
+    sa_file = _fake_sa_file(tmp_path)
+    _configure_both(monkeypatch, sa_file)
+
+    destination = "septiembre-folder"
+    fake_drive = _FakeDrive("ot-root", template_parent="plantillas-folder")
+    fake_drive._created["existing-ot"] = {
+        "id": "existing-ot",
+        "name": "OT-2026-0010",
+        "parent": destination,
+    }
+    monkeypatch.setattr(google_drive.settings, "GOOGLE_OT_ROOT_FOLDER_ID", "ot-root")
+    monkeypatch.setattr(google_drive.settings, "GOOGLE_OT_TEMPLATE_FILE_ID", "template-123")
+    monkeypatch.setattr(google_drive, "_build_drive_write_service", lambda: fake_drive)
+
+    result = google_drive._copy_template("OT-2026-0010", destination)
+
+    assert result["file_id"] == "existing-ot"
+    assert fake_drive._counter == 0
+
+
 class _FakeDrive:
     """Minimal fake Drive API service for folder-hierarchy tests.
 

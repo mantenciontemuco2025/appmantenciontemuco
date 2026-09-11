@@ -166,6 +166,23 @@ def _get_file_parent(drive, file_id: str) -> str | None:
         return None
 
 
+def _find_named_file(drive, parent_id: str, name: str) -> dict | None:
+    """Find the most recently modified non-trashed file with an exact name."""
+    q = (
+        f"'{parent_id}' in parents "
+        f"and name = '{name}' "
+        f"and trashed = false"
+    )
+    response = drive.files().list(
+        q=q,
+        fields="files(id,name,webViewLink,modifiedTime)",
+        orderBy="modifiedTime desc",
+        pageSize=20,
+    ).execute()
+    files = response.get("files", [])
+    return files[0] if files else None
+
+
 def _copy_template(ot_number: str, destination_folder_id: str) -> dict:
     """Copy the OT template and move it into the destination folder.
 
@@ -175,9 +192,41 @@ def _copy_template(ot_number: str, destination_folder_id: str) -> dict:
     drive = _build_drive_write_service()  # copying the template is a WRITE
     template_id = settings.GOOGLE_OT_TEMPLATE_FILE_ID
 
+    # Drive copies are not transactional with Sheets updates. If a previous
+    # attempt copied the file but failed later, reuse that copy instead of
+    # creating another file with the same OT number.
+    existing = _find_named_file(drive, destination_folder_id, ot_number)
+    if existing:
+        file_id = existing["id"]
+        logger.info("OT %s ya existe en Drive; se reutiliza (file_id=%s)", ot_number, file_id)
+        return {
+            "file_id": file_id,
+            "url": existing.get("webViewLink")
+            or f"https://drive.google.com/file/d/{file_id}/view",
+        }
+
     # Resolve the template's current parent folder (e.g. PLANTILLAS/) so we can
     # remove it from the copy's parents.
     template_parent = _get_file_parent(drive, template_id)
+
+    # If a previous copy succeeded but its move into the OT folder failed, it
+    # is normally still in the template's parent. Move and reuse it.
+    if template_parent:
+        orphan = _find_named_file(drive, template_parent, ot_number)
+        if orphan and orphan["id"] != template_id:
+            file_id = orphan["id"]
+            drive.files().update(
+                fileId=file_id,
+                addParents=destination_folder_id,
+                removeParents=template_parent,
+                fields="id, webViewLink",
+            ).execute()
+            logger.info("OT %s encontrada como copia pendiente; se mueve y reutiliza (file_id=%s)", ot_number, file_id)
+            return {
+                "file_id": file_id,
+                "url": orphan.get("webViewLink")
+                or f"https://drive.google.com/file/d/{file_id}/view",
+            }
 
     # 1. Copy template with the OT number as the new name
     copy_meta = {"name": ot_number}

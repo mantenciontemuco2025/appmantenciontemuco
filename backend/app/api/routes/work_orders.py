@@ -1025,6 +1025,11 @@ async def _sync_ot_and_monthly(db, wo, area, equipment, payload, user_id):
             wo.google_ot_file_id = ot_result["file_id"]
             wo.google_ot_url = ot_result["url"]
 
+            # Persist the Drive ID before populating Sheets or calling Apps
+            # Script. Those later operations can fail independently. Keeping
+            # this commit small makes every retry reuse the same Drive file.
+            await db.commit()
+
         await asyncio.to_thread(
             drive_service.populate_ot_fields,
             doc_id,
