@@ -6,19 +6,23 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.api.routes import auth, users, catalogs, maintenance, audit, admin, work_orders, notifications, push_subscriptions
-from app.services import push_service
+from app.services import email_service, push_service
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     sync_worker = asyncio.create_task(work_orders.external_sync_worker())
     push_worker = asyncio.create_task(push_service.worker())
+    email_worker = asyncio.create_task(email_service.worker())
     try:
         yield
     finally:
         sync_worker.cancel()
         push_worker.cancel()
-        await asyncio.gather(sync_worker, push_worker, return_exceptions=True)
+        email_worker.cancel()
+        await asyncio.gather(
+            sync_worker, push_worker, email_worker, return_exceptions=True
+        )
 
 
 app = FastAPI(

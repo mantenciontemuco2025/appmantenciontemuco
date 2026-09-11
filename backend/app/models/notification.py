@@ -37,3 +37,11 @@ class Notification(Base):
         DateTime(timezone=True), nullable=True
     )
     push_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    email_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    email_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    email_next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    email_last_error: Mapped[str | None] = mapped_column(Text, nullable=True)

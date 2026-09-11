@@ -32,6 +32,17 @@ class Settings(BaseSettings):
     VAPID_PRIVATE_KEY: str = ""
     VAPID_SUBJECT: str = "mailto:admin@example.com"
 
+    # Email notifications. SMTP credentials stay only in backend/.env.
+    EMAIL_ENABLED: bool = False
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    SMTP_FROM: str = ""
+    SMTP_REPLY_TO: str = ""
+    SMTP_USE_TLS: bool = True
+    EMAIL_APP_URL: str = "https://app.mantenciontemuco.cl"
+
     # CORS (JSON array as a string, e.g. '["http://localhost:3000"]')
     CORS_ORIGINS: str = '["http://localhost:3000"]'
 
@@ -89,6 +100,17 @@ class Settings(BaseSettings):
     @property
     def push_configured(self) -> bool:
         return bool(self.VAPID_PUBLIC_KEY and self.VAPID_PRIVATE_KEY and self.VAPID_SUBJECT)
+
+    @property
+    def email_configured(self) -> bool:
+        """True when email delivery is explicitly enabled and configured."""
+        return bool(
+            self.EMAIL_ENABLED
+            and self.SMTP_HOST
+            and self.SMTP_FROM
+            and self.SMTP_USERNAME
+            and self.SMTP_PASSWORD
+        )
 
     @property
     def _google_oauth_configured(self) -> bool:
