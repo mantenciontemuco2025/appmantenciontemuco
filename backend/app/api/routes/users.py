@@ -367,14 +367,15 @@ async def upload_my_signature(
             detail="Solo se permiten imágenes PNG, JPEG o WebP.",
         )
 
-    # Read and validate size (2 MB)
+    # Validate the original upload. The service normalizes it below Google's
+    # 2 MB / 10 million pixel limit before storing it.
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La imagen estÃ¡ vacÃ­a.")
-    if len(contents) > 2 * 1024 * 1024:
+    if len(contents) > 10 * 1024 * 1024:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="La imagen es demasiado grande (máx. 2 MB).",
+            detail="La imagen original es demasiado grande (máx. 10 MB).",
         )
 
     detected_mime = _detected_image_mime(contents)

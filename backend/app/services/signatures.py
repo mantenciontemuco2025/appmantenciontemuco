@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 # Resolved from the file id when we upload; used as the <img>/overlay URL.
 _VIEW_URL = "https://drive.google.com/uc?export=view&id={file_id}"
 _ALLOWED_SIGNATURE_MIMES = {"image/png", "image/jpeg", "image/webp"}
+_MAX_SIGNATURE_PIXELS = 9_000_000
+_MAX_SIGNATURE_BYTES = 1_500_000
 
 
 def _signature_name(user_id: int, mime: str) -> tuple[str, str]:
@@ -47,6 +49,48 @@ def _file_id_from_url(signature_url: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _prepare_signature_image(image_bytes: bytes, mime: str) -> tuple[bytes, str]:
+    """Normalize signatures below Google Sheets' blob and pixel limits."""
+    try:
+        from PIL import Image, ImageOps
+
+        with Image.open(BytesIO(image_bytes)) as source:
+            image = ImageOps.exif_transpose(source)
+            if image.width * image.height > _MAX_SIGNATURE_PIXELS:
+                scale = (_MAX_SIGNATURE_PIXELS / (image.width * image.height)) ** 0.5
+                image = image.resize(
+                    (max(1, int(image.width * scale)), max(1, int(image.height * scale))),
+                    Image.Resampling.LANCZOS,
+                )
+
+            # A white background keeps transparent signatures readable in JPEG.
+            if image.mode in {"RGBA", "LA"} or "transparency" in image.info:
+                rgba = image.convert("RGBA")
+                background = Image.new("RGB", rgba.size, "white")
+                background.paste(rgba, mask=rgba.getchannel("A"))
+                image = background
+            else:
+                image = image.convert("RGB")
+
+            image.thumbnail((2400, 2400), Image.Resampling.LANCZOS)
+            output = BytesIO()
+            image.save(output, format="JPEG", quality=82, optimize=True, progressive=True)
+            encoded = output.getvalue()
+
+            while len(encoded) > _MAX_SIGNATURE_BYTES and min(image.size) > 400:
+                image = image.resize(
+                    (max(1, int(image.width * 0.8)), max(1, int(image.height * 0.8))),
+                    Image.Resampling.LANCZOS,
+                )
+                output = BytesIO()
+                image.save(output, format="JPEG", quality=75, optimize=True, progressive=True)
+                encoded = output.getvalue()
+    except Exception as exc:  # noqa: BLE001 - normalize any invalid image
+        raise RuntimeError("No se pudo preparar la imagen de firma.") from exc
+
+    return encoded, "image/jpeg"
+
+
 def upload_signature(user_id: int, image_bytes: bytes, mime: str) -> str:
     """Upload a user's signature image to Drive.
 
@@ -59,6 +103,7 @@ def upload_signature(user_id: int, image_bytes: bytes, mime: str) -> str:
     if not settings.google_write_enabled:
         raise RuntimeError("Se requieren credenciales OAuth para subir la firma.")
 
+    image_bytes, mime = _prepare_signature_image(image_bytes, mime)
     drive = _build_drive_write_service()
     folder_id = settings.GOOGLE_SIGNATURES_FOLDER_ID
     filename, drive_mime = _signature_name(user_id, mime)

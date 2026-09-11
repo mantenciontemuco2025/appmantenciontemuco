@@ -6,6 +6,11 @@ const SIGNATURE_ANCHORS = {
   performed_by: { column: 5, row: 31 }, // E31
 };
 
+// Health check for confirming that the /exec deployment points to this code.
+function doGet() {
+  return json_({ ok: true, service: 'signature-webhook' });
+}
+
 function doPost(event) {
   try {
     const payload = JSON.parse(event.postData && event.postData.contents || '{}');

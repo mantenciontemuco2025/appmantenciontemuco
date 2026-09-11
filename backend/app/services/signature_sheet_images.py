@@ -54,9 +54,22 @@ def insert_signature_image(
                 json=payload,
             )
         response.raise_for_status()
-        result = response.json()
-    except (httpx.HTTPError, ValueError) as exc:
-        raise RuntimeError("No se pudo insertar la imagen de firma mediante Apps Script.") from exc
+        try:
+            result = response.json()
+        except ValueError as exc:
+            detail = response.text[:500].replace("\n", " ")
+            raise RuntimeError(
+                f"Apps Script no devolvió JSON (HTTP {response.status_code}): {detail}"
+            ) from exc
+    except httpx.HTTPStatusError as exc:
+        detail = exc.response.text[:500].replace("\n", " ")
+        raise RuntimeError(
+            f"Apps Script respondió HTTP {exc.response.status_code}: {detail}"
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise RuntimeError(
+            f"No se pudo conectar con Apps Script: {type(exc).__name__}"
+        ) from exc
 
     if not isinstance(result, dict) or result.get("ok") is not True:
         detail = result.get("error") if isinstance(result, dict) else None
