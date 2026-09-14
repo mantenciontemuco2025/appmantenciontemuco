@@ -11,6 +11,7 @@ from sqlalchemy import (
     Text,
     Boolean,
     Float,
+    Index,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -36,13 +37,18 @@ class WorkOrder(Base):
     """Work Order (OT) — individual document created from a Google Drive template."""
 
     __tablename__ = "work_orders"
+    __table_args__ = (
+        # Supports overdue queries and status-filtered lists ordered by date.
+        Index("ix_work_orders_due_date_status", "due_date", "status"),
+        Index("ix_work_orders_status_created_at", "status", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     ot_number: Mapped[str] = mapped_column(String(20), unique=True, index=True)
     title: Mapped[str] = mapped_column(String(300))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    area_id: Mapped[int] = mapped_column(ForeignKey("areas.id"))
+    area_id: Mapped[int] = mapped_column(ForeignKey("areas.id"), index=True)
     equipment_id: Mapped[int | None] = mapped_column(
         ForeignKey("equipment.id"), nullable=True
     )
@@ -57,7 +63,7 @@ class WorkOrder(Base):
     estimated_time: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Fecha en que se solicitó la OT. La coloca el admin al solicitar/crear la OT.
     request_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
-    execution_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
+    execution_date: Mapped[datetime | None] = mapped_column(Date, nullable=True, index=True)
     resources_required: Mapped[str | None] = mapped_column(Text, nullable=True)
     voucher_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     risks: Mapped[str | None] = mapped_column(Text, nullable=True)

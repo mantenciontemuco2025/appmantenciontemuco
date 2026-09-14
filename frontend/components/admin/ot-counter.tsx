@@ -17,7 +17,7 @@ export function OtCounter() {
 
   useEffect(() => {
     api
-      .get<WorkOrderCounter>("/api/work-orders/counter")
+      .getCached<WorkOrderCounter>("/api/work-orders/counter", 15000)
       .then(setCounter)
       .catch(() => setError("No se pudo cargar el contador de OTs"));
   }, []);

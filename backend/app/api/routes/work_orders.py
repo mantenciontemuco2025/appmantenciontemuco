@@ -12,13 +12,14 @@ Permission model:
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone, timedelta, date as _date
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import noload, selectinload
 
 from app.api.dependencies import get_current_user, require_roles
 from app.core.config import settings
@@ -54,6 +55,13 @@ router = APIRouter(prefix="/api/work-orders", tags=["work-orders"])
 
 manager_roles = (UserRole.SUPERVISOR, UserRole.ADMIN)
 supervisor_or_admin = require_roles(*manager_roles)
+
+# The counter is informational and global for administrators. A short cache
+# prevents several tabs/users from repeating the same aggregate queries while
+# keeping the displayed value fresh after normal navigation.
+_COUNTER_CACHE_TTL_SECONDS = 15.0
+_counter_cache: tuple[float, int, WorkOrderCounterResponse] | None = None
+_counter_cache_lock = asyncio.Lock()
 
 
 def _supervisor_area_error(current_user: User, area_id: int) -> str | None:
@@ -282,6 +290,26 @@ def _base_query():
         selectinload(WorkOrder.started_by_user),
         selectinload(WorkOrder.completed_by_user),
         selectinload(WorkOrder.approved_by_user),
+    )
+
+
+def _list_query():
+    """Load only relationships used by paginated list responses.
+
+    Work-order detail and workflow endpoints continue using ``_base_query``.
+    The list endpoints do not need participant or lifecycle-user collections,
+    so explicitly disabling those select-in relationships avoids extra SQL
+    queries for every page.
+    """
+    return select(WorkOrder).options(
+        selectinload(WorkOrder.area),
+        selectinload(WorkOrder.equipment),
+        selectinload(WorkOrder.responsible_user),
+        noload(WorkOrder.created_by),
+        noload(WorkOrder.participants),
+        noload(WorkOrder.started_by_user),
+        noload(WorkOrder.completed_by_user),
+        noload(WorkOrder.approved_by_user),
     )
 
 
@@ -1144,7 +1172,7 @@ async def list_work_orders(
     limit: int | None = Query(default=None, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
-    query = _base_query()
+    query = _list_query()
 
     if current_user.role not in manager_roles:
         query = query.where(WorkOrder.created_by_user_id == current_user.id)
@@ -1224,7 +1252,7 @@ async def my_work_orders(
         work_order_participants.c.user_id == current_user.id
     )
 
-    query = _base_query().where(
+    query = _list_query().where(
         (WorkOrder.responsible_user_id == current_user.id)
         | (WorkOrder.id.in_(participant_wo_ids))
     )
@@ -1278,50 +1306,67 @@ async def get_work_order_counter(
 ):
     """Cuantifica las OTs (totales por año y por mes del año actual) y el próximo
     N° OT que se asignará. Solo ADMIN — la planificación los necesita."""
-    # Totals per year with execution date. The headline total below is
-    # intentionally calculated separately so draft/pending OTs without an
-    # execution date are not silently excluded.
-    per_year_rows = await db.execute(
-        select(
-            func.extract("year", WorkOrder.execution_date).label("year"),
-            func.count().label("total"),
-        )
-        .where(WorkOrder.execution_date.isnot(None))
-        .group_by("year")
-        .order_by("year")
-    )
-    per_year = {int(r.year): int(r.total) for r in per_year_rows.all() if r.year}
+    global _counter_cache
+    bind_key = id(db.bind)
+    cached = _counter_cache
+    if (
+        cached is not None
+        and cached[1] == bind_key
+        and time.monotonic() - cached[0] < _COUNTER_CACHE_TTL_SECONDS
+    ):
+        return cached[2]
 
-    # Totals per month of the CURRENT year (0 = enero ... 11 = diciembre)
-    now = datetime.now(timezone.utc)
-    current_year = now.year
-    per_month_rows = await db.execute(
-        select(
-            func.extract("month", WorkOrder.execution_date).label("month"),
-            func.count().label("total"),
-        )
-        .where(
-            WorkOrder.execution_date.isnot(None),
-            func.extract("year", WorkOrder.execution_date) == current_year,
-        )
-        .group_by("month")
-    )
-    per_month = {int(r.month) - 1: int(r.total) for r in per_month_rows.all() if r.month}
+    # Serialize cache misses so a burst of administrators does not stampede
+    # PostgreSQL with identical aggregate queries.
+    async with _counter_cache_lock:
+        cached = _counter_cache
+        if (
+            cached is not None
+            and cached[1] == bind_key
+            and time.monotonic() - cached[0] < _COUNTER_CACHE_TTL_SECONDS
+        ):
+            return cached[2]
 
-    # Next OT number by scanning the max OT-YYYY-NNNN already used this year
-    total_all_result = await db.execute(
-        select(func.count(WorkOrder.id)).select_from(WorkOrder)
-    )
-    total_all = int(total_all_result.scalar_one() or 0)
-    next_ot = await _next_ot_number(db)
+        now = datetime.now(timezone.utc)
+        current_year = now.year
 
-    return WorkOrderCounterResponse(
-        current_year=current_year,
-        total_all=total_all,
-        per_year=per_year,
-        per_month=per_month,
-        next_ot_number=next_ot,
-    )
+        # One grouped query provides yearly and current-year monthly totals.
+        date_rows = await db.execute(
+            select(
+                func.extract("year", WorkOrder.execution_date).label("year"),
+                func.extract("month", WorkOrder.execution_date).label("month"),
+                func.count().label("total"),
+            )
+            .where(WorkOrder.execution_date.isnot(None))
+            .group_by("year", "month")
+            .order_by("year", "month")
+        )
+        per_year: dict[int, int] = {}
+        per_month: dict[int, int] = {}
+        for row in date_rows.all():
+            if not row.year:
+                continue
+            year = int(row.year)
+            total = int(row.total)
+            per_year[year] = per_year.get(year, 0) + total
+            if year == current_year and row.month:
+                per_month[int(row.month) - 1] = total
+
+        total_all_result = await db.execute(
+            select(func.count(WorkOrder.id)).select_from(WorkOrder)
+        )
+        total_all = int(total_all_result.scalar_one() or 0)
+        next_ot = await _next_ot_number(db)
+
+        response = WorkOrderCounterResponse(
+            current_year=current_year,
+            total_all=total_all,
+            per_year=per_year,
+            per_month=per_month,
+            next_ot_number=next_ot,
+        )
+        _counter_cache = (time.monotonic(), bind_key, response)
+        return response
 
 
 # ───────────────────────────────────────────────────────────────────────────

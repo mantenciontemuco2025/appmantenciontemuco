@@ -15,8 +15,25 @@ import unicodedata
 
 from app.core.config import settings
 from app.models.maintenance import MaintenanceRecord, MaintenanceType
+from app.services.google_api_cache import build_cached_service
 
 logger = logging.getLogger(__name__)
+
+
+def _google_credentials_key() -> tuple[str, ...]:
+    """Return a non-secret cache discriminator for the active auth config."""
+    if settings._google_oauth_configured:
+        return (
+            "oauth",
+            settings.GOOGLE_OAUTH_CLIENT_ID,
+            settings.GOOGLE_OAUTH_CLIENT_SECRET,
+            settings.GOOGLE_OAUTH_REFRESH_TOKEN,
+        )
+    return (
+        "service-account",
+        settings.GOOGLE_SERVICE_ACCOUNT_FILE or "",
+        settings.GOOGLE_SERVICE_ACCOUNT_JSON or "",
+    )
 
 # Centralized mapping: spreadsheet column name -> value builder.
 # The exact order here defines the physical column layout in the sheet.
@@ -129,12 +146,16 @@ def _build_service():
     Service Account (fallback) credentials. Only imports the Google libraries
     lazily so the app can start without them installed.
     """
-    from googleapiclient.discovery import build
-
     creds = settings.get_google_credentials()
     if creds is None:
         raise RuntimeError("Google no configurado (OAuth o Service Account).")
-    service = build("sheets", "v4", credentials=creds)
+    service = build_cached_service(
+        cache_name="sheets-legacy-read",
+        service_name="sheets",
+        version="v4",
+        credentials=creds,
+        credentials_key=_google_credentials_key(),
+    )
     return service, settings.GOOGLE_SPREADSHEET_ID, settings.GOOGLE_SHEET_NAME
 
 
@@ -144,10 +165,14 @@ def _build_write_service():
     Never falls back to the Service Account for writes. Raises a clear error
     if OAuth is not configured.
     """
-    from googleapiclient.discovery import build
-
     creds = settings.get_google_write_credentials()
-    service = build("sheets", "v4", credentials=creds)
+    service = build_cached_service(
+        cache_name="sheets-legacy-write",
+        service_name="sheets",
+        version="v4",
+        credentials=creds,
+        credentials_key=_google_credentials_key(),
+    )
     return service, settings.GOOGLE_SPREADSHEET_ID, settings.GOOGLE_SHEET_NAME
 
 

@@ -63,7 +63,7 @@ export default function OrdenesPage() {
     if (!user) return;
     loadFirstPage();
     api
-      .get<WorkOrderCounter>("/api/work-orders/counter")
+      .getCached<WorkOrderCounter>("/api/work-orders/counter", 15000)
       .then(setCounter)
       .catch(() => setCounter(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps

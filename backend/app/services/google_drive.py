@@ -14,6 +14,7 @@ import logging
 from datetime import datetime
 
 from app.core.config import settings
+from app.services.google_api_cache import build_cached_service
 from app.services.signature_sheet_images import insert_signature_image
 from app.services.ot_mapping import (
     OT_FIELD_MAP,
@@ -47,6 +48,22 @@ from app.services.monthly_mapping import (
 logger = logging.getLogger(__name__)
 
 
+def _google_credentials_key() -> tuple[str, ...]:
+    """Return a non-secret cache discriminator for the active auth config."""
+    if settings._google_oauth_configured:
+        return (
+            "oauth",
+            settings.GOOGLE_OAUTH_CLIENT_ID,
+            settings.GOOGLE_OAUTH_CLIENT_SECRET,
+            settings.GOOGLE_OAUTH_REFRESH_TOKEN,
+        )
+    return (
+        "service-account",
+        settings.GOOGLE_SERVICE_ACCOUNT_FILE or "",
+        settings.GOOGLE_SERVICE_ACCOUNT_JSON or "",
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Google service builders (lazy imports to keep app start fast)
 # ──────────────────────────────────────────────────────────────────────
@@ -56,12 +73,16 @@ def _build_drive_service():
 
     For READ operations. Write operations must use _build_drive_write_service.
     """
-    from googleapiclient.discovery import build
-
     creds = settings.get_google_credentials()
     if creds is None:
         raise RuntimeError("Google no configurado (OAuth o Service Account).")
-    return build("drive", "v3", credentials=creds)
+    return build_cached_service(
+        cache_name="drive-read",
+        service_name="drive",
+        version="v3",
+        credentials=creds,
+        credentials_key=_google_credentials_key(),
+    )
 
 
 def _build_sheets_service():
@@ -69,12 +90,16 @@ def _build_sheets_service():
 
     For READ operations. Write operations must use _build_sheets_write_service.
     """
-    from googleapiclient.discovery import build
-
     creds = settings.get_google_credentials()
     if creds is None:
         raise RuntimeError("Google no configurado (OAuth o Service Account).")
-    return build("sheets", "v4", credentials=creds)
+    return build_cached_service(
+        cache_name="sheets-read",
+        service_name="sheets",
+        version="v4",
+        credentials=creds,
+        credentials_key=_google_credentials_key(),
+    )
 
 
 def _build_drive_write_service():
@@ -83,10 +108,14 @@ def _build_drive_write_service():
     Never falls back to the Service Account. Raises a clear error if OAuth
     is not configured.
     """
-    from googleapiclient.discovery import build
-
     creds = settings.get_google_write_credentials()
-    return build("drive", "v3", credentials=creds)
+    return build_cached_service(
+        cache_name="drive-write",
+        service_name="drive",
+        version="v3",
+        credentials=creds,
+        credentials_key=_google_credentials_key(),
+    )
 
 
 def _build_sheets_write_service():
@@ -95,10 +124,14 @@ def _build_sheets_write_service():
     Never falls back to the Service Account. Raises a clear error if OAuth
     is not configured.
     """
-    from googleapiclient.discovery import build
-
     creds = settings.get_google_write_credentials()
-    return build("sheets", "v4", credentials=creds)
+    return build_cached_service(
+        cache_name="sheets-write",
+        service_name="sheets",
+        version="v4",
+        credentials=creds,
+        credentials_key=_google_credentials_key(),
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────
