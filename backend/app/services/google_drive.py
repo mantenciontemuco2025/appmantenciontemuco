@@ -731,6 +731,9 @@ def sync_to_monthly_sheet(
     if "ESTADO" in col:
         if ord(col["ESTADO"]) > ord(known_end):
             known_end = col["ESTADO"]
+    if "PARTICIPANTES" in col:
+        if ord(col["PARTICIPANTES"]) > ord(known_end):
+            known_end = col["PARTICIPANTES"]
     last_idx = ord(known_end) - ord("A") + 1
     row_values = [""] * last_idx
 
@@ -754,6 +757,13 @@ def sync_to_monthly_sheet(
         key = WORKER_COLUMN_KEYS.get(normalized)
         if key and key in col:
             _put(col[key], "X")
+
+    # The named worker columns above are kept for compatibility with the
+    # existing template. PARTICIPANTES is the future-proof summary column:
+    # it includes every participant, including workers added after the
+    # original template was created.
+    if "PARTICIPANTES" in col:
+        _put(col["PARTICIPANTES"], ", ".join(participants))
 
     # Maintenance type: mark X for the selected type
     mt_key = MONTHLY_MT_MAP.get(maintenance_type.upper())

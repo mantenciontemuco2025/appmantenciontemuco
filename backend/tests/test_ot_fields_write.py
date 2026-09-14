@@ -501,15 +501,14 @@ def test_sync_draft_skipped(oauth_settings, monkeypatch, tmp_path):
 # ──────────────────────────────────────────────────────────────────────
 
 class _FakeSheetsWithHeaders(_FakeSheets):
-    """Extends the fake so the header read returns the real 23-column header row
-    (22 base columns + ESTADO at column W). Used to assert ESTADO is written."""
+    """Extends the fake so the header read returns the real monthly header row."""
 
     REAL_HEADERS = [
         "FECHA", "N° OT", "AREA", "SECCION", "EQUIPO", "TRABAJO",
         "ORTIZ", "VALDES", "FABRES", "JARA", "SALAZAR", "MILLAR",
         "JUAN SILVA", "INOSTROZA", "CANIULLAN", "CONTRERAS",
         "PREVENTIVO", "CORRECTIVO", "PREDICTIVO", "PROYECTO", "MONTAJE",
-        "HORAS", "ESTADO",
+        "HORAS", "ESTADO", "PARTICIPANTES",
     ]
 
     def get(self, spreadsheetId="", range="", **kwargs):
@@ -543,6 +542,26 @@ def test_sync_writes_estado_with_header(oauth_settings, monkeypatch, tmp_path):
     # Column V = HORAS, column W = ESTADO
     assert row[ord("V") - ord("A")] == "2.0"
     assert row[ord("W") - ord("A")] == "EN PROCESO"
+
+
+def test_sync_writes_new_participant_in_summary_column(oauth_settings, monkeypatch):
+    """A worker absent from the old fixed columns is still recorded by name."""
+    fake = _FakeSheetsWithHeaders()
+    fake.monthly_rows["SEPTIEMBRE"] = []
+    monkeypatch.setattr(google_drive, "_build_sheets_write_service", lambda: fake)
+    monkeypatch.setattr(google_drive, "_build_sheets_service", lambda: fake)
+    monkeypatch.setattr(google_drive.settings, "GOOGLE_MONTHLY_SPREADSHEET_ID", "m1")
+
+    exec_dt = datetime.combine(date(2026, 9, 3), time.min)
+    google_drive.sync_to_monthly_sheet(
+        "OT-2026-0707", exec_dt,
+        area_name="A", section_name="S", equipment_name="E",
+        description="D", maintenance_type="CORRECTIVE",
+        participants=["Trabajador Nuevo"], duration_hours=2.0,
+    )
+
+    row = fake.writes[0][1]
+    assert row[ord("X") - ord("A")] == "Trabajador Nuevo"
 
 
 def test_sync_estado_full_cycle_updates_same_row(oauth_settings, monkeypatch, tmp_path):

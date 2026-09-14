@@ -375,8 +375,15 @@ async def _sync_work_order_to_monthly(
     # back to the legacy settings.GOOGLE_MONTHLY_SPREADSHEET_ID via spreadsheet_id=None.
     target_spreadsheet_id: str | None = None
     register = await ensure_monthly_register_for_year(
-        db, exec_dt.year, user_id, commit=False
+        db,
+        exec_dt.year,
+        user_id,
+        commit=False,
+        release_before_external=True,
     )
+    # The register lookup may have opened a transaction. Do not retain its
+    # connection during the following Google Sheets/Drive calls.
+    await db.commit()
     if register is not None:
         target_spreadsheet_id = register.spreadsheet_id
     elif not settings.GOOGLE_MONTHLY_SPREADSHEET_ID:
@@ -405,6 +412,7 @@ async def _sync_work_order_to_monthly(
                 prev_spreadsheet_id = prev_register.spreadsheet_id
             elif settings.GOOGLE_MONTHLY_SPREADSHEET_ID:
                 prev_spreadsheet_id = settings.GOOGLE_MONTHLY_SPREADSHEET_ID
+            await db.commit()
             if prev_spreadsheet_id:
                 try:
                     await asyncio.to_thread(
@@ -420,6 +428,9 @@ async def _sync_work_order_to_monthly(
                     )
 
     try:
+        # Release any connection opened by the register lookup before calling
+        # Google Sheets.
+        await db.commit()
         await asyncio.to_thread(
             drive_service.sync_to_monthly_sheet,
             wo.ot_number,
@@ -449,6 +460,7 @@ async def _sync_work_order_to_monthly(
     # monthly register update above is independent of this one-cell write.
     if wo.google_ot_file_id:
         try:
+            await db.commit()
             await asyncio.to_thread(
                 drive_service.update_ot_status, wo.google_ot_file_id, wo.status
             )
@@ -672,6 +684,7 @@ async def _run_ot_sync_in_background(bg_factory, wo_id):
                     await bg_db.get(Equipment, wo.equipment_id)
                     if wo.equipment_id else None
                 )
+                await bg_db.commit()
                 await _sync_ot_and_monthly(
                     bg_db, wo, area, equipment,
                     _payload_from_wo(wo), wo.created_by_user_id,
@@ -805,6 +818,10 @@ async def _process_external_sync_job(job_id: int) -> None:
         if wo is None:
             raise RuntimeError(f"OT {job.work_order_id} no encontrada")
 
+        # All data needed by the job is loaded. Release the database
+        # connection before any Google/network operation.
+        await db.commit()
+
         if job.job_type in {"FULL_CREATE", "FULL_SYNC"}:
             area = await db.get(Area, wo.area_id)
             equipment = await db.get(Equipment, wo.equipment_id) if wo.equipment_id else None
@@ -824,6 +841,7 @@ async def _process_external_sync_job(job_id: int) -> None:
             individual_failed = False
             if job.populate_individual:
                 try:
+                    await db.commit()
                     await _populate_individual_ot(wo)
                     wo.ot_sheet_sync_status = "SYNCED"
                     wo.ot_sheet_sync_error = None
@@ -897,9 +915,14 @@ async def _run_lifecycle_sync_in_background(
             if wo is None or not wo.google_ot_file_id:
                 return
 
+            # This task reads from PostgreSQL and then calls Google. Release
+            # the connection before the external operation begins.
+            await bg_db.commit()
+
             individual_failed = False
             if populate_individual:
                 try:
+                    await bg_db.commit()
                     await _populate_individual_ot(wo)
                     wo.ot_sheet_sync_status = "SYNCED"
                     wo.ot_sheet_sync_error = None
@@ -1000,6 +1023,9 @@ async def _populate_individual_ot(wo: WorkOrder) -> None:
 
 async def _sync_ot_and_monthly(db, wo, area, equipment, payload, user_id):
     """Sync OT to Google Drive (template + monthly) when emitting."""
+    # The worker has already loaded the OT, area and equipment. Release that
+    # read transaction before the first potentially slow Google call.
+    await db.commit()
     execution_date = payload.execution_date or datetime.now().date()
     participants = []
     try:

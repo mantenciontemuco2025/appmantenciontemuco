@@ -146,7 +146,12 @@ def validate_12_tabs(spreadsheet_id: str) -> list[str]:
 # ──────────────────────────────────────────────────────────────────────
 
 async def ensure_monthly_register_for_year(
-    db: AsyncSession, year: int, user_id: int | None = None, *, commit: bool = True
+    db: AsyncSession,
+    year: int,
+    user_id: int | None = None,
+    *,
+    commit: bool = True,
+    release_before_external: bool = False,
 ) -> GoogleMonthlyRegister | None:
     """Return the register row for `year`, creating it from the template if needed.
 
@@ -159,6 +164,10 @@ async def ensure_monthly_register_for_year(
     WorkOrder monthly sync mid-edit): the row is flushed (so UNIQUE races are
     still detected) but the caller's transaction owns the eventual commit.
 
+    `release_before_external=True` is for background sync jobs whose state is
+    already committed. It releases the connection after the initial lookup
+    before calling Google Drive.
+
     Returns None when Google write is not possible (no OAuth / no template /
     no monthly root folder) so the caller marks the WorkOrder sync FAILED without
     losing it. Raises on a true Drive/Sheets error (also handled as FAILED).
@@ -166,6 +175,11 @@ async def ensure_monthly_register_for_year(
     existing = await resolve_register(db, year)
     if existing is not None:
         return existing
+
+    if release_before_external:
+        # A SELECT starts a transaction in PostgreSQL. Do not hold its
+        # connection while waiting for a potentially slow Drive operation.
+        await db.commit()
 
     if not settings.google_write_enabled or not register_config_available():
         logger.info(

@@ -20,6 +20,12 @@ class Settings(BaseSettings):
     DATABASE_URL: str = (
         "postgresql+asyncpg://maintenance_user:maintenance_pass@localhost:5433/maintenance_db"
     )
+    # Async SQLAlchemy pool. Keep these below the database provider's maximum
+    # connection limit; the values are intentionally configurable per VPS.
+    DB_POOL_SIZE: int = 10
+    DB_MAX_OVERFLOW: int = 10
+    DB_POOL_TIMEOUT: int = 30
+    DB_POOL_RECYCLE: int = 1800
 
     # JWT
     SECRET_KEY: str = "change-this-to-a-secure-random-string-in-production"

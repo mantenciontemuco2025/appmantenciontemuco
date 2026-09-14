@@ -70,6 +70,13 @@ def test_resolve_with_estado_after_horas():
     assert col["PREVENTIVO"] == "Q"
 
 
+def test_resolve_participantes_after_estado():
+    headers = HEADERS_22 + ["ESTADO", "PARTICIPANTES"]
+    col = resolve_monthly_columns(headers)
+    assert col["ESTADO"] == "W"
+    assert col["PARTICIPANTES"] == "X"
+
+
 def test_resolve_header_driven_not_position_dependent():
     # Ensure resolution is by header text, not magic index: shuffle isn't tested
     # here (positions must remain), but a header spelling variant is resolved.

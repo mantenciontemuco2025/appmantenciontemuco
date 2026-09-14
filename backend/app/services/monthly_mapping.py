@@ -105,6 +105,7 @@ def _expected_header(logical_key: str) -> str:
         "PREDICTIVO": "PREDICTIVO", "PROYECTO": "PROYECTO",
         "MONTAJE": "MONTAJE", "HORAS": "HORAS",
         "ESTADO": "ESTADO", "RESPONSABLE": "RESPONSABLE",
+        "PARTICIPANTES": "PARTICIPANTES",
     }
     return normalize_header(expected_headers.get(logical_key, logical_key))
 
@@ -127,7 +128,9 @@ def resolve_monthly_columns(headers: list[str]) -> dict[str, str]:
             col_by_header[h_text] = chr(ord("A") + idx)
 
     # Known logical keys we care about, in a canonical order.
-    all_keys = list(MONTHLY_COLUMN_MAP.keys()) + ["ESTADO", "RESPONSABLE"]
+    all_keys = list(MONTHLY_COLUMN_MAP.keys()) + [
+        "ESTADO", "RESPONSABLE", "PARTICIPANTES"
+    ]
 
     resolved: dict[str, str] = {}
     for logical in all_keys:
