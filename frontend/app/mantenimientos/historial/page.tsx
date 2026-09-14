@@ -92,7 +92,7 @@ function HistorialContent() {
 
   useEffect(() => {
     api
-      .get<AreaNode[]>("/api/catalogs/tree")
+      .getCached<AreaNode[]>("/api/catalogs/tree", 5 * 60 * 1000)
       .then(setAreas)
       .catch(() => setAreas([]));
   }, []);

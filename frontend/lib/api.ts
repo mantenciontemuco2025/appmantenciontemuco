@@ -79,6 +79,45 @@ export function cacheOfflineResponse<T>(path: string, value: T) {
   }
 }
 
+type OnlineCacheEntry = {
+  value?: unknown;
+  expiresAt: number;
+  pending?: Promise<unknown>;
+};
+
+// Short-lived in-memory cache for read-only data shared by screens in the same
+// tab. It avoids fetching catalogs/workers again when navigating to a form,
+// while never persisting user-specific API responses in the browser.
+const onlineCache = new Map<string, OnlineCacheEntry>();
+
+export function apiGetCached<T>(path: string, ttlMs: number): Promise<T> {
+  const now = Date.now();
+  const current = onlineCache.get(path);
+  if (current?.pending) return current.pending as Promise<T>;
+  if (current && current.expiresAt > now) {
+    return Promise.resolve(current.value as T);
+  }
+
+  const pending = apiFetch<T>(path)
+    .then((value) => {
+      onlineCache.set(path, { value, expiresAt: Date.now() + ttlMs });
+      return value;
+    })
+    .catch((error) => {
+      onlineCache.delete(path);
+      throw error;
+    });
+
+  onlineCache.set(path, { expiresAt: 0, pending });
+  return pending;
+}
+
+export function invalidateApiCache(path: string) {
+  for (const key of onlineCache.keys()) {
+    if (key === path || key.startsWith(`${path}?`)) onlineCache.delete(key);
+  }
+}
+
 export function isOfflineQueued(value: unknown): value is OfflineQueuedResponse {
   return Boolean(value && typeof value === "object" && "__offlineQueued" in value);
 }
@@ -294,6 +333,8 @@ export async function apiFetch<T>(
 
 export const api = {
   get: <T>(path: string) => apiFetch<T>(path),
+  getCached: <T>(path: string, ttlMs: number) => apiGetCached<T>(path, ttlMs),
+  invalidateCache: (path: string) => invalidateApiCache(path),
   post: <T>(path: string, body?: unknown) => apiFetch<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
   patch: <T>(path: string, body: unknown) => apiFetch<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
   upload: <T>(path: string, body: FormData) => apiFetch<T>(path, { method: "POST", body }),

@@ -57,7 +57,7 @@ export function UserManager() {
     });
 
   useEffect(() => {
-    api.get<AreaNode[]>("/api/catalogs/tree").then(setAreas).catch(() => setAreas([]));
+    api.getCached<AreaNode[]>("/api/catalogs/tree", 5 * 60 * 1000).then(setAreas).catch(() => setAreas([]));
   }, []);
 
   const filtered = users.filter((u) => {
@@ -99,6 +99,7 @@ export function UserManager() {
       setRole("WORKER");
       setAreaId("");
       setAreaIds([]);
+      api.invalidateCache("/api/users/workers");
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al crear usuario");
@@ -110,6 +111,7 @@ export function UserManager() {
   async function toggleActive(user: User) {
     try {
       await api.patch(`/api/users/${user.id}`, { is_active: !user.is_active });
+      api.invalidateCache("/api/users/workers");
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al actualizar usuario");
@@ -151,6 +153,7 @@ export function UserManager() {
       await api.patch(`/api/users/${editingUser.id}`, body);
       setEditingUser(null);
       setEditPassword("");
+      api.invalidateCache("/api/users/workers");
       await reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al actualizar usuario");

@@ -52,8 +52,8 @@ export function MaintenanceWizard() {
     async function load() {
       try {
         const [tree, users] = await Promise.all([
-          api.get<AreaNode[]>("/api/catalogs/tree"),
-          api.get<WorkerOption[]>("/api/users/workers"),
+          api.getCached<AreaNode[]>("/api/catalogs/tree", 5 * 60 * 1000),
+          api.getCached<WorkerOption[]>("/api/users/workers", 60 * 1000),
         ]);
         setAreas(tree);
         setWorkers(users);

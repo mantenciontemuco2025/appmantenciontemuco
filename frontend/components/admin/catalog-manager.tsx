@@ -23,7 +23,7 @@ export function CatalogManager() {
 
   const load = useCallback(async () => {
     try {
-      setAreas(await api.get<AreaNode[]>("/api/catalogs/tree"));
+      setAreas(await api.getCached<AreaNode[]>("/api/catalogs/tree", 5 * 60 * 1000));
     } catch {
       setAreas([]);
     } finally {
@@ -45,6 +45,7 @@ export function CatalogManager() {
     try {
       await api.post("/api/catalogs/areas", { name: newArea.trim() });
       setNewArea("");
+      api.invalidateCache("/api/catalogs/tree");
       await load();
     } catch (err) {
       fail(err, "Error al crear el área");
@@ -57,6 +58,7 @@ export function CatalogManager() {
     try {
       await api.post("/api/catalogs/equipment", { name: newEquipment.trim(), area_id: areaId });
       setNewEquipment("");
+      api.invalidateCache("/api/catalogs/tree");
       await load();
     } catch (err) {
       fail(err, "Error al crear el tipo de equipo");
@@ -76,6 +78,7 @@ export function CatalogManager() {
     try {
       await api.patch(`/api/catalogs/areas/${areaId}`, { name: areaDraft.trim() });
       setEditingAreaId(null);
+      api.invalidateCache("/api/catalogs/tree");
       await load();
     } catch (err) {
       fail(err, "Error al editar el área");
@@ -91,6 +94,7 @@ export function CatalogManager() {
     try {
       await api.del(`/api/catalogs/areas/${area.id}`);
       if (activeArea === area.id) setActiveArea(null);
+      api.invalidateCache("/api/catalogs/tree");
       await load();
     } catch (err) {
       fail(err, "No se pudo eliminar el área");
@@ -112,6 +116,7 @@ export function CatalogManager() {
     try {
       await api.patch(`/api/catalogs/equipment/${equipmentId}`, { name: equipmentDraft.trim() });
       setEditingEquipmentId(null);
+      api.invalidateCache("/api/catalogs/tree");
       await load();
     } catch (err) {
       fail(err, "Error al editar el tipo de equipo");
@@ -126,6 +131,7 @@ export function CatalogManager() {
     setError("");
     try {
       await api.del(`/api/catalogs/equipment/${equipment.id}`);
+      api.invalidateCache("/api/catalogs/tree");
       await load();
     } catch (err) {
       fail(err, "No se pudo eliminar el tipo de equipo");
