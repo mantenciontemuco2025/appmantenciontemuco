@@ -41,10 +41,10 @@ export function NotificationBell() {
     }
   }, []);
 
-  // Carga inicial + refresco periódico cada 30s.
+  // Carga inicial + refresco periódico de respaldo cada 60s.
   useEffect(() => {
     void load();
-    const t = setInterval(load, 10000);
+    const t = setInterval(load, 60000);
     const onFocus = () => void load();
     window.addEventListener("focus", onFocus);
     return () => {
