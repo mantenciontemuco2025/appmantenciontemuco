@@ -31,7 +31,8 @@ class WorkOrderCreate(BaseModel):
     # ── Workflow fields ──────────────────────────────────────────────────
     responsible_user_id: int | None = None
     participant_user_ids: list[int] = []
-    is_planned: bool = False
+    # Every new OT participates in the planned-compliance KPI.
+    is_planned: bool = True
     scheduled_date: date | None = None
     due_date: date | None = None
 

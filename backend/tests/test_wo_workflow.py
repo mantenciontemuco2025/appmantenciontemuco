@@ -69,6 +69,7 @@ async def test_create_draft_by_default(client, seed_data, monkeypatch):
     resp = await _create_ot(client, seed_data, monkeypatch, token=admin, emit=False)
     assert resp.status_code == 201
     assert resp.json()["status"] == "DRAFT"
+    assert resp.json()["is_planned"] is True
     # DRAFT should not reach monthly sheet
     assert resp.json()["ot_sheet_sync_status"] == "PENDING"
 
@@ -83,23 +84,36 @@ async def test_emit_param_creates_pending(client, seed_data, monkeypatch):
     assert resp.status_code == 201
     assert resp.json()["status"] == "PENDING"
     assert resp.json()["responsible_user_name"] == "Ortiz"
+    assert resp.json()["is_planned"] is True
 
 
-async def test_emit_requires_creator_signature(client, seed_data, monkeypatch):
+async def test_supervisor_can_emit_without_signature(
+    client, seed_data, db_session_factory, monkeypatch
+):
+    async with db_session_factory() as db:
+        await db.execute(
+            insert(supervisor_areas).values(
+                supervisor_id=seed_data["supervisor"].id,
+                area_id=seed_data["area"].id,
+            )
+        )
+        await db.commit()
+
     supervisor = await get_token(client, "supervisor@test.com")
     resp = await _create_ot(
         client, seed_data, monkeypatch, token=supervisor, emit=True,
         responsible_user_id=seed_data["worker"].id,
         participant_user_ids=[seed_data["worker"].id],
     )
-    assert resp.status_code == 400
-    assert "Firma manuscrita" in resp.json()["detail"]
+    assert resp.status_code == 201
+    assert resp.json()["submitted_for_review"] is True
+    assert resp.json()["requested_signature"] is None
 
 
-async def test_supervisor_signature_survives_admin_acceptance(
+async def test_admin_signature_is_used_when_accepting_supervisor_submission(
     client, seed_data, db_session_factory, monkeypatch
 ):
-    """Admin acceptance must not replace the supervisor's request signature."""
+    """Supervisor submits unsigned; administrator signs on acceptance."""
     async with db_session_factory() as db:
         await db.execute(
             update(User)
@@ -121,7 +135,7 @@ async def test_supervisor_signature_survives_admin_acceptance(
     assert submitted.status_code == 201
     assert submitted.json()["submitted_for_review"] is True
     assert submitted.json()["requested_by"] == "Supervisor"
-    assert submitted.json()["requested_signature"].endswith("supervisor-signature")
+    assert submitted.json()["requested_signature"] is None
 
     admin = await get_token(client, "admin@test.com")
     wo_id = submitted.json()["id"]
@@ -141,7 +155,7 @@ async def test_supervisor_signature_survives_admin_acceptance(
     assert accepted.status_code == 200
     assert accepted.json()["status"] == "PENDING"
     assert accepted.json()["requested_by"] == "Supervisor"
-    assert accepted.json()["requested_signature"].endswith("supervisor-signature")
+    assert accepted.json()["requested_signature"] == seed_data["admin"].signature
 
 
 async def test_worker_cannot_create(client, seed_data, monkeypatch):

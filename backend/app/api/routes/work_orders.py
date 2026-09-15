@@ -639,7 +639,7 @@ async def create_work_order(
             and not is_supervisor_submission
         ):
             errors.append("Al menos un participante")
-        if not current_user.signature:
+        if not is_supervisor_submission and not current_user.signature:
             errors.append("Firma manuscrita en Mi firma")
         if area_scope_error:
             errors.append("Área asignada al supervisor")
@@ -712,14 +712,20 @@ async def create_work_order(
         approved_by=None,
         # A WorkOrder keeps a stable signature URL; later profile changes do
         # not change the signature used when this OT was issued.
-        requested_signature=current_user.signature if payload.emit else None,
+        # Supervisors only submit the request. The administrator signs when
+        # accepting it; a supervisor signature is not required or stored.
+        requested_signature=(
+            None if is_supervisor_submission else (current_user.signature if payload.emit else None)
+        ),
         participant_names=participant_names_str,
         status=initial_status,
         submitted_for_review=is_supervisor_submission,
         created_by_user_id=current_user.id,
         responsible_user_id=None if is_supervisor else payload.responsible_user_id,
-        is_planned=payload.is_planned,
-        scheduled_date=payload.scheduled_date,
+        # All new OTs are planned. If no separate scheduled date is supplied,
+        # use the request date so the KPI has a stable planning period.
+        is_planned=True,
+        scheduled_date=payload.scheduled_date or payload.request_date,
         due_date=payload.due_date,
     )
     db.add(wo)
@@ -2052,8 +2058,6 @@ async def issue_work_order(
         errors = []
         if not wo.description or not wo.description.strip():
             errors.append("DescripciÃ³n del trabajo")
-        if not current_user.signature:
-            errors.append("Firma manuscrita en Mi firma")
         if errors:
             raise HTTPException(
                 status_code=400,
@@ -2061,7 +2065,7 @@ async def issue_work_order(
             )
         wo.submitted_for_review = True
         wo.requested_by = current_user.full_name
-        wo.requested_signature = current_user.signature
+        wo.requested_signature = None
         await create_audit_log(
             db,
             user_id=current_user.id,
@@ -2114,14 +2118,15 @@ async def issue_work_order(
         raise HTTPException(status_code=400, detail=str(e))
 
     # Keep the original requester when an administrator accepts a supervisor's
-    # submission. The admin is the approver/assigner, not the requester, so
-    # the supervisor's name and signature must remain in "SOLICITADO POR".
+    # submission. The admin is the authorizer/assigner, not the requester, so
+    # the supervisor's name remains in "SOLICITADO POR".
     was_submitted_for_review = wo.submitted_for_review
     wo.status = WorkOrderStatus.PENDING.value
     wo.submitted_for_review = False
     if not was_submitted_for_review:
         wo.requested_by = current_user.full_name
-        wo.requested_signature = current_user.signature
+    # Only the administrator authorizes the emitted OT.
+    wo.requested_signature = current_user.signature
 
     await create_audit_log(
         db,

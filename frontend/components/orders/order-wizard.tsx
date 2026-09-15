@@ -18,7 +18,6 @@ interface WorkerOption {
 }
 
 interface Form {
-  is_planned: boolean;
   scheduled_date: string;
   request_date: string;   // Fecha de solicitud — la coloca el admin al solicitar
   area_id: number | null;
@@ -30,7 +29,6 @@ interface Form {
 
 function emptyForm(): Form {
   return {
-    is_planned: false,
     scheduled_date: "",
     request_date: new Date().toISOString().slice(0, 10),
     area_id: null,
@@ -155,7 +153,6 @@ export function OrderWizard() {
 
   const formValid =
     !!form.request_date &&
-    (!form.is_planned || !!form.scheduled_date) &&
     !!form.area_id &&
     !!form.equipment_id &&
     !!form.description.trim() &&
@@ -172,8 +169,8 @@ export function OrderWizard() {
       maintenance_type: "PREVENTIVE",
       loto_status: "NOT_APPLICABLE",
       request_date: form.request_date || null,
-      is_planned: isSupervisor ? false : form.is_planned,
-      scheduled_date: isSupervisor || !form.is_planned ? null : form.scheduled_date || null,
+      is_planned: true,
+      scheduled_date: form.scheduled_date || form.request_date || null,
       responsible_user_id: isSupervisor ? null : form.responsible_user_id,
       participant_user_ids: isSupervisor ? [] : form.participant_ids,
       emit,
@@ -219,44 +216,24 @@ export function OrderWizard() {
           />
         </div>
 
-        {!isSupervisor && (
-          <div className="rounded-lg border border-indigo-200 bg-indigo-50/60 p-3">
-            <label className="flex cursor-pointer items-start gap-3">
-              <input
-                type="checkbox"
-                checked={form.is_planned}
-                onChange={(event) => {
-                  const checked = event.target.checked;
-                  setForm((current) => ({
-                    ...current,
-                    is_planned: checked,
-                    scheduled_date: checked
-                      ? current.scheduled_date || current.request_date
-                      : "",
-                  }));
-                }}
-                className="mt-1 h-4 w-4 rounded border-input"
-              />
-              <span>
-                <span className="block text-sm font-semibold text-indigo-950">OT planificada</span>
-                <span className="mt-0.5 block text-xs text-indigo-900/80">
-                  Se incluirá en el indicador de cumplimiento programado.
-                </span>
-              </span>
-            </label>
-            {form.is_planned && (
-              <div className="mt-3 border-t border-indigo-200 pt-3">
-                <label className="mb-1.5 block text-sm font-medium text-indigo-950">Fecha programada *</label>
-                <Input
-                  type="date"
-                  value={form.scheduled_date}
-                  onChange={(event) => set("scheduled_date", event.target.value)}
-                  className="bg-white"
-                />
-              </div>
-            )}
+        <div className="rounded-lg border border-indigo-200 bg-indigo-50/60 p-3">
+          <span className="block text-sm font-semibold text-indigo-950">OT planificada</span>
+          <span className="mt-0.5 block text-xs text-indigo-900/80">
+            Todas las OTs se consideran planificadas y aparecerán en los KPI de cumplimiento.
+          </span>
+          <div className="mt-3 border-t border-indigo-200 pt-3">
+            <label className="mb-1.5 block text-sm font-medium text-indigo-950">Fecha programada</label>
+            <Input
+              type="date"
+              value={form.scheduled_date}
+              onChange={(event) => set("scheduled_date", event.target.value)}
+              className="bg-white"
+            />
+            <p className="mt-1 text-xs text-indigo-900/80">
+              Si la dejas vacía, se usará la fecha de solicitud.
+            </p>
           </div>
-        )}
+        </div>
 
         {/* Equipo intervenido */}
         <div>
@@ -340,7 +317,9 @@ export function OrderWizard() {
             <span className="ml-auto text-xs text-muted-foreground">Automático</span>
           </div>
           <p className="text-xs text-muted-foreground mt-1">
-            Se registra automáticamente con tu nombre y tu firma al emitir la OT.
+            {isSupervisor
+              ? "Se registra con tu nombre; el administrador agregará la firma al aceptar la OT."
+              : "Se registra automáticamente con tu nombre y tu firma al emitir la OT."}
           </p>
         </div>
 

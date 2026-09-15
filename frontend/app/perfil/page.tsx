@@ -131,7 +131,11 @@ export default function ProfilePage() {
     <Shell fullName={user.full_name} role={user.role} onLogout={logout}>
       <div className="mb-5">
         <h1 className="text-2xl font-bold">Mi perfil</h1>
-        <p className="text-muted-foreground">Su información personal y su firma manuscrita para autorizar OTs.</p>
+        <p className="text-muted-foreground">
+          {user.role === "SUPERVISOR"
+            ? "Su información personal y área supervisada."
+            : "Su información personal y su firma manuscrita para autorizar OTs."}
+        </p>
       </div>
 
       {/* ── Información personal ─────────────────────────────────────────── */}
@@ -211,7 +215,8 @@ export default function ProfilePage() {
         </CardContent>
       </Card>
 
-      {/* ── Firma manuscrita ─────────────────────────────────────────────── */}
+      {/* ── Firma manuscrita: solo administradores y trabajadores ───────── */}
+      {user.role !== "SUPERVISOR" && (
       <Card className="max-w-2xl">
         <CardHeader>
           <CardTitle className="text-lg">Firma manuscrita</CardTitle>
@@ -263,6 +268,7 @@ export default function ProfilePage() {
           </div>
         </CardContent>
       </Card>
+      )}
     </Shell>
   );
 }

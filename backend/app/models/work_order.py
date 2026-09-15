@@ -94,7 +94,7 @@ class WorkOrder(Base):
     )
 
     # ── Planning ─────────────────────────────────────────────────────────
-    is_planned: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_planned: Mapped[bool] = mapped_column(Boolean, default=True)
     scheduled_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
     due_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
 
