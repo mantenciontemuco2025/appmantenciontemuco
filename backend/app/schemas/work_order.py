@@ -1,7 +1,9 @@
-from datetime import datetime, date
+from datetime import datetime, date, time
+from typing import Literal
 from pydantic import BaseModel, field_validator
 
 from app.models.work_order import WorkOrderStatus, LotoStatus
+from app.core.loto import normalize_loto_controls
 
 
 class WorkOrderCreate(BaseModel):
@@ -12,6 +14,7 @@ class WorkOrderCreate(BaseModel):
     section_name: str | None = None
     maintenance_type: str  # PREVENTIVE, CORRECTIVE, PREDICTIVE, PROYECTO, MONTAJE
     loto_status: str = LotoStatus.NOT_APPLICABLE.value
+    loto_controls: list[str] | None = None
     folio: str | None = None
     estimated_time: str | None = None
     # Fecha de solicitud de la OT — la coloca el admin al crear/solicitar la OT.
@@ -59,6 +62,11 @@ class WorkOrderCreate(BaseModel):
             raise ValueError(f"Estado LOTO inválido. Use: {', '.join(sorted(valid))}")
         return v.upper()
 
+    @field_validator("loto_controls")
+    @classmethod
+    def valid_loto_controls(cls, v: list[str] | None) -> list[str] | None:
+        return normalize_loto_controls(v)
+
 
 class WorkOrderUpdate(BaseModel):
     title: str | None = None
@@ -68,6 +76,7 @@ class WorkOrderUpdate(BaseModel):
     section_name: str | None = None
     maintenance_type: str | None = None
     loto_status: str | None = None
+    loto_controls: list[str] | None = None
     folio: str | None = None
     estimated_time: str | None = None
     request_date: date | None = None
@@ -87,8 +96,17 @@ class WorkOrderUpdate(BaseModel):
     scheduled_date: date | None = None
     due_date: date | None = None
     completion_notes: str | None = None
+    work_time_mode: Literal["RANGE", "MANUAL"] | None = None
+    work_start_time: time | None = None
+    work_end_time: time | None = None
+    worked_duration_minutes: int | None = None
     cancellation_reason: str | None = None
     return_reason: str | None = None
+
+    @field_validator("loto_controls")
+    @classmethod
+    def valid_loto_controls(cls, v: list[str] | None) -> list[str] | None:
+        return normalize_loto_controls(v)
 
 
 class WorkOrderResponse(BaseModel):
@@ -103,6 +121,7 @@ class WorkOrderResponse(BaseModel):
     section_name: str | None
     maintenance_type: str
     loto_status: str
+    loto_controls: list[str] = []
     folio: str | None
     estimated_time: str | None
     request_date: date | None
@@ -131,6 +150,10 @@ class WorkOrderResponse(BaseModel):
     completed_at: datetime | None = None
     completed_by_user_id: int | None = None
     completed_by_name: str | None = None
+    work_time_mode: str | None = None
+    work_start_time: time | None = None
+    work_end_time: time | None = None
+    worked_duration_minutes: int | None = None
     actual_duration_minutes: float | None = None
     completion_notes: str | None = None
     approved_at: datetime | None = None

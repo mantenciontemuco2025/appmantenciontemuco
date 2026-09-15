@@ -188,6 +188,43 @@ def build_loto_cell_texts(selected: str) -> dict[str, str]:
     }
 
 
+# Multi-select LOTO/Bloqueo/AST controls. The existing three cells are kept
+# so the OT layout does not change: C10 and D10 contain two lines each, while
+# E10 keeps the exclusive "No aplica" option.
+LOTO_CONTROL_CELLS: dict[str, str] = {
+    "LOTO_BLOQUEO": "C10",
+    "AST": "C10",
+    "TARJETA_ROJA": "D10",
+    "CHECKLIST_HERRAMIENTAS": "D10",
+    "NOT_APPLICABLE": "E10",
+}
+
+_LOTO_CONTROL_LABELS = {
+    "LOTO_BLOQUEO": "LOTO / Bloqueo",
+    "AST": "AST",
+    "TARJETA_ROJA": "Tarjeta roja",
+    "CHECKLIST_HERRAMIENTAS": "Checklist herramientas",
+    "NOT_APPLICABLE": "No aplica",
+}
+
+
+def build_loto_control_cell_texts(selected: list[str] | None) -> dict[str, str]:
+    """Build the two-line texts for the multi-select LOTO layout."""
+    selected_set = {str(value).strip().upper() for value in (selected or [])}
+    if not selected_set or "NOT_APPLICABLE" in selected_set:
+        selected_set = {"NOT_APPLICABLE"}
+
+    def checkbox(control: str) -> str:
+        mark = "X" if control in selected_set else " "
+        return f"[{mark}] {_LOTO_CONTROL_LABELS[control]}"
+
+    return {
+        "C10": "\n".join([checkbox("LOTO_BLOQUEO"), checkbox("AST")]),
+        "D10": "\n".join([checkbox("TARJETA_ROJA"), checkbox("CHECKLIST_HERRAMIENTAS")]),
+        "E10": checkbox("NOT_APPLICABLE"),
+    }
+
+
 # ──────────────────────────────────────────────────────────────────────
 # OT Template: status checkboxes (row 36)
 #

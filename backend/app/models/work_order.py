@@ -1,17 +1,19 @@
 import enum
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 
 from sqlalchemy import (
     String,
     ForeignKey,
     DateTime,
     Date,
+    Time,
     Integer,
     Enum,
     Text,
     Boolean,
     Float,
     Index,
+    JSON,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -56,6 +58,11 @@ class WorkOrder(Base):
     maintenance_type: Mapped[str] = mapped_column(String(20))
     loto_status: Mapped[str] = mapped_column(
         String(20), default=LotoStatus.NOT_APPLICABLE.value
+    )
+    # New multi-select controls. The legacy loto_status remains for old OTs
+    # and integrations that still understand YES/NO/NOT_APPLICABLE.
+    loto_controls: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=lambda: ["NOT_APPLICABLE"]
     )
 
     folio: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -105,6 +112,12 @@ class WorkOrder(Base):
     completed_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id"), nullable=True
     )
+    # Worker-declared work time. The lifecycle timestamps above remain an
+    # audit trail and are deliberately not used as the worked duration.
+    work_time_mode: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    work_start_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    work_end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
+    worked_duration_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     actual_duration_minutes: Mapped[float | None] = mapped_column(Float, nullable=True)
     completion_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 

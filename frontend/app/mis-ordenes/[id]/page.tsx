@@ -7,7 +7,7 @@ import { ArrowLeft, Loader2, Play, CheckCircle, Clock, AlertTriangle, Save } fro
 import { api, cacheOfflineResponse, isOfflineQueued } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Shell } from "@/components/layout/shell";
-import type { WorkOrderRecord, LotoStatus } from "@/lib/types";
+import type { WorkOrderRecord, LotoControl, WorkTimeMode } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Select } from "@/components/ui/select";
@@ -19,12 +19,8 @@ import { StatusBadge, MAINTENANCE_TYPES, maintenanceTypeLabel } from "@/lib/stat
 import { signatureImageUrl } from "@/lib/signatures";
 import { SyncBadge } from "@/components/maintenance/sync-badge";
 import { PageLoading } from "@/components/ui/page-loading";
-
-const LOTO_OPTIONS: { value: LotoStatus; label: string }[] = [
-  { value: "YES", label: "Sí" },
-  { value: "NO", label: "No" },
-  { value: "NOT_APPLICABLE", label: "No aplica" },
-];
+import { formatDurationLong } from "@/lib/utils";
+import { LOTO_CONTROL_OPTIONS } from "@/lib/loto";
 
 const inputCls =
   "w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
@@ -33,12 +29,15 @@ const hintCls = "text-xs text-muted-foreground mb-2";
 
 interface FulfillForm {
   maintenance_type: string;
-  loto_status: LotoStatus;
+  loto_controls: LotoControl[];
   execution_date: string;   // fecha de ejecución — la coloca el trabajador
   section_name: string;     // sección — la coloca el trabajador
+  time_mode: WorkTimeMode;
   start_time: string;
   end_time: string;
-  estimated_time: string;   // horas (manual o auto-derivado de inicio/fin)
+  estimated_time: string;   // legacy planning value
+  manual_hours: string;
+  manual_minutes: string;
   resources_required: string;
   risks: string;
   observations: string;
@@ -76,12 +75,15 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
   const [notice, setNotice] = useState<AlertState | null>(null);
   const [form, setForm] = useState<FulfillForm>({
     maintenance_type: "PREVENTIVE",
-    loto_status: "NOT_APPLICABLE",
+    loto_controls: ["NOT_APPLICABLE"],
     execution_date: "",
     section_name: "",
+    time_mode: "RANGE",
     start_time: "",
     end_time: "",
     estimated_time: "",
+    manual_hours: "",
+    manual_minutes: "",
     resources_required: "",
     risks: "",
     observations: "",
@@ -135,11 +137,28 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
         setForm((f) => ({
           ...f,
           maintenance_type: data.maintenance_type || "PREVENTIVE",
-          loto_status: (data.loto_status as LotoStatus) || "NOT_APPLICABLE",
+          loto_controls:
+            data.loto_controls?.length
+              ? data.loto_controls
+              : data.loto_status === "YES"
+                ? ["LOTO_BLOQUEO"]
+                : ["NOT_APPLICABLE"],
           execution_date:
             (data.execution_date || "").slice(0, 10) ||
             new Date().toISOString().slice(0, 10),
           section_name: data.section_name || "",
+          time_mode: data.work_time_mode || "RANGE",
+          start_time: (data.work_start_time || "").slice(0, 5),
+          end_time: (data.work_end_time || "").slice(0, 5),
+          manual_hours:
+            data.worked_duration_minutes != null
+              ? String(Math.floor(data.worked_duration_minutes / 60))
+              : "",
+          manual_minutes:
+            data.worked_duration_minutes != null
+              ? String(data.worked_duration_minutes % 60)
+              : "",
+          estimated_time: data.estimated_time || "",
           resources_required: data.resources_required || "",
           risks: data.risks || "",
           observations: data.observations || "",
@@ -192,34 +211,68 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
   // Duration from start/end times → estimated_time string
   function deriveEstimatedTime(min: number | null): string {
     if (min == null || min <= 0) return "";
-    const h = Math.floor(min / 60);
-    const m = min % 60;
-    if (h > 0 && m > 0) return `${h} h ${m} min`;
-    if (h > 0) return `${h} h`;
-    return `${m} min`;
+    return formatDurationLong(min);
+  }
+
+  function reportedWorkMinutes(values: FulfillForm): number | null {
+    if (values.time_mode === "RANGE") {
+      if (!values.start_time || !values.end_time) return null;
+      const [sh, sm] = values.start_time.split(":").map(Number);
+      const [eh, em] = values.end_time.split(":").map(Number);
+      const start = sh * 60 + sm;
+      const end = eh * 60 + em;
+      return end > start ? end - start : null;
+    }
+    const hours = Number(values.manual_hours);
+    const minutes = Number(values.manual_minutes || 0);
+    if (!Number.isInteger(hours) || hours < 0) return null;
+    if (!Number.isInteger(minutes) || minutes < 0 || minutes > 59) return null;
+    const total = hours * 60 + minutes;
+    return total > 0 ? total : null;
+  }
+
+  function workTimeError(values: FulfillForm): string | null {
+    if (values.time_mode === "RANGE") {
+      if (!values.start_time || !values.end_time) {
+        return "Indica la hora de inicio y la hora de término.";
+      }
+      if (reportedWorkMinutes(values) == null) {
+        return "La hora de término debe ser posterior a la hora de inicio.";
+      }
+      return null;
+    }
+    if (reportedWorkMinutes(values) == null) {
+      return "Indica una duración manual mayor que cero.";
+    }
+    return null;
   }
 
   function updateFormField<K extends keyof FulfillForm>(key: K, value: FulfillForm[K]) {
-    setForm((f) => ({ ...f, [key]: value }));
-    // Derive estimated_time when times change
-    if (key === "start_time" || key === "end_time") {
-      const [sh, sm] = (form.start_time || "").split(":").map(Number);
-      const [eh, em] = (form.end_time || "").split(":").map(Number);
-      const start = sh * 60 + (sm || 0);
-      const end = eh * 60 + em;
-      if (end > start) {
-        const est = deriveEstimatedTime(end - start);
-        setForm((f) => ({ ...f, estimated_time: est }));
-      }
-    }
+    const next = { ...form, [key]: value } as FulfillForm;
+    setForm(next);
+  }
+
+  function toggleLotoControl(control: Exclude<LotoControl, "NOT_APPLICABLE">) {
+    const selected = form.loto_controls.includes(control)
+      ? form.loto_controls.filter((item) => item !== control && item !== "NOT_APPLICABLE")
+      : [...form.loto_controls.filter((item) => item !== "NOT_APPLICABLE"), control];
+    updateFormField("loto_controls", selected.length ? selected : ["NOT_APPLICABLE"]);
   }
 
   function buildFulfillPayload(values: FulfillForm) {
     return {
       maintenance_type: values.maintenance_type,
-      loto_status: values.loto_status,
+      loto_status: values.loto_controls.includes("NOT_APPLICABLE") ? "NOT_APPLICABLE" : "YES",
+      loto_controls: values.loto_controls,
       execution_date: values.execution_date || null,
       section_name: values.section_name || null,
+      work_time_mode: values.time_mode,
+      work_start_time: values.time_mode === "RANGE" ? values.start_time || null : null,
+      work_end_time: values.time_mode === "RANGE" ? values.end_time || null : null,
+      worked_duration_minutes:
+        values.time_mode === "MANUAL" ? reportedWorkMinutes(values) : null,
+      // Keep the planning field unchanged. Completed OTs use the declared
+      // duration stored by the completion endpoint for the monthly register.
       estimated_time: values.estimated_time || null,
       resources_required: values.resources_required || null,
       risks: values.risks || null,
@@ -317,8 +370,19 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
   async function handleComplete() {
     setActionLoading(true);
     try {
+      const durationError = workTimeError(form);
+      if (durationError) {
+        toast("error", durationError);
+        setShowConfirm(null);
+        return;
+      }
+      const reportedMinutes = reportedWorkMinutes(form);
       const updated = await api.patch<WorkOrderRecord>(`/api/work-orders/${id}/complete`, {
         completion_notes: completionNotes || null,
+        work_time_mode: form.time_mode,
+        work_start_time: form.time_mode === "RANGE" ? form.start_time : null,
+        work_end_time: form.time_mode === "RANGE" ? form.end_time : null,
+        worked_duration_minutes: form.time_mode === "MANUAL" ? reportedMinutes : null,
       });
       if (isOfflineQueued(updated)) {
         if (wo && user) {
@@ -329,6 +393,9 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
             completed_by_user_id: user.id,
             completed_by_name: user.full_name,
             completion_notes: completionNotes || null,
+            work_time_mode: form.time_mode,
+            worked_duration_minutes: reportedMinutes,
+            actual_duration_minutes: reportedMinutes,
           };
           setWo(optimistic);
           cacheOfflineResponse(`/api/work-orders/${id}`, optimistic);
@@ -494,12 +561,32 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                   onChange={(e) => updateFormField("maintenance_type", e.target.value)}
                 />
 
-                <Select
-                  label="LOTO / Bloqueo / AST"
-                  options={LOTO_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
-                  value={form.loto_status}
-                  onChange={(e) => updateFormField("loto_status", e.target.value as LotoStatus)}
-                />
+                <div>
+                  <label className={labelCls}>LOTO / Bloqueo / AST</label>
+                  <div className="grid grid-cols-1 gap-2 rounded-md border border-input p-3 sm:grid-cols-2">
+                    {LOTO_CONTROL_OPTIONS.map((option) => (
+                      <label key={option.value} className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={form.loto_controls.includes(option.value)}
+                          onChange={() => toggleLotoControl(option.value)}
+                          className="h-4 w-4 rounded border-input"
+                        />
+                        {option.label}
+                      </label>
+                    ))}
+                    <label className="flex items-center gap-2 text-sm sm:col-span-2">
+                      <input
+                        type="checkbox"
+                        checked={form.loto_controls.includes("NOT_APPLICABLE")}
+                        onChange={() => updateFormField("loto_controls", ["NOT_APPLICABLE"])}
+                        className="h-4 w-4 rounded border-input"
+                      />
+                      No aplica
+                    </label>
+                  </div>
+                  <p className={hintCls}>Puedes seleccionar varias opciones. &quot;No aplica&quot; es exclusiva.</p>
+                </div>
 
                 <div>
                   <label className={labelCls}>Fecha de ejecución</label>
@@ -519,7 +606,20 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                   />
                 </div>
 
-                <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className={labelCls}>Cómo registrar las horas trabajadas</label>
+                  <Select
+                    options={[
+                      { value: "RANGE", label: "Desde una hora hasta otra" },
+                      { value: "MANUAL", label: "Duración manual" },
+                    ]}
+                    value={form.time_mode}
+                    onChange={(e) => updateFormField("time_mode", e.target.value as WorkTimeMode)}
+                  />
+                  <p className={hintCls}>Elige solo una forma para registrar las horas.</p>
+                </div>
+
+                {form.time_mode === "RANGE" && <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className={labelCls}>Hora inicio</label>
                     <Input
@@ -536,19 +636,42 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                       onChange={(e) => updateFormField("end_time", e.target.value)}
                     />
                   </div>
-                </div>
+                </div>}
 
                 <div>
-                  <label className={labelCls}>Horas (manual)</label>
+                  <label className={labelCls}>Duracion manual</label>
                   <p className={hintCls}>
-                    Se calcula automáticamente desde las horas de inicio/término, o escríbalas
-                    manualmente (ej: &quot;2 h 30 min&quot;, &quot;1.5&quot;).
+                    Usa estos campos solo si elegiste &quot;Duracion manual&quot;.
                   </p>
-                  <Input
-                    placeholder="Ej: 2 h 30 min"
-                    value={form.estimated_time}
-                    onChange={(e) => updateFormField("estimated_time", e.target.value)}
-                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <Input
+                      type="number"
+                      min={0}
+                      max={999}
+                      step={1}
+                      inputMode="numeric"
+                      placeholder="Horas"
+                      value={form.manual_hours}
+                      disabled={form.time_mode !== "MANUAL"}
+                      onChange={(e) => updateFormField("manual_hours", e.target.value)}
+                    />
+                    <Input
+                      type="number"
+                      min={0}
+                      max={59}
+                      step={1}
+                      inputMode="numeric"
+                      placeholder="Minutos"
+                      value={form.manual_minutes}
+                      disabled={form.time_mode !== "MANUAL"}
+                      onChange={(e) => updateFormField("manual_minutes", e.target.value)}
+                    />
+                  </div>
+                  {form.time_mode === "MANUAL" && reportedWorkMinutes(form) != null && (
+                    <p className="mt-2 text-sm font-medium text-blue-800">
+                      Se registrarÃ¡n {deriveEstimatedTime(reportedWorkMinutes(form))}.
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -675,7 +798,7 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
           </Card>
 
           {/* Lifecycle info */}
-          {(wo.started_at || wo.completed_at || wo.actual_duration_minutes != null) && (
+          {(wo.started_at || wo.completed_at || wo.work_time_mode || wo.actual_duration_minutes != null) && (
             <Card className="mb-4">
               <CardContent className="p-4">
                 <h3 className="text-sm font-semibold mb-2">Ejecución</h3>
@@ -691,8 +814,17 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                     value={`${new Date(wo.completed_at).toLocaleString("es-CL")}${wo.completed_by_name ? ` — por ${wo.completed_by_name}` : ""}`}
                   />
                 )}
+                {wo.work_time_mode === "RANGE" && (wo.work_start_time || wo.work_end_time) && (
+                  <InfoRow
+                    label="Horario declarado"
+                    value={`${(wo.work_start_time || "").slice(0, 5)} a ${(wo.work_end_time || "").slice(0, 5)}`}
+                  />
+                )}
+                {wo.work_time_mode === "MANUAL" && wo.worked_duration_minutes != null && (
+                  <InfoRow label="DuraciÃ³n manual" value={formatDurationLong(wo.worked_duration_minutes)} />
+                )}
                 {wo.actual_duration_minutes != null && (
-                  <InfoRow label="Duración real" value={`${wo.actual_duration_minutes} minutos`} />
+                  <InfoRow label="Horas declaradas por trabajador" value={formatDurationLong(wo.actual_duration_minutes)} />
                 )}
                 {wo.completion_notes && <InfoRow label="Notas de finalización" value={wo.completion_notes} />}
               </CardContent>
@@ -707,7 +839,17 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
           )}
 
           {wo.status === "IN_PROGRESS" && isResponsible && !showConfirm && (
-            <Button className="w-full" onClick={() => setShowConfirm("complete")}>
+            <Button
+              className="w-full"
+              onClick={() => {
+                const durationError = workTimeError(form);
+                if (durationError) {
+                  toast("error", durationError);
+                  return;
+                }
+                setShowConfirm("complete");
+              }}
+            >
               <CheckCircle className="mr-2 h-4 w-4" /> Finalizar Trabajo
             </Button>
           )}

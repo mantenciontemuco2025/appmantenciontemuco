@@ -313,9 +313,9 @@ class COBSession:
             elif target == WorkOrderStatus.COMPLETED.value:
                 wo.completed_at = now
                 wo.completed_by_user_id = self._user.id
-                if wo.started_at:
-                    delta = now - wo.started_at
-                    wo.actual_duration_minutes = round(delta.total_seconds() / 60, 2)
+                # COB can advance workflow state for controlled jobs, but it
+                # must not invent worked hours from button timestamps. Hours
+                # are declared explicitly by the worker through /complete.
 
             await self._db.flush()
 

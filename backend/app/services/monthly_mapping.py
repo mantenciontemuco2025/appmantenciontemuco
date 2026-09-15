@@ -171,10 +171,10 @@ def monthly_status_text(status: str | None) -> str:
 # ──────────────────────────────────────────────────────────────────────
 # HORAS rule (approved 2026-09-03)
 #
-# Current data model has only `estimated_time` (text). We show:
-#   HORAS = estimated_time parsed to numeric hours.
+# `estimated_time` is the planning value. `actual_duration_minutes` stores
+# the worker-declared duration used for completed OTs.
 #
-# Architecture is PREPARED for future real-time tracking:
+# Lifecycle timestamps remain an audit trail only:
 #   started_at, completed_at, actual_duration_minutes, completed_by_user_id.
 # When actual_duration_minutes exists:
 #   - if status is COMPLETED and actual_duration_minutes is set:
@@ -182,9 +182,8 @@ def monthly_status_text(status: str | None) -> str:
 #   - otherwise:
 #       HORAS = estimated_time parsed.
 #
-# The `compute_horas` helper reads both sources so the future switch is a
-# one-line change once the fields exist. No real-time tracking is implemented
-# in this phase.
+# The `compute_horas` helper reads the declared duration when available and
+# keeps the planning value as fallback for OTs that are not completed yet.
 # ──────────────────────────────────────────────────────────────────────
 @dataclass
 class HorasInput:
@@ -192,19 +191,19 @@ class HorasInput:
     optional placeholders — they are not populated by the current sync."""
     estimated_minutes: float = 0.0            # parsed from estimated_time
     status: str = "PENDING"
-    actual_duration_minutes: float | None = None  # future field
+    actual_duration_minutes: float | None = None  # worker-declared duration
 
 
 def compute_horas(data: HorasInput) -> float:
     """Compute the numeric HORAS value for a monthly row.
 
     Rules:
-      1. If status == COMPLETED and actual_duration_minutes is set
-         (the future real-time path): HORAS = actual_duration_minutes / 60.
-      2. Otherwise (current): HORAS = estimated_time parsed to hours.
+      1. If status == COMPLETED and actual_duration_minutes is set, use the
+         worker-declared duration.
+      2. Otherwise use the planned estimated time.
     """
     if data.status.upper() == "COMPLETED" and data.actual_duration_minutes is not None:
         return round(data.actual_duration_minutes / 60, 2)
-    # Current path: estimated time.
+    # Planning path: estimated time.
     minutes = data.estimated_minutes or 0.0
     return round(minutes / 60, 2) if minutes else 0.0

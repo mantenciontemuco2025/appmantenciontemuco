@@ -13,7 +13,8 @@ Permission model:
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone, timedelta, date as _date
+from datetime import datetime, timezone, timedelta, date as _date, time as _time
+from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -23,6 +24,11 @@ from sqlalchemy.orm import noload, selectinload
 
 from app.api.dependencies import get_current_user, require_roles
 from app.core.config import settings
+from app.core.loto import (
+    controls_from_legacy_status,
+    legacy_status_from_controls,
+    normalize_loto_controls,
+)
 from app.db.session import get_db, async_session
 from app.models.user import User, UserRole
 from app.models.area import Area
@@ -97,6 +103,62 @@ class IssuePayload(BaseModel):
 
 class CompletePayload(BaseModel):
     completion_notes: str | None = None
+    work_time_mode: Literal["RANGE", "MANUAL"] | None = None
+    work_start_time: _time | None = None
+    work_end_time: _time | None = None
+    worked_duration_minutes: int | None = None
+
+
+def _reported_work_minutes(payload: CompletePayload, wo: WorkOrder) -> int:
+    """Validate and calculate the worker-declared duration.
+
+    The app's start/completion timestamps are an audit trail only. They must
+    never determine the hours written to the monthly register.
+    """
+    if payload.work_time_mode is None:
+        if wo.work_time_mode and wo.worked_duration_minutes:
+            return wo.worked_duration_minutes
+        raise HTTPException(
+            status_code=400,
+            detail="Selecciona cómo registrar las horas trabajadas.",
+        )
+
+    if payload.work_time_mode == "RANGE":
+        if payload.work_start_time is None or payload.work_end_time is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Indica la hora de inicio y la hora de término del trabajo.",
+            )
+        if payload.worked_duration_minutes is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="Usa solo un método para registrar las horas.",
+            )
+        start = payload.work_start_time.hour * 60 + payload.work_start_time.minute
+        end = payload.work_end_time.hour * 60 + payload.work_end_time.minute
+        if end <= start:
+            raise HTTPException(
+                status_code=400,
+                detail="La hora de término debe ser posterior a la hora de inicio.",
+            )
+        return end - start
+
+    if payload.work_time_mode != "MANUAL":
+        raise HTTPException(
+            status_code=400,
+            detail="Selecciona cómo registrar las horas trabajadas.",
+        )
+    if payload.work_start_time is not None or payload.work_end_time is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Usa solo un método para registrar las horas.",
+        )
+    if payload.worked_duration_minutes is None or payload.worked_duration_minutes <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Indica una duración manual mayor que cero.",
+        )
+    return payload.worked_duration_minutes
 
 
 class ReturnPayload(BaseModel):
@@ -224,6 +286,7 @@ def _work_order_to_response(wo: WorkOrder) -> dict:
         "section_name": wo.section_name,
         "maintenance_type": wo.maintenance_type,
         "loto_status": wo.loto_status,
+        "loto_controls": wo.loto_controls if wo.loto_controls is not None else controls_from_legacy_status(wo.loto_status),
         "folio": wo.folio,
         "estimated_time": wo.estimated_time,
         "request_date": wo.request_date,
@@ -251,6 +314,10 @@ def _work_order_to_response(wo: WorkOrder) -> dict:
         "completed_at": wo.completed_at,
         "completed_by_user_id": wo.completed_by_user_id,
         "completed_by_name": completed_by_name,
+        "work_time_mode": wo.work_time_mode,
+        "work_start_time": wo.work_start_time,
+        "work_end_time": wo.work_end_time,
+        "worked_duration_minutes": wo.worked_duration_minutes,
         "actual_duration_minutes": wo.actual_duration_minutes,
         "completion_notes": wo.completion_notes,
         "approved_at": wo.approved_at,
@@ -616,6 +683,10 @@ async def create_work_order(
 
     # SOLICITADO POR: auto-fill with current user's name (creator/emitter)
     requested_by = current_user.full_name if payload.emit else (payload.requested_by or current_user.full_name)
+    loto_controls = normalize_loto_controls(payload.loto_controls)
+    if loto_controls is None:
+        loto_controls = ["NOT_APPLICABLE"]
+    loto_status = legacy_status_from_controls(loto_controls, payload.loto_status)
 
     wo = WorkOrder(
         ot_number=ot_number,
@@ -625,7 +696,8 @@ async def create_work_order(
         equipment_id=payload.equipment_id,
         section_name=payload.section_name,
         maintenance_type=payload.maintenance_type,
-        loto_status=payload.loto_status,
+        loto_status=loto_status,
+        loto_controls=loto_controls,
         folio=payload.folio,
         estimated_time=payload.estimated_time,
         request_date=payload.request_date,
@@ -1022,6 +1094,7 @@ def _payload_from_wo(wo):
         section_name = wo.section_name
         maintenance_type = wo.maintenance_type
         loto_status = wo.loto_status
+        loto_controls = wo.loto_controls
         description = wo.description
         estimated_time = wo.estimated_time
         execution_date = wo.execution_date
@@ -1054,6 +1127,7 @@ async def _populate_individual_ot(wo: WorkOrder) -> None:
         equipment_name=wo.equipment.name if wo.equipment else "",
         maintenance_type=wo.maintenance_type,
         loto_status=wo.loto_status,
+        loto_controls=wo.loto_controls,
         description=wo.description or "",
         participants=participants,
         estimated_time=wo.estimated_time,
@@ -1121,7 +1195,8 @@ async def _sync_ot_and_monthly(db, wo, area, equipment, payload, user_id):
             section_name=payload.section_name or "",
             equipment_name=equipment.name if equipment else "",
             maintenance_type=payload.maintenance_type,
-            loto_status=payload.loto_status,
+            loto_status=wo.loto_status,
+            loto_controls=wo.loto_controls,
             description=payload.description,
             participants=participants,
             estimated_time=payload.estimated_time,
@@ -1474,14 +1549,36 @@ async def update_work_order(
         wo.maintenance_type = payload.maintenance_type.upper()
     if payload.loto_status is not None:
         wo.loto_status = payload.loto_status.upper()
+    if "loto_controls" in payload.model_fields_set:
+        wo.loto_controls = normalize_loto_controls(payload.loto_controls) or ["NOT_APPLICABLE"]
+        wo.loto_status = legacy_status_from_controls(wo.loto_controls, wo.loto_status)
     if payload.folio is not None:
         wo.folio = payload.folio
     if payload.estimated_time is not None:
         wo.estimated_time = payload.estimated_time
+    if "work_time_mode" in payload.model_fields_set:
+        wo.work_time_mode = payload.work_time_mode
+    if "work_start_time" in payload.model_fields_set:
+        wo.work_start_time = payload.work_start_time
+    if "work_end_time" in payload.model_fields_set:
+        wo.work_end_time = payload.work_end_time
+    if "worked_duration_minutes" in payload.model_fields_set:
+        wo.worked_duration_minutes = payload.worked_duration_minutes
     if payload.request_date is not None:
         wo.request_date = payload.request_date
     if payload.execution_date is not None:
         wo.execution_date = payload.execution_date
+    # Persist the worker's selected time method during the explicit save too.
+    # Autosave already handles these fields; keeping both endpoints aligned
+    # prevents the form from appearing empty after pressing "Guardar ahora".
+    if "work_time_mode" in payload.model_fields_set:
+        wo.work_time_mode = payload.work_time_mode
+    if "work_start_time" in payload.model_fields_set:
+        wo.work_start_time = payload.work_start_time
+    if "work_end_time" in payload.model_fields_set:
+        wo.work_end_time = payload.work_end_time
+    if "worked_duration_minutes" in payload.model_fields_set:
+        wo.worked_duration_minutes = payload.worked_duration_minutes
     if payload.resources_required is not None:
         wo.resources_required = payload.resources_required
     if payload.voucher_number is not None:
@@ -1557,7 +1654,7 @@ async def update_work_order(
     # after the OT was emitted). Uses the same field set as the worker fulfill path.
     _changed_ot_fields = {
         "title", "description", "area_id", "equipment_id", "section_name",
-        "maintenance_type", "loto_status", "estimated_time", "execution_date",
+        "maintenance_type", "loto_status", "loto_controls", "estimated_time", "execution_date",
         "request_date", "resources_required", "risks", "observations",
         "folio", "voucher_number", "requested_by",
         "responsible_user_id", "participant_user_ids", "participant_names",
@@ -1760,6 +1857,9 @@ async def fulfill_work_order(
         wo.maintenance_type = payload.maintenance_type.upper()
     if payload.loto_status is not None:
         wo.loto_status = payload.loto_status.upper()
+    if "loto_controls" in payload.model_fields_set:
+        wo.loto_controls = normalize_loto_controls(payload.loto_controls) or ["NOT_APPLICABLE"]
+        wo.loto_status = legacy_status_from_controls(wo.loto_controls, wo.loto_status)
     if payload.folio is not None:
         wo.folio = payload.folio
     if payload.estimated_time is not None:
@@ -1817,7 +1917,8 @@ async def fulfill_work_order(
     # Keep the monthly registry in sync (already emitted → update row)
     _changed = {
         "status", "title", "description", "section_name", "maintenance_type",
-        "estimated_time", "execution_date", "participant_names", "loto_status",
+        "estimated_time", "execution_date", "participant_names", "loto_status", "loto_controls",
+        "work_time_mode", "work_start_time", "work_end_time", "worked_duration_minutes",
         "risks", "observations", "resources_required", "folio", "voucher_number",
     }
     changed = payload.model_dump(exclude_unset=True)
@@ -1877,12 +1978,23 @@ async def autosave_fulfill_work_order(
         wo.maintenance_type = payload.maintenance_type.upper()
     if "loto_status" in fields and payload.loto_status is not None:
         wo.loto_status = payload.loto_status.upper()
+    if "loto_controls" in fields:
+        wo.loto_controls = normalize_loto_controls(payload.loto_controls) or ["NOT_APPLICABLE"]
+        wo.loto_status = legacy_status_from_controls(wo.loto_controls, wo.loto_status)
     if "execution_date" in fields:
         wo.execution_date = payload.execution_date
     if "section_name" in fields:
         wo.section_name = payload.section_name
     if "estimated_time" in fields:
         wo.estimated_time = payload.estimated_time
+    if "work_time_mode" in fields:
+        wo.work_time_mode = payload.work_time_mode
+    if "work_start_time" in fields:
+        wo.work_start_time = payload.work_start_time
+    if "work_end_time" in fields:
+        wo.work_end_time = payload.work_end_time
+    if "worked_duration_minutes" in fields:
+        wo.worked_duration_minutes = payload.worked_duration_minutes
     if "resources_required" in fields:
         wo.resources_required = payload.resources_required
     if "risks" in fields:
@@ -2270,6 +2382,11 @@ async def complete_work_order(
             detail="Debe cargar su firma manuscrita en Mi firma antes de finalizar una OT",
         )
 
+    reported_minutes = _reported_work_minutes(payload, wo)
+    effective_mode = payload.work_time_mode or wo.work_time_mode
+    effective_start = payload.work_start_time or wo.work_start_time
+    effective_end = payload.work_end_time or wo.work_end_time
+
     previous_status = wo.status
     now = datetime.now(timezone.utc)
     wo.status = WorkOrderStatus.COMPLETED.value
@@ -2282,12 +2399,13 @@ async def complete_work_order(
     wo.approved_by = current_user.full_name
     wo.approved_signature = current_user.signature
 
-    # Calculate actual duration (normalize to aware for SQLite compat)
-    started = wo.started_at
-    if started is not None and started.tzinfo is None:
-        started = started.replace(tzinfo=timezone.utc)
-    delta = now - started
-    wo.actual_duration_minutes = round(delta.total_seconds() / 60, 2)
+    # Store the duration declared by the worker. The app lifecycle timestamps
+    # remain available for audit but are never used as worked hours.
+    wo.work_time_mode = effective_mode
+    wo.work_start_time = effective_start
+    wo.work_end_time = effective_end
+    wo.worked_duration_minutes = reported_minutes
+    wo.actual_duration_minutes = float(reported_minutes)
 
     await create_audit_log(
         db,
@@ -2300,6 +2418,8 @@ async def complete_work_order(
             "status": wo.status,
             "completed_at": now.isoformat(),
             "actual_duration_minutes": wo.actual_duration_minutes,
+            "work_time_mode": wo.work_time_mode,
+            "worked_duration_minutes": wo.worked_duration_minutes,
         },
     )
     await db.flush()
@@ -2365,6 +2485,10 @@ async def return_work_order(
     # Clear current completion snapshot (the event is preserved in AuditLog)
     wo.completed_at = None
     wo.completed_by_user_id = None
+    wo.work_time_mode = None
+    wo.work_start_time = None
+    wo.work_end_time = None
+    wo.worked_duration_minutes = None
     wo.actual_duration_minutes = None
     wo.completion_notes = None
 

@@ -26,6 +26,7 @@ from app.services.ot_mapping import (
     SPANISH_MONTHS,
     build_maintenance_cell_texts,
     build_loto_cell_texts,
+    build_loto_control_cell_texts,
     build_status_text,
     build_authorization_text,
     REQUESTED_BY_LABEL,
@@ -319,6 +320,65 @@ def _write_single(spreadsheet_id: str, range_name: str, value: str) -> None:
     ).execute()
 
 
+def _format_loto_control_row(spreadsheet_id: str) -> None:
+    """Make the two-line LOTO layout readable in generated OT copies."""
+    sheets = _build_sheets_write_service()
+    metadata = sheets.spreadsheets().get(
+        spreadsheetId=spreadsheet_id,
+        fields="sheets(properties(sheetId,title))",
+    ).execute()
+    sheet = next(iter(metadata.get("sheets", [])), {})
+    sheet_id = sheet.get("properties", {}).get("sheetId")
+    if sheet_id is None:
+        raise RuntimeError("No se pudo resolver la hoja para formatear LOTO")
+
+    sheets.spreadsheets().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={
+            "requests": [
+                {
+                    "updateCells": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": 9,
+                            "endRowIndex": 10,
+                            "startColumnIndex": 2,
+                            "endColumnIndex": 5,
+                        },
+                        "rows": [{"values": [
+                            {"userEnteredFormat": {
+                                "wrapStrategy": "WRAP",
+                                "verticalAlignment": "MIDDLE",
+                            }},
+                            {"userEnteredFormat": {
+                                "wrapStrategy": "WRAP",
+                                "verticalAlignment": "MIDDLE",
+                            }},
+                            {"userEnteredFormat": {
+                                "wrapStrategy": "WRAP",
+                                "verticalAlignment": "MIDDLE",
+                            }},
+                        ]}],
+                        "fields": "userEnteredFormat(wrapStrategy,verticalAlignment)",
+                    }
+                },
+                {
+                    "updateDimensionProperties": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "dimension": "ROWS",
+                            "startIndex": 9,
+                            "endIndex": 10,
+                        },
+                        "properties": {"pixelSize": 42},
+                        "fields": "pixelSize",
+                    }
+                },
+            ]
+        },
+    ).execute()
+
+
 def _clear_cells(spreadsheet_id: str, cells: list[str]) -> None:
     """Clear (empty) a list of individual cells (WRITE -- OAuth only).
 
@@ -483,6 +543,7 @@ def populate_ot_fields(
     equipment_name: str,
     maintenance_type: str,
     loto_status: str,
+    loto_controls: list[str] | None = None,
     description: str | None,
     participants: list[str],
     estimated_time: str | None,
@@ -568,9 +629,17 @@ def populate_ot_fields(
     for cell, text in build_maintenance_cell_texts(maintenance_type).items():
         _write_single(spreadsheet_id, cell, text)
 
-    # LOTO status (per-cell)
-    for cell, text in build_loto_cell_texts(loto_status).items():
+    # LOTO controls (per-cell). None keeps compatibility with older callers
+    # and old OTs that only know the YES/NO/N/A field.
+    loto_cells = (
+        build_loto_control_cell_texts(loto_controls)
+        if loto_controls is not None
+        else build_loto_cell_texts(loto_status)
+    )
+    for cell, text in loto_cells.items():
         _write_single(spreadsheet_id, cell, text)
+    if loto_controls is not None:
+        _format_loto_control_row(spreadsheet_id)
 
     # Status: single cell with wide spacing between options (B36:G36 merged).
     status_text = build_status_text(status)
@@ -744,9 +813,8 @@ def sync_to_monthly_sheet(
         PENDING->PENDIENTE, IN_PROGRESS->EN PROCESO, COMPLETED->FINALIZADO,
         CANCELLED->CANCELADA.  (DRAFT rows are never synced.)
 
-    HORAS follows the approved rule (compute_horas): currently estimated_time
-    parsed to hours; the real-time path (actual_duration_minutes, COMPLETED)
-    is prepared but not yet fed by the data model.
+    HORAS follows the approved rule (compute_horas): a completed OT uses the
+    duration declared by the worker, while an open OT uses estimated_time.
 
     When participant user IDs and their column mapping are supplied, worker
     marks are written by stable logical column rather than by display name.

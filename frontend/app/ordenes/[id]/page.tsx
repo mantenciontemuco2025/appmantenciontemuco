@@ -20,6 +20,7 @@ import { StatusBadge } from "@/lib/status";
 import { SyncBadge, RetrySyncButton } from "@/components/maintenance/sync-badge";
 import { cn } from "@/lib/utils";
 import { PageLoading } from "@/components/ui/page-loading";
+import { LOTO_CONTROL_LABELS } from "@/lib/loto";
 
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   if (!value) return null;
@@ -351,6 +352,10 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
               <InfoRow label="Área" value={wo.area_name} />
               <InfoRow label="Sección" value={wo.section_name} />
               <InfoRow label="Tipo de mantenimiento" value={wo.maintenance_type} />
+              <InfoRow
+                label="Controles LOTO / AST"
+                value={(wo.loto_controls || []).map((control) => LOTO_CONTROL_LABELS[control]).join(", ")}
+              />
               <InfoRow label="LOTO" value={wo.loto_status === "YES" ? "Sí" : wo.loto_status === "NO" ? "No" : "N/A"} />
               <InfoRow label="Fecha de solicitud" value={wo.request_date ? new Date(wo.request_date).toLocaleDateString("es-CL") : null} />
               <InfoRow
@@ -396,7 +401,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
           </Card>
 
           {/* Lifecycle card */}
-          {(wo.started_at || wo.completed_at || wo.actual_duration_minutes != null) && (
+          {(wo.started_at || wo.completed_at || wo.work_time_mode || wo.actual_duration_minutes != null) && (
             <Card className="mb-4">
               <CardContent className="p-4">
                 <h3 className="text-sm font-semibold mb-2">Ejecución</h3>
@@ -412,8 +417,17 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                     value={`${new Date(wo.completed_at).toLocaleString("es-CL")}${wo.completed_by_name ? ` — por ${wo.completed_by_name}` : ""}`}
                   />
                 )}
+                {wo.work_time_mode === "RANGE" && (wo.work_start_time || wo.work_end_time) && (
+                  <InfoRow
+                    label="Horario declarado"
+                    value={`${(wo.work_start_time || "").slice(0, 5)} a ${(wo.work_end_time || "").slice(0, 5)}`}
+                  />
+                )}
+                {wo.work_time_mode === "MANUAL" && wo.worked_duration_minutes != null && (
+                  <InfoRow label="DuraciÃ³n manual" value={`${wo.worked_duration_minutes} minutos`} />
+                )}
                 {wo.actual_duration_minutes != null && (
-                  <InfoRow label="Duración real" value={`${wo.actual_duration_minutes} minutos`} />
+                  <InfoRow label="Horas declaradas por trabajador" value={`${wo.actual_duration_minutes} minutos`} />
                 )}
                 {wo.completion_notes && <InfoRow label="Notas de finalización" value={wo.completion_notes} />}
               </CardContent>

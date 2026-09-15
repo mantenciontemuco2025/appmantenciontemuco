@@ -2,6 +2,12 @@ export type UserRole = "ADMIN" | "SUPERVISOR" | "WORKER";
 
 export type MaintenanceType = "PREVENTIVE" | "CORRECTIVE" | "PREDICTIVE" | "PROYECTO" | "MONTAJE";
 export type SyncStatus = "PENDING" | "SYNCED" | "FAILED";
+export type LotoControl =
+  | "LOTO_BLOQUEO"
+  | "AST"
+  | "TARJETA_ROJA"
+  | "CHECKLIST_HERRAMIENTAS"
+  | "NOT_APPLICABLE";
 
 export interface User {
   id: number;
@@ -106,6 +112,7 @@ export interface MaintenanceDraft {
 
 export type LotoStatus = "YES" | "NO" | "NOT_APPLICABLE";
 export type WorkOrderStatus = "DRAFT" | "PENDING" | "IN_PROGRESS" | "COMPLETED" | "APPROVED" | "CANCELLED";
+export type WorkTimeMode = "RANGE" | "MANUAL";
 
 export interface WorkOrderRecord {
   id: number;
@@ -119,6 +126,7 @@ export interface WorkOrderRecord {
   section_name: string | null;
   maintenance_type: MaintenanceType;
   loto_status: LotoStatus;
+  loto_controls: LotoControl[];
   folio: string | null;
   estimated_time: string | null;
   request_date: string | null;
@@ -146,6 +154,10 @@ export interface WorkOrderRecord {
   completed_at: string | null;
   completed_by_user_id: number | null;
   completed_by_name: string | null;
+  work_time_mode: WorkTimeMode | null;
+  work_start_time: string | null;
+  work_end_time: string | null;
+  worked_duration_minutes: number | null;
   actual_duration_minutes: number | null;
   completion_notes: string | null;
   approved_at: string | null;

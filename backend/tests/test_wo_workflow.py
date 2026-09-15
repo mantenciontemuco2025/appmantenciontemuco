@@ -308,7 +308,12 @@ async def test_complete_sets_actual_duration(client, seed_data, monkeypatch):
     await client.post(f"/api/work-orders/{wo_id}/start", headers=auth_headers(worker))
     resp = await client.patch(
         f"/api/work-orders/{wo_id}/complete",
-        json={"completion_notes": "Listo"},
+        json={
+            "completion_notes": "Listo",
+            "work_time_mode": "RANGE",
+            "work_start_time": "08:00",
+            "work_end_time": "10:30",
+        },
         headers=auth_headers(worker),
     )
     assert resp.status_code == 200
@@ -317,6 +322,8 @@ async def test_complete_sets_actual_duration(client, seed_data, monkeypatch):
     assert data["completed_at"] is not None
     assert data["completion_notes"] == "Listo"
     assert isinstance(data["actual_duration_minutes"], float)
+    assert data["actual_duration_minutes"] == 150.0
+    assert data["worked_duration_minutes"] == 150
     assert data["approved_by"] == "Ortiz"
     assert data["approved_signature"] == seed_data["worker"].signature
 
@@ -335,11 +342,35 @@ async def test_complete_requires_in_progress(client, seed_data, monkeypatch):
 
 # ── Return ──────────────────────────────────────────────────────────────────
 
+async def test_complete_rejects_two_time_methods(client, seed_data, monkeypatch):
+    admin = await get_token(client, "admin@test.com")
+    wo_id = await _to_pending(client, seed_data, monkeypatch, admin)
+
+    worker = await get_token(client, "ortiz@test.com")
+    await client.post(f"/api/work-orders/{wo_id}/start", headers=auth_headers(worker))
+    resp = await client.patch(
+        f"/api/work-orders/{wo_id}/complete",
+        json={
+            "work_time_mode": "RANGE",
+            "work_start_time": "08:00",
+            "work_end_time": "10:00",
+            "worked_duration_minutes": 120,
+        },
+        headers=auth_headers(worker),
+    )
+    assert resp.status_code == 400
+    assert "solo un método" in resp.json()["detail"]
+
+
 async def _to_completed(client, seed_data, monkeypatch, admin):
     wo_id = await _to_pending(client, seed_data, monkeypatch, admin)
     worker = await get_token(client, "ortiz@test.com")
     await client.post(f"/api/work-orders/{wo_id}/start", headers=auth_headers(worker))
-    await client.patch(f"/api/work-orders/{wo_id}/complete", json={}, headers=auth_headers(worker))
+    await client.patch(
+        f"/api/work-orders/{wo_id}/complete",
+        json={"work_time_mode": "MANUAL", "worked_duration_minutes": 60},
+        headers=auth_headers(worker),
+    )
     return wo_id
 
 
@@ -763,7 +794,11 @@ async def test_overdue_excludes_approved(client, seed_data, monkeypatch):
     await client.post(f"/api/work-orders/{wo_id}/issue", headers=auth_headers(admin))
     worker = await get_token(client, "ortiz@test.com")
     await client.post(f"/api/work-orders/{wo_id}/start", headers=auth_headers(worker))
-    await client.patch(f"/api/work-orders/{wo_id}/complete", json={}, headers=auth_headers(worker))
+    await client.patch(
+        f"/api/work-orders/{wo_id}/complete",
+        json={"work_time_mode": "MANUAL", "worked_duration_minutes": 60},
+        headers=auth_headers(worker),
+    )
     await client.post(f"/api/work-orders/{wo_id}/approve", json={}, headers=auth_headers(admin))
 
     resp = await client.get("/api/work-orders?overdue=true", headers=auth_headers(admin))
