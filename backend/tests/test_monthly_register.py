@@ -200,6 +200,8 @@ class _FakeSheetsSpreadsheets:
 
     def batchUpdate(self, spreadsheetId="", body=None, **kwargs):
         for req in (body or {}).get("requests", []):
+            if "findReplace" in req:
+                self._outer.find_replace_calls.append(req["findReplace"])
             if "deleteDimension" in req:
                 rng = req["deleteDimension"]["range"]
                 self._outer.delete_calls.append({
@@ -221,6 +223,7 @@ class _FakeSheets:
     def __init__(self):
         self.tabs = {}
         self.delete_calls = []
+        self.find_replace_calls = []
 
     def spreadsheets(self):
         return _FakeSheetsSpreadsheets(self)
@@ -259,6 +262,10 @@ async def test_create_register_from_template_name_and_parent(google_ready, db_se
         copied_id = reg.spreadsheet_id
         assert google_ready["drive"]._files[copied_id]["name"] == "Registro_Mantencion_2027"
         assert google_ready["drive"]._files[copied_id]["parent"] == "root-monthly"
+        assert google_ready["sheets"].find_replace_calls == [
+            {"find": "{{YEAR}}", "replacement": "2027", "allSheets": True},
+            {"find": "2026", "replacement": "2027", "allSheets": True},
+        ]
 
 
 async def test_ensure_reuses_existing_no_duplicate(google_ready, db_session_factory):

@@ -1,8 +1,10 @@
+import logging
 import re
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from app.api.dependencies import get_current_user, require_roles
 from app.core.security import hash_password, verify_password
@@ -16,6 +18,7 @@ from app.services.audit_service import create_audit_log
 from app.services.signatures import delete_signature, get_signature_image, upload_signature
 
 router = APIRouter(prefix="/api/users", tags=["users"])
+logger = logging.getLogger(__name__)
 
 admin_only = require_roles(UserRole.ADMIN)
 
@@ -397,7 +400,7 @@ async def upload_my_signature(
         )
 
     # Validate the original upload. The service normalizes it below Google's
-    # 2 MB / 10 million pixel limit before storing it.
+    # 2 MB / 1 million pixel Apps Script limit before storing it.
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="La imagen estÃ¡ vacÃ­a.")
@@ -418,8 +421,16 @@ async def upload_my_signature(
 
     # Upload to Drive and get public URL
     try:
-        url = upload_signature(current_user.id, contents, file.content_type)
+        # Drive's client is synchronous. Keep it off the event loop so a slow
+        # Google response cannot block login, counters, or other users.
+        url = await run_in_threadpool(
+            upload_signature,
+            current_user.id,
+            contents,
+            file.content_type,
+        )
     except RuntimeError as exc:
+        logger.exception("No se pudo cargar la firma del usuario %s", current_user.id)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc))
 
     # Save the URL in the user profile
@@ -430,7 +441,7 @@ async def upload_my_signature(
     # Superseded files stay available when an OT references them. Otherwise
     # they are safe to clean up after the new profile signature is durable.
     if previous_signature and not await _signature_is_referenced(db, previous_signature):
-        delete_signature(previous_signature)
+        await run_in_threadpool(delete_signature, previous_signature)
 
     return {"url": url}
 
@@ -447,5 +458,5 @@ async def delete_my_signature(
         await db.commit()
         await db.refresh(current_user)
         if not await _signature_is_referenced(db, previous_signature):
-            delete_signature(previous_signature)
+            await run_in_threadpool(delete_signature, previous_signature)
     return {"ok": True}

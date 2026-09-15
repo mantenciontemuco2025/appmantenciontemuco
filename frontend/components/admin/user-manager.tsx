@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, Loader2, Pencil, Plus, UserPlus, Users, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -49,6 +49,7 @@ export function UserManager() {
   const [editAreaIds, setEditAreaIds] = useState<string[]>([]);
   const [editPassword, setEditPassword] = useState("");
   const [editSaving, setEditSaving] = useState(false);
+  const editFormRef = useRef<HTMLFormElement>(null);
 
   const { items: users, loading, loadingMore, hasMore, error: pageError, loadMore, reload } =
     usePagination<User>({
@@ -128,6 +129,19 @@ export function UserManager() {
     setEditPassword("");
     setError("");
   }
+
+  useEffect(() => {
+    if (!editingUser) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      const form = editFormRef.current;
+      if (!form) return;
+      form.scrollIntoView({ behavior: "smooth", block: "start" });
+      form.querySelector<HTMLInputElement>("input:not([type=hidden])")?.focus();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [editingUser]);
 
   function cancelEdit() {
     setEditingUser(null);
@@ -264,7 +278,11 @@ export function UserManager() {
 
       {/* Edit form */}
       {editingUser && (
-        <form onSubmit={saveEdit} className="mb-4 space-y-3 rounded-lg border border-amber-200 bg-card p-4">
+        <form
+          ref={editFormRef}
+          onSubmit={saveEdit}
+          className="mb-4 scroll-mt-24 space-y-3 rounded-lg border border-amber-200 bg-card p-4"
+        >
           <div className="flex items-center justify-between">
             <h4 className="text-sm font-semibold">Editar usuario</h4>
             <button

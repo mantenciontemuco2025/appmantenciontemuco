@@ -31,6 +31,11 @@ interface OfflineRequest {
   queuedAt: string;
 }
 
+type ApiRequestInit = RequestInit & {
+  /** Optional timeout for slow but valid operations such as Drive uploads. */
+  timeoutMs?: number;
+};
+
 function isBrowser() {
   return typeof window !== "undefined";
 }
@@ -250,7 +255,7 @@ export function flushOfflineQueue() {
 
 export async function apiFetch<T>(
   path: string,
-  options: RequestInit = {},
+  options: ApiRequestInit = {},
   allowRefresh = true
 ): Promise<T> {
   const method = (options.method || "GET").toUpperCase();
@@ -272,11 +277,12 @@ export async function apiFetch<T>(
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 15000);
+  const { timeoutMs: _timeoutMs, ...requestOptions } = options;
   let res: Response;
   try {
     res = await fetch(`${API_URL}${path}`, {
-      ...options,
+      ...requestOptions,
       headers,
       signal: options.signal ?? controller.signal,
     });
@@ -338,6 +344,7 @@ export const api = {
   post: <T>(path: string, body?: unknown) => apiFetch<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
   put: <T>(path: string, body: unknown) => apiFetch<T>(path, { method: "PUT", body: JSON.stringify(body) }),
   patch: <T>(path: string, body: unknown) => apiFetch<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
-  upload: <T>(path: string, body: FormData) => apiFetch<T>(path, { method: "POST", body }),
+  upload: <T>(path: string, body: FormData, timeoutMs = 60000) =>
+    apiFetch<T>(path, { method: "POST", body, timeoutMs }),
   del: <T>(path: string) => apiFetch<T>(path, { method: "DELETE" }),
 };

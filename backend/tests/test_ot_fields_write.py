@@ -198,7 +198,7 @@ def test_populate_fields_writes_to_correct_cells(oauth_settings, monkeypatch, tm
     assert batch["C15"] == "Ortiz, Jara"               # participants
     assert batch["C16"] == "1 h 30 min"                # estimated_time
     assert batch["F17"] == "03-09-2026"                # execution_date
-    assert batch["C17"] == "2026-09-04"                # request_date
+    assert batch["C17"] == "04-09-2026"                # request_date
     assert batch["B19"] == "RECURSOS"                  # resources
     assert batch["C21"] == "VALE-1"                    # voucher
     assert batch["B23"] == "RIESGOS"                   # risks

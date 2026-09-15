@@ -19,11 +19,21 @@ function doPost(event) {
     if (!expectedSecret || payload.secret !== expectedSecret) {
       throw new Error('Solicitud de firma no autorizada.');
     }
+    const hasInlineSignature = typeof payload.signatureData === 'string' &&
+      payload.signatureData.length > 0;
+    const hasDriveSignature = /^[a-zA-Z0-9_-]+$/.test(payload.signatureFileId || '');
     if (!/^[a-zA-Z0-9_-]+$/.test(payload.spreadsheetId || '') ||
-        !/^[a-zA-Z0-9_-]+$/.test(payload.signatureFileId || '') ||
+        (!hasInlineSignature && !hasDriveSignature) ||
         !SIGNATURE_ANCHORS[payload.field] ||
         typeof payload.sheetName !== 'string') {
       throw new Error('Solicitud de firma inválida.');
+    }
+    if (hasInlineSignature && payload.signatureData.length > 2500000) {
+      throw new Error('La firma optimizada es demasiado grande.');
+    }
+    if (hasInlineSignature &&
+        ['image/jpeg', 'image/png'].indexOf(payload.signatureMimeType) === -1) {
+      throw new Error('Formato de firma optimizada no admitido.');
     }
 
     const spreadsheet = SpreadsheetApp.openById(payload.spreadsheetId);
@@ -35,7 +45,12 @@ function doPost(event) {
       if (image.getAltTextTitle() === marker) image.remove();
     });
 
-    const blob = DriveApp.getFileById(payload.signatureFileId).getBlob();
+    const blob = hasInlineSignature
+      ? Utilities.newBlob(
+          Utilities.base64Decode(payload.signatureData),
+          payload.signatureMimeType,
+          'signature.jpg')
+      : DriveApp.getFileById(payload.signatureFileId).getBlob();
     const anchor = SIGNATURE_ANCHORS[payload.field];
     const image = sheet.insertImage(blob, anchor.column, anchor.row, 0, 0);
     image.setWidth(200).setHeight(80).setAltTextTitle(marker);

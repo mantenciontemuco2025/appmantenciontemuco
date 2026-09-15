@@ -509,6 +509,16 @@ def populate_ot_fields(
     adjusted solely to display the handwritten signature image.
     Writes only to the top-left cell of each merged range.
     """
+    def _sheet_date(value: str | None) -> str:
+        """Display API dates in the Chilean day-month-year format."""
+        if not value:
+            return ""
+        try:
+            return datetime.strptime(value[:10], "%Y-%m-%d").strftime("%d-%m-%Y")
+        except ValueError:
+            # Keep already formatted or legacy values unchanged.
+            return value
+
     range_values = []
 
     # ── Text fields (from OT_FIELD_MAP) ──
@@ -520,8 +530,8 @@ def populate_ot_fields(
         "description":        description or "",
         "participants":       ", ".join(participants) if participants else "",
         "estimated_time":     estimated_time or "",
-        "execution_date":     execution_date or "",
-        "request_date":       request_date or "",
+        "execution_date":     _sheet_date(execution_date),
+        "request_date":       _sheet_date(request_date),
         "resources_required": resources_required or "",
         "voucher_number":     voucher_number or "",
         "folio":              folio or "",

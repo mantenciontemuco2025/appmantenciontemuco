@@ -94,6 +94,34 @@ def create_register_file(year: int) -> dict:
         update_params["removeParents"] = template_parent
     drive.files().update(fileId=file_id, **update_params).execute()
 
+    # The current master was built from the 2026 register, so its title cells
+    # may still contain that year (for example, "MES SEPTIEMBRE 2026").
+    # Normalize both the explicit placeholder and the legacy year in the copy;
+    # the master itself is never modified. This keeps future annual registers
+    # correct without requiring a manual edit every January.
+    sheets = google_drive._build_sheets_write_service()
+    sheets.spreadsheets().batchUpdate(
+        spreadsheetId=file_id,
+        body={
+            "requests": [
+                {
+                    "findReplace": {
+                        "find": "{{YEAR}}",
+                        "replacement": str(year),
+                        "allSheets": True,
+                    }
+                },
+                {
+                    "findReplace": {
+                        "find": "2026",
+                        "replacement": str(year),
+                        "allSheets": True,
+                    }
+                },
+            ]
+        },
+    ).execute()
+
     url = copied.get(
         "webViewLink", f"https://drive.google.com/file/d/{file_id}/view"
     )

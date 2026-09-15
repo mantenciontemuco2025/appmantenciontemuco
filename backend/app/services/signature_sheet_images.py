@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import re
 
 import httpx
@@ -36,12 +37,31 @@ def insert_signature_image(
     if field not in {"requested_by", "approved_by", "performed_by"}:
         raise ValueError(f"Campo de firma no admitido: {field}")
 
+    signature_file_id = _file_id_from_signature_url(signature_url)
+
+    # Normalize at sync time too. This fixes signatures uploaded before the
+    # stricter limits were added, without requiring every user to upload again.
+    # Apps Script receives the optimized bytes directly and no longer has to
+    # create an oversized Drive blob itself.
+    from app.services.signatures import (
+        _prepare_signature_image,
+        get_signature_image_for_processing,
+    )
+
+    original_bytes, original_mime = get_signature_image_for_processing(signature_file_id)
+    normalized_bytes, normalized_mime = _prepare_signature_image(
+        original_bytes, original_mime
+    )
+
     payload = {
         "secret": settings.GOOGLE_SIGNATURES_APPS_SCRIPT_SECRET,
         "spreadsheetId": spreadsheet_id,
         "sheetName": sheet_name,
         "field": field,
-        "signatureFileId": _file_id_from_signature_url(signature_url),
+        # Keep the file ID for backwards compatibility and auditing.
+        "signatureFileId": signature_file_id,
+        "signatureData": base64.b64encode(normalized_bytes).decode("ascii"),
+        "signatureMimeType": normalized_mime,
     }
     try:
         # Do not inherit a workstation proxy: local development proxies often
