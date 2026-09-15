@@ -1,9 +1,9 @@
 /** Maintenance Platform — real signature images for Google Sheets. */
 const SIGNATURE_MARKER = 'maintenance-platform-signature:';
 const SIGNATURE_ANCHORS = {
-  requested_by: { column: 2, row: 31 }, // B31
-  approved_by: { column: 5, row: 31 }, // E31 (legacy wire name)
-  performed_by: { column: 5, row: 31 }, // E31
+  requested_by: { column: 2, row: 31 }, // B31, block B:D
+  approved_by: { column: 5, row: 31 }, // E31, block E:G (legacy wire name)
+  performed_by: { column: 5, row: 31 }, // E31, block E:G
 };
 
 // Health check for confirming that the /exec deployment points to this code.
@@ -52,8 +52,16 @@ function doPost(event) {
           'signature.jpg')
       : DriveApp.getFileById(payload.signatureFileId).getBlob();
     const anchor = SIGNATURE_ANCHORS[payload.field];
-    const image = sheet.insertImage(blob, anchor.column, anchor.row, 0, 0);
-    image.setWidth(200).setHeight(80).setAltTextTitle(marker);
+    const imageWidth = 200;
+    const imageHeight = 80;
+    const blockWidth = [0, 1, 2].reduce(
+      (total, offset) => total + sheet.getColumnWidth(anchor.column + offset),
+      0);
+    // Row 31 contains the name/label. Rows 32-33 are the signature area;
+    // the first row is 40 px high, so offsetY=40 places the image there.
+    const offsetX = Math.max(0, Math.round((blockWidth - imageWidth) / 2));
+    const image = sheet.insertImage(blob, anchor.column, anchor.row, offsetX, 40);
+    image.setWidth(imageWidth).setHeight(imageHeight).setAltTextTitle(marker);
     return json_({ ok: true });
   } catch (error) {
     return json_({ ok: false, error: error.message || String(error) });
