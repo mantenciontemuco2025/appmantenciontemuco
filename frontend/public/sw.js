@@ -1,5 +1,12 @@
-const CACHE_NAME = "mantencion-shell-v2";
+const CACHE_NAME = "mantencion-shell-v3";
 const OFFLINE_URL = "/offline.html";
+const NAVIGATION_TIMEOUT_MS = 2500;
+
+function fetchWithTimeout(request, timeoutMs) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(request, { signal: controller.signal }).finally(() => clearTimeout(timeout));
+}
 
 self.addEventListener("push", (event) => {
   let data = {};
@@ -66,7 +73,7 @@ self.addEventListener("fetch", (event) => {
 
   if (request.mode === "navigate") {
     event.respondWith(
-      fetch(request)
+      fetchWithTimeout(request, NAVIGATION_TIMEOUT_MS)
         .then((response) => {
           const copy = response.clone();
           caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));

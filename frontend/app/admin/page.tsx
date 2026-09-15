@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ShieldAlert, Users, Boxes } from "lucide-react";
+import { ShieldAlert, Users, Boxes, Columns3 } from "lucide-react";
 import { Shell } from "@/components/layout/shell";
 import { useAuth } from "@/lib/auth";
 import { UserManager } from "@/components/admin/user-manager";
@@ -11,11 +11,12 @@ import { CatalogManager } from "@/components/admin/catalog-manager";
 import { OtCounter } from "@/components/admin/ot-counter";
 import { cn } from "@/lib/utils";
 import { PageLoading } from "@/components/ui/page-loading";
+import { WorkerColumnManager } from "@/components/admin/worker-column-manager";
 
 export default function AdminPage() {
   const { user, loading, logout } = useAuth();
   const router = useRouter();
-  const [tab, setTab] = useState<"users" | "audit" | "catalog">("users");
+  const [tab, setTab] = useState<"users" | "audit" | "catalog" | "worker-columns">("users");
 
   useEffect(() => {
     if (!loading && !user) {
@@ -62,11 +63,18 @@ export default function AdminPage() {
             icon={<ShieldAlert className="h-4 w-4" />}
             label="Auditoría"
           />
+          <TabButton
+            active={tab === "worker-columns"}
+            onClick={() => setTab("worker-columns")}
+            icon={<Columns3 className="h-4 w-4" />}
+            label="Columnas mensuales"
+          />
         </div>
       )}
 
       {tab === "users" && isAdmin && <UserManager />}
       {tab === "catalog" && isAdmin && <CatalogManager />}
+      {tab === "worker-columns" && isAdmin && <WorkerColumnManager />}
       {(tab === "audit" || !isAdmin) && <AuditLogView />}
     </Shell>
   );

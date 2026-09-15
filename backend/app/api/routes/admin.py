@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from app.api.dependencies import require_roles
 from app.db.session import get_db
 from app.models.user import User, UserRole
+from app.models.worker_column import WorkerColumn, WORKER_COLUMN_SLOTS
 from app.models.monthly_register import GoogleMonthlyRegister
 from app.services.google_sheets import check_google_integration
 from app.services import google_drive as drive_service
@@ -15,12 +16,111 @@ from app.services.monthly_register import (
     ensure_monthly_register_for_year,
     resolve_register,
 )
+from app.services.audit_service import create_audit_log
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 admin_only = require_roles(UserRole.ADMIN)
+
+
+class WorkerColumnOut(BaseModel):
+    slot: int
+    column_key: str
+    column_letter: str
+    user_id: int | None = None
+    user_name: str | None = None
+
+
+class WorkerColumnUpdate(BaseModel):
+    user_id: int | None = None
+
+
+def _worker_column_to_out(column: WorkerColumn) -> WorkerColumnOut:
+    return WorkerColumnOut(
+        slot=column.slot,
+        column_key=column.column_key,
+        column_letter=column.column_letter,
+        user_id=column.user_id,
+        user_name=column.user.full_name if column.user else None,
+    )
+
+
+@router.get("/worker-columns", response_model=list[WorkerColumnOut])
+async def list_worker_columns(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(admin_only),
+) -> list[WorkerColumnOut]:
+    """List the ten fixed monthly worker positions (ADMIN only)."""
+    result = await db.execute(select(WorkerColumn).order_by(WorkerColumn.slot))
+    columns = list(result.scalars().all())
+    # This guard makes an incomplete migration immediately visible instead of
+    # silently presenting a partial configuration to the administrator.
+    if len(columns) != len(WORKER_COLUMN_SLOTS):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="La configuración de columnas mensuales está incompleta.",
+        )
+    return [_worker_column_to_out(column) for column in columns]
+
+
+@router.put("/worker-columns/{slot}", response_model=WorkerColumnOut)
+async def update_worker_column(
+    slot: int,
+    payload: WorkerColumnUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(admin_only),
+) -> WorkerColumnOut:
+    """Assign or clear a worker in one of the ten fixed positions."""
+    column = await db.scalar(select(WorkerColumn).where(WorkerColumn.slot == slot))
+    if column is None:
+        raise HTTPException(status_code=404, detail="Posición mensual no encontrada.")
+
+    selected_user = None
+    if payload.user_id is not None:
+        selected_user = await db.get(User, payload.user_id)
+        if selected_user is None or selected_user.role != UserRole.WORKER:
+            raise HTTPException(
+                status_code=400,
+                detail="Solo se pueden asignar usuarios con rol Trabajador.",
+            )
+        other = await db.scalar(
+            select(WorkerColumn)
+            .where(
+                WorkerColumn.user_id == payload.user_id,
+                WorkerColumn.slot != slot,
+            )
+            .limit(1)
+        )
+        if other is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"El trabajador ya está asignado a la posición "
+                    f"{other.slot} ({other.column_key})."
+                ),
+            )
+
+    previous_user_id = column.user_id
+    column.user_id = payload.user_id
+    column.user = selected_user
+    await db.flush()
+    await create_audit_log(
+        db,
+        user_id=current_user.id,
+        action="UPDATE_WORKER_COLUMN",
+        entity_type="WorkerColumn",
+        entity_id=column.id,
+        previous_data={"user_id": previous_user_id, "slot": column.slot},
+        new_data={
+            "user_id": payload.user_id,
+            "user_name": selected_user.full_name if selected_user else None,
+            "slot": column.slot,
+            "column_key": column.column_key,
+        },
+    )
+    return _worker_column_to_out(column)
 
 
 # ──────────────────────────────────────────────────────────────────────

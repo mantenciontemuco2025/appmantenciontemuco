@@ -10,6 +10,7 @@ from app.models.notification import Notification
 from app.models.sync_job import ExternalSyncJob, SyncJobStatus
 from app.models.push_subscription import PushSubscription
 from app.models.supervisor_area import supervisor_areas
+from app.models.worker_column import WorkerColumn
 
 __all__ = [
     "User",
@@ -26,4 +27,5 @@ __all__ = [
     "SyncJobStatus",
     "PushSubscription",
     "supervisor_areas",
+    "WorkerColumn",
 ]

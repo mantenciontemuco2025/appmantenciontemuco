@@ -16,6 +16,14 @@ export interface User {
   signature: string | null;
 }
 
+export interface WorkerColumn {
+  slot: number;
+  column_key: string;
+  column_letter: string;
+  user_id: number | null;
+  user_name: string | null;
+}
+
 export interface EquipmentNode {
   id: number;
   name: string;

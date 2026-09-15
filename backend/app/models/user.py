@@ -62,6 +62,15 @@ class User(Base):
         secondary="supervisor_areas",
         lazy="selectin",
     )
+    worker_column = relationship(
+        "WorkerColumn",
+        back_populates="user",
+        uselist=False,
+        foreign_keys="WorkerColumn.user_id",
+        # Do not add a query to every user/auth/list response. The admin
+        # column screen loads the relationship from WorkerColumn directly.
+        lazy="noload",
+    )
 
     @property
     def area_name(self) -> str | None:

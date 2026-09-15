@@ -715,6 +715,8 @@ def sync_to_monthly_sheet(
     maintenance_type: str,
     participants: list[str],
     duration_hours: float,
+    participant_user_ids: list[int] | None = None,
+    participant_column_keys: dict[int, str] | None = None,
     status: str = "PENDING",
     actual_duration_minutes: float | None = None,
     spreadsheet_id: str | None = None,
@@ -736,6 +738,8 @@ def sync_to_monthly_sheet(
     parsed to hours; the real-time path (actual_duration_minutes, COMPLETED)
     is prepared but not yet fed by the data model.
 
+    When participant user IDs and their column mapping are supplied, worker
+    marks are written by stable logical column rather than by display name.
     `spreadsheet_id` selects which annual register to write into (per-year model).
     When omitted it falls back to the legacy settings.GOOGLE_MONTHLY_SPREADSHEET_ID
     for backward compatibility.
@@ -782,14 +786,22 @@ def sync_to_monthly_sheet(
     _put(col["EQUIPO"], equipment_name or "")
     _put(col["TRABAJO"], description or "")
 
-    # Worker columns: mark X for each participant.
-    # Participant columns continue syncing individually. RESPONSABLE is NOT
-    # derived from the first participant (see monthly_mapping notes).
-    for p_name in participants:
-        normalized = normalize_header(p_name)
-        key = WORKER_COLUMN_KEYS.get(normalized)
-        if key and key in col:
-            _put(col[key], "X")
+    # Worker columns: prefer stable user IDs. This prevents a renamed worker
+    # from moving to another column and prevents a new worker from inheriting
+    # an old worker's column merely because the names happen to match.
+    if participant_user_ids is not None and participant_column_keys is not None:
+        for user_id in participant_user_ids:
+            key = participant_column_keys.get(user_id)
+            if key and key in col:
+                _put(col[key], "X")
+    else:
+        # Compatibility for old scripts/tests that call this service with only
+        # a list of participant names.
+        for p_name in participants:
+            normalized = normalize_header(p_name)
+            key = WORKER_COLUMN_KEYS.get(normalized)
+            if key and key in col:
+                _put(col[key], "X")
 
     # The named worker columns above are kept for compatibility with the
     # existing template. PARTICIPANTES is the future-proof summary column:

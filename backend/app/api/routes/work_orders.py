@@ -29,6 +29,7 @@ from app.models.area import Area
 from app.models.equipment import Equipment
 from app.models.work_order import WorkOrder, WorkOrderStatus
 from app.models.work_order_participants import work_order_participants
+from app.models.worker_column import WorkerColumn
 from app.models.sync_job import ExternalSyncJob, SyncJobStatus
 from app.schemas.work_order import (
     WorkOrderCreate,
@@ -313,6 +314,20 @@ def _list_query():
     )
 
 
+async def _monthly_worker_columns(
+    db: AsyncSession, participant_user_ids: list[int]
+) -> dict[int, str]:
+    """Resolve stable user IDs to monthly-sheet logical column keys."""
+    if not participant_user_ids:
+        return {}
+    result = await db.execute(
+        select(WorkerColumn.user_id, WorkerColumn.column_key).where(
+            WorkerColumn.user_id.in_(participant_user_ids)
+        )
+    )
+    return {int(user_id): column_key for user_id, column_key in result.all()}
+
+
 async def _ensure_responsible_is_participant(
     db: AsyncSession, wo: WorkOrder
 ) -> None:
@@ -386,12 +401,18 @@ async def _sync_work_order_to_monthly(
 
     # Resolve participant names from M2M relationship (preferred) or TEXT fallback
     participants = []
+    participant_user_ids: list[int] | None = None
     try:
-        participants = [p.full_name for p in (wo.participants or [])]
+        participant_objects = list(wo.participants or [])
+        participant_user_ids = [p.id for p in participant_objects]
+        participants = [p.full_name for p in participant_objects]
     except Exception:
         participants = [
             n.strip() for n in (wo.participant_names or "").split(",") if n.strip()
         ]
+    participant_column_keys = await _monthly_worker_columns(
+        db, participant_user_ids or []
+    ) if participant_user_ids is not None else None
 
     # Resolve responsible name
     responsible_name = wo.responsible_user.full_name if wo.responsible_user else ""
@@ -469,6 +490,8 @@ async def _sync_work_order_to_monthly(
             description=wo.description or "",
             maintenance_type=wo.maintenance_type,
             participants=participants,
+            participant_user_ids=participant_user_ids,
+            participant_column_keys=participant_column_keys,
             duration_hours=duration_hours,
             status=wo.status,
             actual_duration_minutes=actual_minutes,
@@ -1056,10 +1079,16 @@ async def _sync_ot_and_monthly(db, wo, area, equipment, payload, user_id):
     await db.commit()
     execution_date = payload.execution_date or datetime.now().date()
     participants = []
+    participant_user_ids: list[int] | None = None
     try:
-        participants = [p.full_name for p in (wo.participants or [])]
+        participant_objects = list(wo.participants or [])
+        participant_user_ids = [p.id for p in participant_objects]
+        participants = [p.full_name for p in participant_objects]
     except Exception:
         participants = payload.participant_names or []
+    participant_column_keys = await _monthly_worker_columns(
+        db, participant_user_ids or []
+    ) if participant_user_ids is not None else None
 
     try:
         if isinstance(execution_date, _date) and not isinstance(execution_date, datetime):
@@ -1141,6 +1170,8 @@ async def _sync_ot_and_monthly(db, wo, area, equipment, payload, user_id):
                     description=payload.description or "",
                     maintenance_type=payload.maintenance_type,
                     participants=participants,
+                    participant_user_ids=participant_user_ids,
+                    participant_column_keys=participant_column_keys,
                     duration_hours=_parse_duration_hours(payload.estimated_time),
                     status=wo.status,
                     actual_duration_minutes=None,

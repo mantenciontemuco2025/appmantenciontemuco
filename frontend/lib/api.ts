@@ -336,6 +336,7 @@ export const api = {
   getCached: <T>(path: string, ttlMs: number) => apiGetCached<T>(path, ttlMs),
   invalidateCache: (path: string) => invalidateApiCache(path),
   post: <T>(path: string, body?: unknown) => apiFetch<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
+  put: <T>(path: string, body: unknown) => apiFetch<T>(path, { method: "PUT", body: JSON.stringify(body) }),
   patch: <T>(path: string, body: unknown) => apiFetch<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
   upload: <T>(path: string, body: FormData) => apiFetch<T>(path, { method: "POST", body }),
   del: <T>(path: string) => apiFetch<T>(path, { method: "DELETE" }),
