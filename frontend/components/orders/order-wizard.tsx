@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
 import { VoiceDictation } from "@/components/maintenance/voice-dictation";
+import { todayDateInputValue } from "@/lib/utils";
 
 interface WorkerOption {
   id: number;
@@ -30,7 +31,7 @@ interface Form {
 function emptyForm(): Form {
   return {
     scheduled_date: "",
-    request_date: new Date().toISOString().slice(0, 10),
+    request_date: todayDateInputValue(),
     area_id: null,
     equipment_id: null,
     description: "",

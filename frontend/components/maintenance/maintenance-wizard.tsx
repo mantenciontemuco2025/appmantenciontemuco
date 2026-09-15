@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, ArrowLeft, ArrowRight, Check } from "lucide-react";
 import { api } from "@/lib/api";
-import { formatDuration } from "@/lib/utils";
+import { formatDuration, todayDateInputValue } from "@/lib/utils";
 import type {
   AreaNode,
   MaintenanceDraft,
@@ -37,7 +37,7 @@ export function MaintenanceWizard() {
 
   // form state — section_name is free text
   const [draft, setDraft] = useState<Partial<MaintenanceDraft>>({
-    date: new Date().toISOString().slice(0, 10),
+    date: todayDateInputValue(),
     area_id: null,
     section_name: "",
     equipment_id: null,

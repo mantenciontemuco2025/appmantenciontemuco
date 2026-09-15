@@ -14,7 +14,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { StatusBadge, maintenanceTypeLabel } from "@/lib/status";
 import { SyncBadge } from "@/components/maintenance/sync-badge";
-import { cn } from "@/lib/utils";
+import { cn, formatDateOnly } from "@/lib/utils";
 
 type TabKey = "ALL" | "DRAFT" | "PENDING" | "IN_PROGRESS" | "COMPLETED" | "APPROVED" | "CANCELLED" | "OVERDUE";
 
@@ -416,7 +416,7 @@ export default function OrdenesPage() {
                       <div className="mt-0.5 text-sm text-muted-foreground">
                         {maintenanceTypeLabel(o.maintenance_type)} ·{" "}
                         {o.execution_date
-                          ? new Date(o.execution_date).toLocaleDateString("es-CL")
+                          ? formatDateOnly(o.execution_date)
                           : "sin fecha"}
                       </div>
                       <div className="mt-0.5 text-xs text-muted-foreground">
@@ -428,7 +428,7 @@ export default function OrdenesPage() {
                       </div>
                       {o.due_date && (
                         <div className={cn("mt-0.5 text-xs", isOverdue ? "text-red-600 font-semibold" : "text-muted-foreground")}>
-                          Fecha límite: {new Date(o.due_date).toLocaleDateString("es-CL")}
+                        Fecha límite: {formatDateOnly(o.due_date)}
                         </div>
                       )}
                       <div className="mt-1.5 flex items-center gap-2 text-xs">

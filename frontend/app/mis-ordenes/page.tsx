@@ -13,6 +13,7 @@ import { PageLoading } from "@/components/ui/page-loading";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusBadge, maintenanceTypeLabel } from "@/lib/status";
 import { cn } from "@/lib/utils";
+import { formatDateOnly } from "@/lib/utils";
 
 type TabKey = "PENDING" | "IN_PROGRESS" | "COMPLETED" | "APPROVED";
 
@@ -170,7 +171,7 @@ export default function MisOrdenesPage() {
                     <div className="mt-0.5 text-sm text-muted-foreground">
                       {maintenanceTypeLabel(o.maintenance_type)} ·{" "}
                       {o.execution_date
-                        ? new Date(o.execution_date).toLocaleDateString("es-CL")
+                        ? formatDateOnly(o.execution_date)
                         : "sin fecha"}
                     </div>
                     {o.due_date && (
@@ -180,7 +181,7 @@ export default function MisOrdenesPage() {
                           ? "text-red-600 font-semibold"
                           : "text-muted-foreground"
                       )}>
-                        Fecha límite: {new Date(o.due_date).toLocaleDateString("es-CL")}
+                        Fecha límite: {formatDateOnly(o.due_date)}
                         {new Date(o.due_date) < new Date() && (o.status === "PENDING" || o.status === "IN_PROGRESS") && " (vencida)"}
                       </div>
                     )}

@@ -19,7 +19,7 @@ import { StatusBadge, MAINTENANCE_TYPES, maintenanceTypeLabel } from "@/lib/stat
 import { signatureImageUrl } from "@/lib/signatures";
 import { SyncBadge } from "@/components/maintenance/sync-badge";
 import { PageLoading } from "@/components/ui/page-loading";
-import { formatDurationLong } from "@/lib/utils";
+import { formatDurationLong, formatDateOnly, todayDateInputValue } from "@/lib/utils";
 import { LOTO_CONTROL_OPTIONS } from "@/lib/loto";
 
 const inputCls =
@@ -145,7 +145,7 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                 : ["NOT_APPLICABLE"],
           execution_date:
             (data.execution_date || "").slice(0, 10) ||
-            new Date().toISOString().slice(0, 10),
+            todayDateInputValue(),
           section_name: data.section_name || "",
           time_mode: data.work_time_mode || "RANGE",
           start_time: (data.work_start_time || "").slice(0, 5),
@@ -774,12 +774,12 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
               <InfoRow label="LOTO" value={wo.loto_status === "YES" ? "Sí" : wo.loto_status === "NO" ? "No" : "N/A"} />
               <InfoRow
                 label="Fecha de ejecución"
-                value={wo.execution_date ? new Date(wo.execution_date).toLocaleDateString("es-CL") : null}
+                value={formatDateOnly(wo.execution_date)}
               />
               <InfoRow label="Tiempo estimado" value={wo.estimated_time ? `${wo.estimated_time}` : null} />
               <InfoRow
                 label="Fecha de solicitud"
-                value={wo.request_date ? new Date(wo.request_date).toLocaleDateString("es-CL") : null}
+                value={formatDateOnly(wo.request_date)}
               />
               <InfoRow
                 label="Responsable"

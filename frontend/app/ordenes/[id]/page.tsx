@@ -18,7 +18,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { InlineAlert } from "@/components/ui/inline-alert";
 import { StatusBadge } from "@/lib/status";
 import { SyncBadge, RetrySyncButton } from "@/components/maintenance/sync-badge";
-import { cn } from "@/lib/utils";
+import { cn, formatDateOnly } from "@/lib/utils";
 import { PageLoading } from "@/components/ui/page-loading";
 import { LOTO_CONTROL_LABELS } from "@/lib/loto";
 
@@ -357,14 +357,14 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                 value={(wo.loto_controls || []).map((control) => LOTO_CONTROL_LABELS[control]).join(", ")}
               />
               <InfoRow label="LOTO" value={wo.loto_status === "YES" ? "Sí" : wo.loto_status === "NO" ? "No" : "N/A"} />
-              <InfoRow label="Fecha de solicitud" value={wo.request_date ? new Date(wo.request_date).toLocaleDateString("es-CL") : null} />
+              <InfoRow label="Fecha de solicitud" value={formatDateOnly(wo.request_date)} />
               <InfoRow
                 label="Fecha de ejecución"
-                value={wo.execution_date ? new Date(wo.execution_date).toLocaleDateString("es-CL") : null}
+                value={formatDateOnly(wo.execution_date)}
               />
               <InfoRow
                 label="Fecha programada"
-                value={wo.scheduled_date ? new Date(wo.scheduled_date).toLocaleDateString("es-CL") : null}
+                value={formatDateOnly(wo.scheduled_date)}
               />
               <InfoRow
                 label="Fecha límite"
@@ -375,7 +375,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                         ? "text-red-600 font-bold"
                         : ""
                     )}>
-                      {new Date(wo.due_date).toLocaleDateString("es-CL")}
+                      {formatDateOnly(wo.due_date)}
                       {new Date(wo.due_date) < new Date() && (wo.status === "PENDING" || wo.status === "IN_PROGRESS") && " (vencida)"}
                     </span>
                   ) : null
