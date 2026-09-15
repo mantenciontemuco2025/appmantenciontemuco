@@ -1,4 +1,4 @@
-const CACHE_NAME = "mantencion-shell-v3";
+const CACHE_NAME = "mantencion-shell-v4";
 const OFFLINE_URL = "/offline.html";
 const NAVIGATION_TIMEOUT_MS = 2500;
 
@@ -67,7 +67,9 @@ self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
 
-  if (request.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith("/api/")) {
+  // Next.js assets must always follow the active build. Caching them makes a
+  // new frontend deployment appear unchanged until the browser cache expires.
+  if (request.method !== "GET" || url.origin !== self.location.origin || url.pathname.startsWith("/api/") || url.pathname.startsWith("/_next/")) {
     return;
   }
 

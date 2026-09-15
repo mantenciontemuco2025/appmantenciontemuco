@@ -12,6 +12,7 @@ import { StatusBadge } from "@/lib/status";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Button } from "@/components/ui/button";
 import { PageLoading } from "@/components/ui/page-loading";
+import { KpiDashboard } from "@/components/dashboard/kpi-dashboard";
 
 export default function DashboardPage() {
   const { user, loading, logout } = useAuth();
@@ -80,6 +81,8 @@ export default function DashboardPage() {
           </>
         )}
       </div>
+
+      {isManager && <KpiDashboard />}
 
       <section>
         <h2 className="mb-3 text-lg font-semibold">

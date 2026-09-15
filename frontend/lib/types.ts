@@ -45,6 +45,100 @@ export interface AreaNode {
 // GET /api/catalogs/tree returns a bare array of areas with nested equipment
 export type CatalogTreeResponse = AreaNode[];
 
+export interface KpiSummary {
+  total_ots: number;
+  completed_ots: number;
+  pending_ots: number;
+  in_progress_ots: number;
+  cancelled_ots: number;
+  planned_ots: number;
+  executed_planned_ots: number;
+  compliance_percent: number | null;
+  compliance_target_percent: number;
+  total_hours: number;
+  total_person_hours: number;
+  average_hours_per_ot: number;
+  overdue_ots: number;
+  stale_pending_ots: number;
+}
+
+export interface KpiMaintenanceRow {
+  maintenance_type: string;
+  total_ots: number;
+  completed_ots: number;
+  total_hours: number;
+}
+
+export interface KpiWorkerRow {
+  user_id: number;
+  worker_name: string;
+  assigned_ots: number;
+  completed_ots: number;
+  total_hours: number;
+  person_hours: number;
+}
+
+export interface KpiWorkerDetailRow {
+  user_id: number;
+  worker_name: string;
+  area_name: string;
+  maintenance_type: string;
+  assigned_ots: number;
+  completed_ots: number;
+  person_hours: number;
+}
+
+export interface KpiAreaTypeRow {
+  area_name: string;
+  maintenance_type: string;
+  total_ots: number;
+  completed_ots: number;
+  total_hours: number;
+}
+
+export interface KpiAreaRow {
+  area_name: string;
+  total_ots: number;
+  completed_ots: number;
+  total_hours: number;
+  preventive_ots: number;
+  corrective_ots: number;
+}
+
+export interface KpiSectionRow {
+  area_name: string;
+  section_name: string;
+  total_ots: number;
+  completed_ots: number;
+  total_hours: number;
+  preventive_ots: number;
+  corrective_ots: number;
+}
+
+export interface KpiMonthRow {
+  month: string;
+  total_ots: number;
+  completed_ots: number;
+  planned_ots: number;
+  executed_planned_ots: number;
+  compliance_percent: number | null;
+  total_hours: number;
+}
+
+export interface KpiResponse {
+  generated_at: string;
+  date_from: string;
+  date_to: string;
+  summary: KpiSummary;
+  by_maintenance_type: KpiMaintenanceRow[];
+  by_worker: KpiWorkerRow[];
+  by_worker_detail: KpiWorkerDetailRow[];
+  by_area: KpiAreaRow[];
+  by_area_type: KpiAreaTypeRow[];
+  by_section: KpiSectionRow[];
+  by_month: KpiMonthRow[];
+}
+
 export interface Brief {
   id: number;
   name: string;
