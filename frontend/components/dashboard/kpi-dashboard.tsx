@@ -15,7 +15,8 @@ import {
   Wrench,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { AreaNode, KpiResponse } from "@/lib/types";
+import type { KpiResponse } from "@/lib/types";
+import { WORK_ORDER_AREAS } from "@/lib/work-order-areas";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -199,9 +200,8 @@ export function KpiDashboard() {
   const today = useMemo(() => new Date(), []);
   const [dateFrom, setDateFrom] = useState(`${today.getFullYear()}-01-01`);
   const [dateTo, setDateTo] = useState(localDate(today));
-  const [areaId, setAreaId] = useState("");
+  const [plantArea, setPlantArea] = useState("");
   const [maintenanceType, setMaintenanceType] = useState("");
-  const [areas, setAreas] = useState<AreaNode[]>([]);
   const [data, setData] = useState<KpiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -210,7 +210,7 @@ export function KpiDashboard() {
     setLoading(true);
     setError(null);
     const params = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
-    if (areaId) params.set("area_id", areaId);
+    if (plantArea) params.set("plant_area", plantArea);
     if (maintenanceType) params.set("maintenance_type", maintenanceType);
     try {
       setData(await api.get<KpiResponse>(`/api/kpis?${params.toString()}`));
@@ -219,13 +219,7 @@ export function KpiDashboard() {
     } finally {
       setLoading(false);
     }
-  }, [areaId, dateFrom, dateTo, maintenanceType]);
-
-  useEffect(() => {
-    api.getCached<AreaNode[]>("/api/catalogs/tree", 5 * 60 * 1000)
-      .then(setAreas)
-      .catch(() => setAreas([]));
-  }, []);
+  }, [plantArea, dateFrom, dateTo, maintenanceType]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -256,7 +250,7 @@ export function KpiDashboard() {
         <form className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5" onSubmit={(event) => { event.preventDefault(); void load(); }}>
           <Input aria-label="Desde" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
           <Input aria-label="Hasta" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
-          <Select aria-label="Área" value={areaId} onChange={(event) => setAreaId(event.target.value)} options={areas.map((area) => ({ value: String(area.id), label: area.name }))} placeholder="Todas las áreas" />
+          <Select aria-label="Área" value={plantArea} onChange={(event) => setPlantArea(event.target.value)} options={WORK_ORDER_AREAS.map((area) => ({ value: area, label: area }))} placeholder="Todas las áreas" />
           <Select aria-label="Tipo" value={maintenanceType} onChange={(event) => setMaintenanceType(event.target.value)} options={Object.entries(TYPE_LABELS).map(([value, label]) => ({ value, label }))} placeholder="Todos los tipos" />
           <Button type="submit" disabled={loading} className="h-12 gap-2"><RefreshCw className={loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} /> Actualizar</Button>
         </form>

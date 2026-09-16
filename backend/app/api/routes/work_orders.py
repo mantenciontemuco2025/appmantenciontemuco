@@ -24,6 +24,7 @@ from sqlalchemy.orm import noload, selectinload
 
 from app.api.dependencies import get_current_user, require_roles
 from app.core.config import settings
+from app.core.work_order_areas import WORK_ORDER_AREAS
 from app.core.loto import (
     controls_from_legacy_status,
     legacy_status_from_controls,
@@ -161,6 +162,32 @@ def _reported_work_minutes(payload: CompletePayload, wo: WorkOrder) -> int:
     return payload.worked_duration_minutes
 
 
+def _format_work_duration(minutes: int) -> str:
+    """Format a worker-declared duration for the OT sheet and monthly register."""
+    hours, remaining_minutes = divmod(max(0, int(minutes)), 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours} {'hora' if hours == 1 else 'horas'}")
+    if remaining_minutes:
+        parts.append(
+            f"{remaining_minutes} {'minuto' if remaining_minutes == 1 else 'minutos'}"
+        )
+    return " ".join(parts) if parts else "0 minutos"
+
+
+def _duration_from_work_order(wo: WorkOrder) -> int | None:
+    """Calculate the saved worker duration from either supported input mode."""
+    if wo.work_time_mode == "RANGE":
+        if wo.work_start_time is None or wo.work_end_time is None:
+            return None
+        start = wo.work_start_time.hour * 60 + wo.work_start_time.minute
+        end = wo.work_end_time.hour * 60 + wo.work_end_time.minute
+        return end - start if end > start else None
+    if wo.work_time_mode == "MANUAL" and wo.worked_duration_minutes:
+        return wo.worked_duration_minutes if wo.worked_duration_minutes > 0 else None
+    return None
+
+
 class ReturnPayload(BaseModel):
     return_reason: str
 
@@ -185,6 +212,9 @@ class ReassignPayload(BaseModel):
     """Body for reassigning an OT to another responsible/participants."""
     responsible_user_id: int | None = None
     participant_user_ids: list[int] | None = None
+    plant_area: str | None = None
+    area_id: int | None = None  # section catalog ID; section owns the equipment
+    equipment_id: int | None = None
 
 
 class BatchIssuePayload(BaseModel):
@@ -227,6 +257,28 @@ async def _validate_area_equipment(
             raise HTTPException(status_code=400, detail="El equipo no pertenece al área seleccionada")
         return area, eq
     return area, None
+
+
+def _display_area_name(wo: WorkOrder) -> str | None:
+    """New records use plant_area; old records retain their original display."""
+    return wo.plant_area or (wo.area.name if wo.area else None)
+
+
+def _display_section_name(wo: WorkOrder) -> str | None:
+    """New sections are catalog-backed and snapshotted in section_name."""
+    if wo.plant_area and wo.area:
+        return wo.area.name
+    return wo.section_name
+
+
+def _validate_plant_area(value: str | None) -> str:
+    normalized = (value or "").strip().upper()
+    if normalized not in WORK_ORDER_AREAS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Selecciona un área válida: {', '.join(WORK_ORDER_AREAS)}",
+        )
+    return normalized
 
 
 def _parse_duration_hours(estimated_time: str | None) -> float:
@@ -280,10 +332,11 @@ def _work_order_to_response(wo: WorkOrder) -> dict:
         "title": wo.title,
         "description": wo.description,
         "area_id": wo.area_id,
-        "area_name": wo.area.name if wo.area else None,
+        "area_name": _display_area_name(wo),
+        "plant_area": wo.plant_area,
         "equipment_id": wo.equipment_id,
         "equipment_name": wo.equipment.name if wo.equipment else None,
-        "section_name": wo.section_name,
+        "section_name": _display_section_name(wo),
         "maintenance_type": wo.maintenance_type,
         "loto_status": wo.loto_status,
         "loto_controls": wo.loto_controls if wo.loto_controls is not None else controls_from_legacy_status(wo.loto_status),
@@ -551,8 +604,8 @@ async def _sync_work_order_to_monthly(
             drive_service.sync_to_monthly_sheet,
             wo.ot_number,
             exec_dt,
-            area_name=wo.area.name if wo.area else "",
-            section_name=wo.section_name or "",
+            area_name=_display_area_name(wo) or "",
+            section_name=_display_section_name(wo) or "",
             equipment_name=wo.equipment.name if wo.equipment else "",
             description=wo.description or "",
             maintenance_type=wo.maintenance_type,
@@ -615,6 +668,10 @@ async def create_work_order(
 ):
     if not perms.can_create(current_user):
         raise HTTPException(status_code=403, detail="No tiene permiso para crear OTs")
+
+    plant_area = _validate_plant_area(payload.plant_area)
+    if payload.equipment_id is None:
+        raise HTTPException(status_code=400, detail="Selecciona un equipo para la OT")
 
     area_scope_error = _supervisor_area_error(current_user, payload.area_id)
     if area_scope_error and not payload.emit:
@@ -693,8 +750,10 @@ async def create_work_order(
         title=payload.title,
         description=payload.description,
         area_id=payload.area_id,
+        plant_area=plant_area,
         equipment_id=payload.equipment_id,
-        section_name=payload.section_name,
+        # area_id points to the section catalog; snapshot its display name.
+        section_name=area.name,
         maintenance_type=payload.maintenance_type,
         loto_status=loto_status,
         loto_controls=loto_controls,
@@ -1128,8 +1187,8 @@ async def _populate_individual_ot(wo: WorkOrder) -> None:
         drive_service.populate_ot_fields,
         wo.google_ot_file_id,
         ot_number=wo.ot_number,
-        area_name=wo.area.name if wo.area else "",
-        section_name=wo.section_name or "",
+        area_name=_display_area_name(wo) or "",
+        section_name=_display_section_name(wo) or "",
         equipment_name=wo.equipment.name if wo.equipment else "",
         maintenance_type=wo.maintenance_type,
         loto_status=wo.loto_status,
@@ -1197,8 +1256,8 @@ async def _sync_ot_and_monthly(db, wo, area, equipment, payload, user_id):
             drive_service.populate_ot_fields,
             doc_id,
             ot_number=wo.ot_number,
-            area_name=area.name,
-            section_name=payload.section_name or "",
+            area_name=wo.plant_area or area.name,
+            section_name=wo.section_name or "",
             equipment_name=equipment.name if equipment else "",
             maintenance_type=payload.maintenance_type,
             loto_status=wo.loto_status,
@@ -1245,8 +1304,8 @@ async def _sync_ot_and_monthly(db, wo, area, equipment, payload, user_id):
                     drive_service.sync_to_monthly_sheet,
                     wo.ot_number,
                     exec_dt,
-                    area_name=area.name,
-                    section_name=payload.section_name or "",
+                    area_name=wo.plant_area or area.name,
+                    section_name=wo.section_name or "",
                     equipment_name=equipment.name if equipment else "",
                     description=payload.description or "",
                     maintenance_type=payload.maintenance_type,
@@ -1325,9 +1384,10 @@ async def list_work_orders(
             id=wo.id,
             ot_number=wo.ot_number,
             title=wo.title,
-            area_name=wo.area.name if wo.area else None,
+            area_name=_display_area_name(wo),
+            plant_area=wo.plant_area,
             equipment_name=wo.equipment.name if wo.equipment else None,
-            section_name=wo.section_name,
+            section_name=_display_section_name(wo),
             maintenance_type=wo.maintenance_type,
             loto_status=wo.loto_status,
             status=wo.status,
@@ -1386,9 +1446,10 @@ async def my_work_orders(
             id=wo.id,
             ot_number=wo.ot_number,
             title=wo.title,
-            area_name=wo.area.name if wo.area else None,
+            area_name=_display_area_name(wo),
+            plant_area=wo.plant_area,
             equipment_name=wo.equipment.name if wo.equipment else None,
-            section_name=wo.section_name,
+            section_name=_display_section_name(wo),
             maintenance_type=wo.maintenance_type,
             loto_status=wo.loto_status,
             status=wo.status,
@@ -1545,11 +1606,22 @@ async def update_work_order(
     if payload.description is not None:
         wo.description = payload.description
     if payload.area_id is not None:
-        await _validate_area_equipment(db, payload.area_id, payload.equipment_id)
+        if payload.area_id != wo.area_id and payload.equipment_id is None:
+            raise HTTPException(status_code=400, detail="Selecciona un equipo de la sección elegida")
+        effective_equipment_id = payload.equipment_id or wo.equipment_id
+        section, equipment = await _validate_area_equipment(
+            db, payload.area_id, effective_equipment_id
+        )
         wo.area_id = payload.area_id
-    if payload.equipment_id is not None:
+        wo.equipment_id = equipment.id if equipment else None
+        if wo.plant_area:
+            wo.section_name = section.name
+    elif payload.equipment_id is not None:
+        await _validate_area_equipment(db, wo.area_id, payload.equipment_id)
         wo.equipment_id = payload.equipment_id
-    if payload.section_name is not None:
+    if payload.plant_area is not None:
+        wo.plant_area = _validate_plant_area(payload.plant_area)
+    if payload.section_name is not None and not wo.plant_area:
         wo.section_name = payload.section_name
     if payload.maintenance_type is not None:
         wo.maintenance_type = payload.maintenance_type.upper()
@@ -1647,7 +1719,7 @@ async def update_work_order(
     # Keep external integrations out of the request latency budget. The local
     # edit is committed first and Google is synchronized in the background.
     _changed_monthly_fields = {
-        "status", "title", "description", "area_id", "equipment_id",
+        "status", "title", "description", "area_id", "plant_area", "equipment_id",
         "section_name", "maintenance_type", "estimated_time",
         "execution_date", "participant_names", "responsible_user_id",
     }
@@ -1659,7 +1731,7 @@ async def update_work_order(
     # so the Google OT stays in sync with edits (e.g. changing fecha solicitud
     # after the OT was emitted). Uses the same field set as the worker fulfill path.
     _changed_ot_fields = {
-        "title", "description", "area_id", "equipment_id", "section_name",
+        "title", "description", "area_id", "plant_area", "equipment_id", "section_name",
         "maintenance_type", "loto_status", "loto_controls", "estimated_time", "execution_date",
         "request_date", "resources_required", "risks", "observations",
         "folio", "voucher_number", "requested_by",
@@ -1719,15 +1791,40 @@ async def reassign_work_order(
             detail="Solo el administrador puede asignar responsables y participantes",
         )
 
-    if payload.responsible_user_id is None and payload.participant_user_ids is None:
+    if all(value is None for value in (
+        payload.responsible_user_id,
+        payload.participant_user_ids,
+        payload.plant_area,
+        payload.area_id,
+        payload.equipment_id,
+    )):
         raise HTTPException(
             status_code=400,
-            detail="Debe indicar al menos un responsable o participantes a cambiar",
+            detail="Indica cambios de asignación o ubicación de la OT",
         )
+
+    if payload.area_id is not None or payload.equipment_id is not None:
+        target_section_id = payload.area_id or wo.area_id
+        if target_section_id != wo.area_id and payload.equipment_id is None:
+            raise HTTPException(status_code=400, detail="Selecciona un equipo de la sección elegida")
+        target_equipment_id = payload.equipment_id or wo.equipment_id
+        section, equipment = await _validate_area_equipment(
+            db, target_section_id, target_equipment_id
+        )
+        if equipment is None:
+            raise HTTPException(status_code=400, detail="Selecciona un equipo para la OT")
+        wo.area_id = section.id
+        wo.equipment_id = equipment.id
+        wo.section_name = section.name
+    if payload.plant_area is not None:
+        wo.plant_area = _validate_plant_area(payload.plant_area)
 
     previous = {
         "responsible_user_id": wo.responsible_user_id,
         "participants": [p.id for p in (wo.participants or [])],
+        "plant_area": wo.plant_area,
+        "section_id": wo.area_id,
+        "equipment_id": wo.equipment_id,
     }
 
     # Responsable — validate it's a real, active user once provided.
@@ -1781,6 +1878,9 @@ async def reassign_work_order(
         new_data={
             "responsible_user_id": wo.responsible_user_id,
             "participants": current_participant_ids,
+            "plant_area": wo.plant_area,
+            "section_id": wo.area_id,
+            "equipment_id": wo.equipment_id,
         },
     )
     await db.flush()
@@ -1857,8 +1957,6 @@ async def fulfill_work_order(
         wo.title = payload.title.strip()
     if payload.description is not None:
         wo.description = payload.description
-    if payload.section_name is not None:
-        wo.section_name = payload.section_name
     if payload.maintenance_type is not None:
         wo.maintenance_type = payload.maintenance_type.upper()
     if payload.loto_status is not None:
@@ -1882,6 +1980,14 @@ async def fulfill_work_order(
         wo.risks = payload.risks
     if payload.observations is not None:
         wo.observations = payload.observations
+    if "work_time_mode" in payload.model_fields_set:
+        wo.work_time_mode = payload.work_time_mode
+    if "work_start_time" in payload.model_fields_set:
+        wo.work_start_time = payload.work_start_time
+    if "work_end_time" in payload.model_fields_set:
+        wo.work_end_time = payload.work_end_time
+    if "worked_duration_minutes" in payload.model_fields_set:
+        wo.worked_duration_minutes = payload.worked_duration_minutes
     # Participants (M2M)
     if payload.participant_user_ids is not None:
         participant_ids = list(payload.participant_user_ids)
@@ -1907,6 +2013,13 @@ async def fulfill_work_order(
         else:
             wo.participant_names = None
 
+    # Tiempo estimado is the duration shown in the OT template. Once the
+    # worker has provided a valid manual duration or time range, store that
+    # declared duration there in the same readable Spanish format.
+    worker_duration = _duration_from_work_order(wo)
+    if worker_duration is not None:
+        wo.estimated_time = _format_work_duration(worker_duration)
+
     await _ensure_responsible_is_participant(db, wo)
 
     await create_audit_log(
@@ -1922,7 +2035,7 @@ async def fulfill_work_order(
 
     # Keep the monthly registry in sync (already emitted → update row)
     _changed = {
-        "status", "title", "description", "section_name", "maintenance_type",
+        "status", "title", "description", "maintenance_type",
         "estimated_time", "execution_date", "participant_names", "loto_status", "loto_controls",
         "work_time_mode", "work_start_time", "work_end_time", "worked_duration_minutes",
         "risks", "observations", "resources_required", "folio", "voucher_number",
@@ -2011,6 +2124,13 @@ async def autosave_fulfill_work_order(
         wo.folio = payload.folio
     if "voucher_number" in fields:
         wo.voucher_number = payload.voucher_number
+
+    # Keep the OT's displayed duration aligned with either worker input mode.
+    # Autosave may run while a range is incomplete, so only replace the value
+    # when the current entry forms a valid positive duration.
+    worker_duration = _duration_from_work_order(wo)
+    if worker_duration is not None:
+        wo.estimated_time = _format_work_duration(worker_duration)
 
     await db.flush()
 
@@ -2411,6 +2531,10 @@ async def complete_work_order(
     wo.work_end_time = effective_end
     wo.worked_duration_minutes = reported_minutes
     wo.actual_duration_minutes = float(reported_minutes)
+    # Use the worker's declared duration in the existing "Tiempo estimado"
+    # cell of the OT document, irrespective of whether it was entered as a
+    # manual duration or calculated from a start/end range.
+    wo.estimated_time = _format_work_duration(reported_minutes)
 
     await create_audit_log(
         db,

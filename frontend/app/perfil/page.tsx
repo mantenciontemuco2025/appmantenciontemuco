@@ -170,8 +170,8 @@ export default function ProfilePage() {
               <li className="flex items-start gap-3">
                 <MapPin className="mt-0.5 h-4 w-4 text-muted-foreground shrink-0" />
                 <div className="min-w-0">
-                  <p className="text-xs text-muted-foreground">Área supervisada</p>
-                  <p className="font-medium">{user.area_name || "Sin área asignada"}</p>
+                  <p className="text-xs text-muted-foreground">Sección supervisada</p>
+                  <p className="font-medium">{user.area_name || "Sin sección asignada"}</p>
                 </div>
               </li>
             )}

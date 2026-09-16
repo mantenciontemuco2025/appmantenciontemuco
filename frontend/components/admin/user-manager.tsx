@@ -233,7 +233,7 @@ export function UserManager() {
           {role === "SUPERVISOR" && (
             <>
             <Select
-              label="Área del supervisor"
+              label="Sección principal supervisada"
               options={areas.map((area) => ({ value: String(area.id), label: area.name }))}
               value={areaId}
               onChange={(e) => {
@@ -244,7 +244,7 @@ export function UserManager() {
               required
             />
             <div className="rounded-md border p-2">
-              <p className="mb-1 text-xs font-medium text-muted-foreground">Áreas adicionales</p>
+              <p className="mb-1 text-xs font-medium text-muted-foreground">Otras secciones supervisadas</p>
               <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
                 {areas.map((area) => (
                   <label key={area.id} className="flex items-center gap-2 text-sm">
@@ -324,7 +324,7 @@ export function UserManager() {
           {editRole === "SUPERVISOR" && (
             <>
             <Select
-              label="Área del supervisor"
+              label="Sección principal supervisada"
               options={areas.map((area) => ({ value: String(area.id), label: area.name }))}
               value={editAreaId}
               onChange={(e) => {
@@ -335,7 +335,7 @@ export function UserManager() {
               required
             />
             <div className="rounded-md border p-2">
-              <p className="mb-1 text-xs font-medium text-muted-foreground">Áreas adicionales</p>
+              <p className="mb-1 text-xs font-medium text-muted-foreground">Otras secciones supervisadas</p>
               <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
                 {areas.map((area) => (
                   <label key={area.id} className="flex items-center gap-2 text-sm">
@@ -406,7 +406,7 @@ export function UserManager() {
                     <div className="text-xs text-muted-foreground truncate">{u.email}</div>
                     {u.role === "SUPERVISOR" && (
                       <div className="text-xs text-blue-700">
-                        Áreas: {u.area_names?.length ? u.area_names.join(", ") : "Sin asignar"}
+                        Secciones asignadas: {u.area_names?.length ? u.area_names.join(", ") : "Sin asignar"}
                       </div>
                     )}
                   </div>

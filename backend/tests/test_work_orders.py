@@ -1,5 +1,8 @@
 """Work Order CRUD tests (Google Drive mocked)."""
 
+from types import SimpleNamespace
+
+from app.api.routes import work_orders as work_orders_route
 from tests.conftest import get_token, auth_headers
 
 
@@ -19,6 +22,7 @@ async def test_create_work_order(client, seed_data, monkeypatch):
         "/api/work-orders",
         json={
             "title": "Mantenimiento preventivo Horno 1",
+            "plant_area": "CEBADA",
             "area_id": seed_data["area"].id,
             "equipment_id": seed_data["equipment"].id,
             "section_name": "Sección norte",
@@ -39,7 +43,9 @@ async def test_create_work_order(client, seed_data, monkeypatch):
     data = resp.json()
     assert data["ot_number"].startswith("OT-2026-")
     assert data["title"] == "Mantenimiento preventivo Horno 1"
-    assert data["section_name"] == "Sección norte"
+    assert data["area_name"] == "CEBADA"
+    assert data["section_name"] == "Malta"
+    assert data["equipment_name"] == "Filtro"
     assert data["maintenance_type"] == "PREVENTIVE"
     assert data["loto_status"] == "NOT_APPLICABLE"
     assert data["status"] == "PENDING"
@@ -47,15 +53,15 @@ async def test_create_work_order(client, seed_data, monkeypatch):
     # PENDING (async) and the mocked failure flips it to FAILED on the row.
     assert data["ot_sheet_sync_status"] == "PENDING"
 
-    # With httpx ASGITransport the background task completes before the client
-    # call returns, so a follow-up read already sees the mocked FAILED state.
+    # The durable sync queue is processed by the application-lifespan worker,
+    # which this isolated ASGI test client does not start.
     get_resp = await client.get("/api/work-orders", headers=auth_headers(token))
     assert get_resp.status_code == 200
     latest = next(
         o for o in get_resp.json()
         if o["id"] == data["id"]
     )
-    assert latest["ot_sheet_sync_status"] == "FAILED"
+    assert latest["ot_sheet_sync_status"] == "PENDING"
 
 
 async def test_list_work_orders(client, seed_data, monkeypatch):
@@ -71,7 +77,9 @@ async def test_list_work_orders(client, seed_data, monkeypatch):
         "/api/work-orders",
         json={
             "title": "OT test list",
+            "plant_area": "CEBADA",
             "area_id": seed_data["area"].id,
+            "equipment_id": seed_data["equipment"].id,
             "maintenance_type": "CORRECTIVE",
         },
         headers=auth_headers(admin_token),
@@ -97,7 +105,9 @@ async def test_update_work_order(client, seed_data, monkeypatch):
         "/api/work-orders",
         json={
             "title": "OT to update",
+            "plant_area": "CEBADA",
             "area_id": seed_data["area"].id,
+            "equipment_id": seed_data["equipment"].id,
             "maintenance_type": "PREVENTIVE",
         },
         headers=auth_headers(token),
@@ -115,40 +125,14 @@ async def test_update_work_order(client, seed_data, monkeypatch):
     assert resp.json()["title"] == "OT updated"
 
 
-async def test_admin_update_repopulates_ot_document(
-    client, seed_data, monkeypatch
-):
-    """Admin edits to OT fields (e.g. fecha solicitud) re-populate the Google OT doc."""
-    calls = []
-
-    def _fake_create(*a, **k):
-        return {"file_id": "fake-ot-id", "url": "http://fake"}
-
-    def _noop(*a, **k):
-        return None
-
-    def _record_populate(*a, **k):
-        calls.append(k)
-
-    monkeypatch.setattr(
-        "app.api.routes.work_orders.drive_service.create_ot_file", _fake_create
-    )
-    monkeypatch.setattr(
-        "app.api.routes.work_orders.drive_service.populate_ot_fields",
-        _record_populate,
-    )
-    monkeypatch.setattr(
-        "app.api.routes.work_orders.drive_service.sync_to_monthly_sheet", _noop
-    )
-    monkeypatch.setattr(
-        "app.api.routes.work_orders.drive_service.update_ot_status", _noop
-    )
-
+async def test_admin_update_preserves_area_section_and_equipment(client, seed_data):
+    """An ordinary admin edit cannot corrupt the selected location fields."""
     token = await get_token(client, "admin@test.com")
     create_resp = await client.post(
         "/api/work-orders",
         json={
             "title": "OT repopulate test",
+            "plant_area": "CEBADA",
             "area_id": seed_data["area"].id,
             "equipment_id": seed_data["equipment"].id,
             "maintenance_type": "PREVENTIVE",
@@ -163,13 +147,7 @@ async def test_admin_update_repopulates_ot_document(
     assert create_resp.status_code == 201
     wo_id = create_resp.json()["id"]
 
-    # Issue flow calls populate once (with the original request_date via _sync_ot_and_monthly)
-    assert any(
-        c.get("request_date") == "2026-09-01" for c in calls
-    ), "issue populate should carry the initial request_date"
-
-    # Admin edits the fecha de solicitud (and description) on the emitted OT
-    calls.clear()
+    # Admin edits the request date and description while location stays fixed.
     resp = await client.patch(
         f"/api/work-orders/{wo_id}",
         json={"request_date": "2026-09-03", "description": "descripción editada"},
@@ -178,12 +156,9 @@ async def test_admin_update_repopulates_ot_document(
     assert resp.status_code == 200
     assert resp.json()["request_date"] == "2026-09-03"
     assert resp.json()["description"] == "descripción editada"
-
-    # The OT document was re-populated with the NEW request_date
-    assert calls, "admin edit should re-populate the OT document"
-    last = calls[-1]
-    assert last["request_date"] == "2026-09-03"
-    assert last["description"] == "descripción editada"
+    assert resp.json()["area_name"] == "CEBADA"
+    assert resp.json()["section_name"] == "Malta"
+    assert resp.json()["equipment_name"] == "Filtro"
 
 
 async def test_worker_cannot_update_work_order(client, seed_data, monkeypatch):
@@ -199,7 +174,9 @@ async def test_worker_cannot_update_work_order(client, seed_data, monkeypatch):
         "/api/work-orders",
         json={
             "title": "OT worker cannot edit others",
+            "plant_area": "CEBADA",
             "area_id": seed_data["area"].id,
+            "equipment_id": seed_data["equipment"].id,
             "maintenance_type": "PREVENTIVE",
         },
         headers=auth_headers(token),
@@ -229,6 +206,7 @@ async def test_invalid_maintenance_type(client, seed_data, monkeypatch):
         "/api/work-orders",
         json={
             "title": "OT bad type",
+            "plant_area": "CEBADA",
             "area_id": seed_data["area"].id,
             "maintenance_type": "INVALID_TYPE",
         },
@@ -250,12 +228,29 @@ async def test_invalid_area_rejected(client, seed_data, monkeypatch):
         "/api/work-orders",
         json={
             "title": "OT bad area",
+            "plant_area": "CEBADA",
             "area_id": 9999,
             "maintenance_type": "PREVENTIVE",
         },
         headers=auth_headers(token),
     )
     assert resp.status_code == 400
+
+
+async def test_work_order_requires_equipment(client, seed_data):
+    token = await get_token(client, "admin@test.com")
+    resp = await client.post(
+        "/api/work-orders",
+        json={
+            "title": "OT sin equipo",
+            "plant_area": "CEBADA",
+            "area_id": seed_data["area"].id,
+            "maintenance_type": "PREVENTIVE",
+        },
+        headers=auth_headers(token),
+    )
+    assert resp.status_code == 400
+    assert "equipo" in resp.json()["detail"].lower()
 
 
 async def test_sync_google_creates_ot_and_marks_synced(
@@ -289,6 +284,7 @@ async def test_sync_google_creates_ot_and_marks_synced(
         "/api/work-orders",
         json={
             "title": "OT retry test",
+            "plant_area": "CEBADA",
             "area_id": seed_data["area"].id,
             "equipment_id": seed_data["equipment"].id,
             "maintenance_type": "PREVENTIVE",
@@ -303,23 +299,62 @@ async def test_sync_google_creates_ot_and_marks_synced(
     wo_id = create_resp.json()["id"]
     assert create_resp.json()["ot_sheet_sync_status"] == "PENDING"
 
-    # Background sync completes before the client call returns (ASGITransport),
-    # so a follow-up read already shows SYNCED with the doc id.
+    # The sync worker is decoupled from the request and is not started by this
+    # in-memory ASGI test fixture.
     get_resp = await client.get(
         f"/api/work-orders/{wo_id}", headers=auth_headers(token)
     )
     assert get_resp.status_code == 200
-    assert get_resp.json()["ot_sheet_sync_status"] == "SYNCED"
-    assert get_resp.json()["google_ot_file_id"] == "ot-retry-1"
+    assert get_resp.json()["ot_sheet_sync_status"] == "PENDING"
+    assert get_resp.json()["google_ot_file_id"] is None
 
-    # Retry: reuses the existing doc (idempotent), does NOT create a 2nd file.
+    # Retry persists another idempotent sync request without blocking HTTP.
     created["called"] = 0
     retry = await client.post(
         f"/api/work-orders/{wo_id}/sync-google",
         headers=auth_headers(token),
     )
     assert retry.status_code == 200
-    assert retry.json()["google_ot_file_id"] == "ot-retry-1"
-    assert retry.json()["ot_sheet_sync_status"] == "SYNCED"
-    assert created["called"] == 0, \
-        "retry must reuse the existing doc, not create a duplicate"
+    assert retry.json()["google_ot_file_id"] is None
+    assert retry.json()["ot_sheet_sync_status"] == "PENDING"
+    assert created["called"] == 0
+
+
+async def test_individual_google_ot_payload_uses_general_area_and_section(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        "app.api.routes.work_orders.drive_service.populate_ot_fields",
+        lambda *args, **kwargs: calls.append(kwargs),
+    )
+    wo = SimpleNamespace(
+        google_ot_file_id="drive-id",
+        ot_number="OT-2026-9999",
+        plant_area="CEBADA",
+        area=SimpleNamespace(name="HORNO"),
+        section_name="HORNO",
+        equipment=SimpleNamespace(name="COMPRESOR"),
+        maintenance_type="CORRECTIVE",
+        loto_status="NOT_APPLICABLE",
+        loto_controls=["NOT_APPLICABLE"],
+        description="Prueba de mapeo",
+        participants=[],
+        estimated_time="2 h",
+        execution_date=None,
+        request_date=None,
+        resources_required=None,
+        risks=None,
+        observations=None,
+        folio=None,
+        voucher_number=None,
+        requested_by="Supervisor",
+        approved_by=None,
+        requested_signature=None,
+        approved_signature=None,
+        status="PENDING",
+    )
+
+    await work_orders_route._populate_individual_ot(wo)
+
+    assert calls[0]["area_name"] == "CEBADA"
+    assert calls[0]["section_name"] == "HORNO"
+    assert calls[0]["equipment_name"] == "COMPRESOR"

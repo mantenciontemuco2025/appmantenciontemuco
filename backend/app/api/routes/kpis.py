@@ -13,6 +13,7 @@ from app.api.dependencies import require_roles
 from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.models.work_order import WorkOrder
+from app.core.work_order_areas import WORK_ORDER_AREAS
 from app.schemas.kpi import (
     KpiMaintenanceRow,
     KpiMonthRow,
@@ -86,6 +87,7 @@ async def get_kpis(
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
     area_id: int | None = Query(default=None, ge=1),
+    plant_area: str | None = Query(default=None),
     section_name: str | None = Query(default=None),
     maintenance_type: str | None = Query(default=None),
     current_user: User = Depends(manager_roles),
@@ -124,6 +126,11 @@ async def get_kpis(
             query = query.where(WorkOrder.area_id.in_(allowed_areas))
     if area_id is not None:
         query = query.where(WorkOrder.area_id == area_id)
+    if plant_area and plant_area.strip():
+        normalized_area = plant_area.strip().upper()
+        if normalized_area not in WORK_ORDER_AREAS:
+            raise HTTPException(status_code=400, detail="Área no válida")
+        query = query.where(WorkOrder.plant_area == normalized_area)
     if section_name and section_name.strip():
         query = query.where(func.lower(func.coalesce(WorkOrder.section_name, "")) == section_name.strip().lower())
     if selected_type:
@@ -178,7 +185,7 @@ async def get_kpis(
         if status in {"PENDING", "IN_PROGRESS"} and age_date and age_date < stale_cutoff:
             stale_pending_ots += 1
 
-        area = wo.area.name if wo.area else "Sin área"
+        area = wo.plant_area or (wo.area.name if wo.area else "Sin área")
         area_row = area_counts.setdefault(area, {
             "total": 0, "completed": 0, "minutes": 0.0,
             "preventive": 0, "corrective": 0,
@@ -197,7 +204,8 @@ async def get_kpis(
         area_type_row["completed"] += int(is_completed)
         area_type_row["minutes"] += minutes
 
-        section = (wo.section_name or "Sin sección").strip() or "Sin sección"
+        section_value = wo.area.name if wo.plant_area and wo.area else wo.section_name
+        section = (section_value or "Sin sección").strip() or "Sin sección"
         section_key = (area, section)
         section_row = section_counts.setdefault(section_key, {
             "total": 0, "completed": 0, "minutes": 0.0,

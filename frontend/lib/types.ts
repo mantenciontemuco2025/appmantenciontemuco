@@ -214,6 +214,7 @@ export interface WorkOrderRecord {
   title: string;
   description: string | null;
   area_id: number;
+  plant_area: string | null;
   area_name: string | null;
   equipment_id: number | null;
   equipment_name: string | null;
@@ -291,6 +292,7 @@ export interface WorkOrderListItem {
   ot_number: string;
   title: string;
   area_name: string | null;
+  plant_area?: string | null;
   equipment_name: string | null;
   section_name: string | null;
   maintenance_type: MaintenanceType;

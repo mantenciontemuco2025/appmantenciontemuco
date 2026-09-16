@@ -7,7 +7,7 @@ import type { AreaNode, EquipmentNode } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-/** Admin management for areas and the equipment types under each area. */
+/** Admin management for OT sections and their equipment catalog. */
 export function CatalogManager() {
   const [areas, setAreas] = useState<AreaNode[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,7 +48,7 @@ export function CatalogManager() {
       api.invalidateCache("/api/catalogs/tree");
       await load();
     } catch (err) {
-      fail(err, "Error al crear el área");
+      fail(err, "Error al crear la sección");
     }
   }
 
@@ -81,14 +81,14 @@ export function CatalogManager() {
       api.invalidateCache("/api/catalogs/tree");
       await load();
     } catch (err) {
-      fail(err, "Error al editar el área");
+      fail(err, "Error al editar la sección");
     } finally {
       setBusy("");
     }
   }
 
   async function removeArea(area: AreaNode) {
-    if (!window.confirm(`¿Eliminar el área "${area.name}"?`)) return;
+    if (!window.confirm(`¿Eliminar la sección "${area.name}"?`)) return;
     setBusy(`delete-area-${area.id}`);
     setError("");
     try {
@@ -97,7 +97,7 @@ export function CatalogManager() {
       api.invalidateCache("/api/catalogs/tree");
       await load();
     } catch (err) {
-      fail(err, "No se pudo eliminar el área");
+      fail(err, "No se pudo eliminar la sección");
     } finally {
       setBusy("");
     }
@@ -147,12 +147,12 @@ export function CatalogManager() {
   return (
     <div>
       <h3 className="mb-1 text-lg font-semibold">Catálogo</h3>
-      <p className="mb-4 text-sm text-muted-foreground">Áreas → Tipos de equipo. Puedes crear, editar y eliminar elementos.</p>
+      <p className="mb-4 text-sm text-muted-foreground">Secciones → Equipos. Cada sección determina los equipos disponibles para una OT.</p>
 
       {error && <p className="mb-3 rounded-md bg-destructive/5 p-2 text-sm text-destructive">{error}</p>}
 
       <div className="mb-4 flex gap-2 rounded-lg border bg-card p-3">
-        <Input placeholder="Nueva área (ej: Horno)" value={newArea} onChange={(event) => setNewArea(event.target.value)} className="h-10" />
+        <Input placeholder="Nueva sección (ej: Horno)" value={newArea} onChange={(event) => setNewArea(event.target.value)} className="h-10" />
         <Button size="sm" onClick={addArea}><Plus className="mr-1 h-4 w-4" />Agregar</Button>
       </div>
 

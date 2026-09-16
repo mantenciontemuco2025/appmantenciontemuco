@@ -11,7 +11,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { signatureImageUrl } from "@/lib/signatures";
 import { Shell } from "@/components/layout/shell";
-import type { WorkOrderRecord } from "@/lib/types";
+import type { AreaNode, WorkOrderRecord } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -21,6 +21,7 @@ import { SyncBadge, RetrySyncButton } from "@/components/maintenance/sync-badge"
 import { cn, formatDateOnly } from "@/lib/utils";
 import { PageLoading } from "@/components/ui/page-loading";
 import { LOTO_CONTROL_LABELS } from "@/lib/loto";
+import { WORK_ORDER_AREAS } from "@/lib/work-order-areas";
 
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   if (!value) return null;
@@ -57,6 +58,10 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
   const [assignableUsers, setAssignableUsers] = useState<{ id: number; full_name: string }[]>([]);
   const [reassignResponsible, setReassignResponsible] = useState<number | null>(null);
   const [reassignParticipants, setReassignParticipants] = useState<Set<number>>(new Set());
+  const [sections, setSections] = useState<AreaNode[]>([]);
+  const [reassignPlantArea, setReassignPlantArea] = useState("");
+  const [reassignSectionId, setReassignSectionId] = useState<number | null>(null);
+  const [reassignEquipmentId, setReassignEquipmentId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
@@ -75,6 +80,13 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
       .get<{ id: number; full_name: string }[]>("/api/users/workers")
       .then(setAssignableUsers)
       .catch(() => setAssignableUsers([]));
+  }, [user]);
+
+  useEffect(() => {
+    if (!user || user.role !== "ADMIN") return;
+    api.getCached<AreaNode[]>("/api/catalogs/tree", 5 * 60 * 1000)
+      .then(setSections)
+      .catch(() => setSections([]));
   }, [user]);
 
   async function loadOrder(silent = false) {
@@ -222,6 +234,9 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
           : wo.participant_user_ids || []
       )
     );
+    setReassignPlantArea(wo.plant_area || "");
+    setReassignSectionId(wo.area_id || null);
+    setReassignEquipmentId(wo.equipment_id || null);
     setShowConfirm("reassign");
   }
 
@@ -240,11 +255,20 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
       toast("error", "Debe elegir un responsable");
       return;
     }
+    if (wo.submitted_for_review && (!reassignPlantArea || !reassignSectionId || !reassignEquipmentId)) {
+      toast("error", "Completa área, sección y equipo antes de aceptar la solicitud.");
+      return;
+    }
     setActionLoading(true);
     try {
       const updated = await api.post<WorkOrderRecord>(`/api/work-orders/${id}/reassign`, {
         responsible_user_id: reassignResponsible,
         participant_user_ids: Array.from(reassignParticipants),
+        ...(wo.submitted_for_review ? {
+          plant_area: reassignPlantArea,
+          area_id: reassignSectionId,
+          equipment_id: reassignEquipmentId,
+        } : {}),
       });
       setWo(updated);
       setShowConfirm(null);
@@ -564,7 +588,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
               busy={actionLoading}
               onConfirm={handleReturn}
               onCancel={() => { setShowConfirm(null); setReturnReason(""); }}
-            >
+              >
               <div className="mb-3">
                 <label className="text-sm font-medium">Motivo de devolución (obligatorio)</label>
                 <textarea
@@ -677,6 +701,34 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
               onConfirm={handleReassign}
               onCancel={() => setShowConfirm(null)}
             >
+              {wo.submitted_for_review && (
+                <div className="mb-4 rounded-md border bg-muted/20 p-3">
+                  <p className="mb-2 text-sm font-semibold">Revisar área y equipo</p>
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <label className="text-sm">
+                      Área
+                      <select className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2" value={reassignPlantArea} onChange={(e) => setReassignPlantArea(e.target.value)}>
+                        <option value="">Seleccionar...</option>
+                        {WORK_ORDER_AREAS.map((name) => <option key={name} value={name}>{name}</option>)}
+                      </select>
+                    </label>
+                    <label className="text-sm">
+                      Sección
+                      <select className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2" value={reassignSectionId ?? ""} onChange={(e) => { setReassignSectionId(e.target.value ? Number(e.target.value) : null); setReassignEquipmentId(null); }}>
+                        <option value="">Seleccionar...</option>
+                        {sections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
+                      </select>
+                    </label>
+                    <label className="text-sm">
+                      Equipo
+                      <select className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2" value={reassignEquipmentId ?? ""} disabled={!reassignSectionId} onChange={(e) => setReassignEquipmentId(e.target.value ? Number(e.target.value) : null)}>
+                        <option value="">Seleccionar...</option>
+                        {(sections.find((section) => section.id === reassignSectionId)?.equipment || []).map((equipment) => <option key={equipment.id} value={equipment.id}>{equipment.name}</option>)}
+                      </select>
+                    </label>
+                  </div>
+                </div>
+              )}
               <div className="mb-3">
                 <label className="text-sm font-medium">Responsable</label>
                 <select

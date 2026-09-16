@@ -44,6 +44,7 @@ async def _create_ot(
     await _mock_google(client, monkeypatch)
     body = {
         "title": "OT workflow test",
+        "plant_area": "CEBADA",
         "area_id": seed_data["area"].id,
         "equipment_id": seed_data["equipment"].id,
         "maintenance_type": "PREVENTIVE",
@@ -108,6 +109,9 @@ async def test_supervisor_can_emit_without_signature(
     assert resp.status_code == 201
     assert resp.json()["submitted_for_review"] is True
     assert resp.json()["requested_signature"] is None
+    assert resp.json()["area_name"] == "CEBADA"
+    assert resp.json()["section_name"] == "Malta"
+    assert resp.json()["equipment_name"] == "Filtro"
 
 
 async def test_admin_signature_is_used_when_accepting_supervisor_submission(
@@ -144,10 +148,16 @@ async def test_admin_signature_is_used_when_accepting_supervisor_submission(
         json={
             "responsible_user_id": seed_data["worker"].id,
             "participant_user_ids": [seed_data["worker"].id],
+            "plant_area": "PLANTA EXTRACTO",
+            "area_id": seed_data["area"].id,
+            "equipment_id": seed_data["equipment"].id,
         },
         headers=auth_headers(admin),
     )
     assert reassigned.status_code == 200
+    assert reassigned.json()["area_name"] == "PLANTA EXTRACTO"
+    assert reassigned.json()["section_name"] == "Malta"
+    assert reassigned.json()["equipment_name"] == "Filtro"
 
     accepted = await client.post(
         f"/api/work-orders/{wo_id}/issue", headers=auth_headers(admin)
@@ -199,12 +209,70 @@ async def test_responsible_can_fulfill_details(client, seed_data, monkeypatch):
     assert data["maintenance_type"] == "CORRECTIVE"
     assert data["loto_status"] == "YES"
     assert data["execution_date"] == "2026-09-15"
-    assert data["section_name"] == "Sala de bombas"
+    # Section/equipment are selected before issue and cannot be replaced by
+    # free text during worker fulfillment.
+    assert data["section_name"] == "Malta"
     assert data["estimated_time"] == "1 h 30 min"
     assert data["resources_required"] == "Sello SKF, llave 24mm"
     # Participants were chosen by the ADMIN and remain unchanged by the worker
     assert seed_data["worker"].id in data["participant_user_ids"]
     assert seed_data["valdes"].id in data["participant_user_ids"]
+
+
+@pytest.mark.parametrize(
+    ("time_fields", "expected_duration"),
+    [
+        (
+            {
+                "work_time_mode": "RANGE",
+                "work_start_time": "08:00",
+                "work_end_time": "10:30",
+            },
+            "2 horas 30 minutos",
+        ),
+        (
+            {
+                "work_time_mode": "MANUAL",
+                "worked_duration_minutes": 150,
+            },
+            "2 horas 30 minutos",
+        ),
+    ],
+)
+async def test_fulfill_saves_worker_duration_for_both_time_modes(
+    client, seed_data, monkeypatch, time_fields, expected_duration
+):
+    admin = await get_token(client, "admin@test.com")
+    created = await _create_ot(
+        client,
+        seed_data,
+        monkeypatch,
+        token=admin,
+        emit=False,
+        responsible_user_id=seed_data["worker"].id,
+        participant_user_ids=[seed_data["worker"].id],
+    )
+    assert created.status_code == 201
+
+    worker = await get_token(client, "ortiz@test.com")
+    saved = await client.patch(
+        f"/api/work-orders/{created.json()['id']}/fulfill",
+        json=time_fields,
+        headers=auth_headers(worker),
+    )
+
+    assert saved.status_code == 200, saved.text
+    data = saved.json()
+    assert data["estimated_time"] == expected_duration
+    assert data["work_time_mode"] == time_fields["work_time_mode"]
+    if time_fields["work_time_mode"] == "RANGE":
+        assert data["work_start_time"] == "08:00:00"
+        assert data["work_end_time"] == "10:30:00"
+        assert data["worked_duration_minutes"] is None
+    else:
+        assert data["work_start_time"] is None
+        assert data["work_end_time"] is None
+        assert data["worked_duration_minutes"] == 150
 
 
 async def test_other_worker_cannot_fulfill(client, seed_data, monkeypatch):
@@ -338,6 +406,7 @@ async def test_complete_sets_actual_duration(client, seed_data, monkeypatch):
     assert isinstance(data["actual_duration_minutes"], float)
     assert data["actual_duration_minutes"] == 150.0
     assert data["worked_duration_minutes"] == 150
+    assert data["estimated_time"] == "2 horas 30 minutos"
     assert data["approved_by"] == "Ortiz"
     assert data["approved_signature"] == seed_data["worker"].signature
 

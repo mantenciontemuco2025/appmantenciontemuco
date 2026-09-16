@@ -31,7 +31,6 @@ interface FulfillForm {
   maintenance_type: string;
   loto_controls: LotoControl[];
   execution_date: string;   // fecha de ejecución — la coloca el trabajador
-  section_name: string;     // sección — la coloca el trabajador
   time_mode: WorkTimeMode;
   start_time: string;
   end_time: string;
@@ -77,7 +76,6 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
     maintenance_type: "PREVENTIVE",
     loto_controls: ["NOT_APPLICABLE"],
     execution_date: "",
-    section_name: "",
     time_mode: "RANGE",
     start_time: "",
     end_time: "",
@@ -146,7 +144,6 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
           execution_date:
             (data.execution_date || "").slice(0, 10) ||
             todayDateInputValue(),
-          section_name: data.section_name || "",
           time_mode: data.work_time_mode || "RANGE",
           start_time: (data.work_start_time || "").slice(0, 5),
           end_time: (data.work_end_time || "").slice(0, 5),
@@ -265,7 +262,6 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
       loto_status: values.loto_controls.includes("NOT_APPLICABLE") ? "NOT_APPLICABLE" : "YES",
       loto_controls: values.loto_controls,
       execution_date: values.execution_date || null,
-      section_name: values.section_name || null,
       work_time_mode: values.time_mode,
       work_start_time: values.time_mode === "RANGE" ? values.start_time || null : null,
       work_end_time: values.time_mode === "RANGE" ? values.end_time || null : null,
@@ -594,15 +590,6 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                     type="date"
                     value={form.execution_date}
                     onChange={(e) => updateFormField("execution_date", e.target.value)}
-                  />
-                </div>
-
-                <div>
-                  <label className={labelCls}>Sección</label>
-                  <Input
-                    placeholder="Ej: Sala de bombas, Planta 2..."
-                    value={form.section_name}
-                    onChange={(e) => updateFormField("section_name", e.target.value)}
                   />
                 </div>
 

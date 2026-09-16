@@ -12,6 +12,7 @@ import { Select } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
 import { VoiceDictation } from "@/components/maintenance/voice-dictation";
 import { todayDateInputValue } from "@/lib/utils";
+import { WORK_ORDER_AREAS } from "@/lib/work-order-areas";
 
 interface WorkerOption {
   id: number;
@@ -21,6 +22,7 @@ interface WorkerOption {
 interface Form {
   scheduled_date: string;
   request_date: string;   // Fecha de solicitud — la coloca el admin al solicitar
+  plant_area: string;
   area_id: number | null;
   equipment_id: number | null;
   description: string;
@@ -32,6 +34,7 @@ function emptyForm(): Form {
   return {
     scheduled_date: "",
     request_date: todayDateInputValue(),
+    plant_area: "",
     area_id: null,
     equipment_id: null,
     description: "",
@@ -130,8 +133,8 @@ export function OrderWizard() {
     load();
   }, [user]);
 
-  const selectedArea = areas.find((a) => a.id === form.area_id) || null;
-  const filteredEquipment = selectedArea?.equipment || [];
+  const selectedSection = areas.find((a) => a.id === form.area_id) || null;
+  const filteredEquipment = selectedSection?.equipment || [];
   const supervisorAreaIds =
     user?.role === "SUPERVISOR"
       ? (user.area_ids?.length ? user.area_ids : user.area_id ? [user.area_id] : [])
@@ -154,6 +157,7 @@ export function OrderWizard() {
 
   const formValid =
     !!form.request_date &&
+    !!form.plant_area &&
     !!form.area_id &&
     !!form.equipment_id &&
     !!form.description.trim() &&
@@ -165,6 +169,7 @@ export function OrderWizard() {
     return {
       title: (form.description || "").slice(0, 300),
       description: form.description || "",
+      plant_area: form.plant_area,
       area_id: form.area_id,
       equipment_id: form.equipment_id,
       maintenance_type: "PREVENTIVE",
@@ -236,12 +241,18 @@ export function OrderWizard() {
           </div>
         </div>
 
-        {/* Equipo intervenido */}
+        {/* Área general, sección y equipo: el catálogo de sección determina equipos. */}
         <div>
-          <h3 className="text-sm font-semibold mb-2">Equipo intervenido *</h3>
+          <h3 className="text-sm font-semibold mb-2">Ubicación del trabajo *</h3>
           <div className="grid grid-cols-1 gap-3">
             <Select
               label="Área"
+              options={WORK_ORDER_AREAS.map((name) => ({ value: name, label: name }))}
+              value={form.plant_area}
+              onChange={(e) => set("plant_area", e.target.value)}
+            />
+            <Select
+              label="Sección"
               options={areas.map((a) => ({ value: String(a.id), label: a.name }))}
               value={form.area_id ? String(form.area_id) : ""}
               disabled={supervisorWithoutArea}
@@ -277,7 +288,7 @@ export function OrderWizard() {
         </div>
         {supervisorWithoutArea && (
           <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-            Tu usuario supervisor aún no tiene un área asignada. Solicita al administrador configurarla antes de emitir una OT.
+            Tu usuario supervisor aún no tiene secciones asignadas. Solicita al administrador configurarlas antes de emitir una OT.
           </p>
         )}
         <VoiceDictation
