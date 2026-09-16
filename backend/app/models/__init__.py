@@ -11,6 +11,7 @@ from app.models.sync_job import ExternalSyncJob, SyncJobStatus
 from app.models.push_subscription import PushSubscription
 from app.models.supervisor_area import supervisor_areas
 from app.models.worker_column import WorkerColumn
+from app.models.work_order_evidence import WorkOrderEvidence
 
 __all__ = [
     "User",
@@ -28,4 +29,5 @@ __all__ = [
     "PushSubscription",
     "supervisor_areas",
     "WorkerColumn",
+    "WorkOrderEvidence",
 ]

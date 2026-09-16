@@ -12,6 +12,8 @@ All cell coordinates live in ot_mapping.py — never hardcoded here.
 
 import logging
 from datetime import datetime
+from io import BytesIO
+from uuid import uuid4
 
 from app.core.config import settings
 from app.services.google_api_cache import build_cached_service
@@ -532,6 +534,77 @@ def create_ot_file(ot_number: str, execution_date: datetime) -> dict:
     """
     folder_id = _ensure_month_folder(execution_date.year, execution_date.month)
     return _copy_template(ot_number, folder_id)
+
+
+def trash_ot_file(file_id: str) -> bool:
+    """Move an OT document to Drive trash; a missing file is already cleaned up."""
+    drive = _build_drive_write_service()
+    try:
+        drive.files().update(
+            fileId=file_id,
+            body={"trashed": True},
+            fields="id,trashed",
+        ).execute()
+        return True
+    except Exception as exc:  # noqa: BLE001 - Google client errors vary by transport.
+        if getattr(getattr(exc, "resp", None), "status", None) == 404:
+            logger.info("El archivo de OT %s ya no existe en Drive.", file_id)
+            return False
+        raise
+
+
+def _ensure_ot_evidence_folder(
+    ot_number: str,
+    execution_date: datetime,
+    ot_file_id: str | None = None,
+) -> tuple[object, str]:
+    """Create/find a private evidence folder beside the OT in Drive."""
+    drive = _build_drive_write_service()
+    parent_id = _get_file_parent(drive, ot_file_id) if ot_file_id else None
+    if not parent_id:
+        parent_id = _ensure_month_folder(execution_date.year, execution_date.month)
+        drive = _build_drive_write_service()
+
+    folder_name = f"{ot_number} - EVIDENCIAS"
+    folder_id = _find_child(drive, parent_id, folder_name)
+    if folder_id is None:
+        folder_id = _create_folder(drive, parent_id, folder_name)
+        logger.info("Carpeta de evidencias creada para %s", ot_number)
+    return drive, folder_id
+
+
+def upload_ot_evidence(
+    ot_number: str,
+    execution_date: datetime,
+    ot_file_id: str | None,
+    image_bytes: bytes,
+    mime_type: str,
+    stage: str,
+) -> str:
+    """Upload one private evidence image and return its Drive file id."""
+    from googleapiclient.http import MediaIoBaseUpload
+
+    drive, folder_id = _ensure_ot_evidence_folder(
+        ot_number, execution_date, ot_file_id
+    )
+    filename = f"{ot_number}_{stage}_{uuid4().hex[:12]}.jpg"
+    media = MediaIoBaseUpload(BytesIO(image_bytes), mimetype=mime_type, resumable=False)
+    created = drive.files().create(
+        body={"name": filename, "parents": [folder_id]},
+        media_body=media,
+        fields="id",
+    ).execute()
+    file_id = created["id"]
+    logger.info("Evidencia subida a Drive para %s (file_id=%s)", ot_number, file_id)
+    return file_id
+
+
+def download_ot_evidence(file_id: str) -> bytes:
+    """Download evidence through the backend; Drive files stay private."""
+    content = _build_drive_write_service().files().get_media(fileId=file_id).execute()
+    if not isinstance(content, bytes) or not content:
+        raise RuntimeError("Google Drive no devolvió la foto de evidencia.")
+    return content
 
 
 def populate_ot_fields(

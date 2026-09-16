@@ -1,8 +1,18 @@
 """Work Order CRUD tests (Google Drive mocked)."""
 
+from io import BytesIO
 from types import SimpleNamespace
 
+from PIL import Image
+from sqlalchemy import func, select
+
 from app.api.routes import work_orders as work_orders_route
+from app.models.audit_log import AuditLog
+from app.models.notification import Notification
+from app.models.sync_job import ExternalSyncJob, SyncJobStatus
+from app.models.work_order import WorkOrder
+from app.models.work_order_evidence import WorkOrderEvidence
+from app.models.work_order_participants import work_order_participants
 from tests.conftest import get_token, auth_headers
 
 
@@ -90,6 +100,367 @@ async def test_list_work_orders(client, seed_data, monkeypatch):
     orders = resp.json()
     assert len(orders) >= 1
     assert orders[0]["ot_number"].startswith("OT-")
+
+
+async def test_admin_delete_removes_ot_and_related_records(
+    client, seed_data, db_session_factory, monkeypatch
+):
+    """Deleting an erroneous OT cleans app references and its Google artifacts."""
+    deleted_google: list[tuple] = []
+    monkeypatch.setattr(
+        "app.core.config.settings.GOOGLE_MONTHLY_SPREADSHEET_ID", "monthly-test"
+    )
+    monkeypatch.setattr(
+        "app.api.routes.work_orders.delete_ot_from_register",
+        lambda spreadsheet_id, sheet, ot_number: deleted_google.append(
+            ("monthly", spreadsheet_id, sheet, ot_number)
+        ),
+    )
+    monkeypatch.setattr(
+        "app.api.routes.work_orders.drive_service.trash_ot_file",
+        lambda file_id: deleted_google.append(("drive", file_id)) or True,
+    )
+
+    admin_token = await get_token(client, "admin@test.com")
+    create = await client.post(
+        "/api/work-orders",
+        json={
+            "title": "OT de prueba para borrar",
+            "plant_area": "CEBADA",
+            "area_id": seed_data["area"].id,
+            "equipment_id": seed_data["equipment"].id,
+            "maintenance_type": "CORRECTIVE",
+            "execution_date": "2026-09-12",
+            "responsible_user_id": seed_data["worker"].id,
+            "participant_user_ids": [seed_data["worker"].id],
+        },
+        headers=auth_headers(admin_token),
+    )
+    assert create.status_code == 201
+    wo_id = create.json()["id"]
+    ot_number = create.json()["ot_number"]
+
+    async with db_session_factory() as db:
+        wo = await db.get(WorkOrder, wo_id)
+        wo.google_ot_file_id = "drive-file-test"
+        wo.monthly_sheet_sync_status = "SYNCED"
+        db.add(
+            WorkOrderEvidence(
+                work_order_id=wo_id,
+                drive_file_id="drive-photo-test",
+                filename="evidencia.jpg",
+                mime_type="image/jpeg",
+                stage="WORK",
+                uploaded_by_user_id=seed_data["worker"].id,
+                uploaded_by_name=seed_data["worker"].full_name,
+            )
+        )
+        db.add(
+            Notification(
+                user_id=seed_data["worker"].id,
+                type="OT_ASIGNADA",
+                message=f"Nueva OT {ot_number} asignada.",
+                link=f"/mis-ordenes/{wo_id}",
+            )
+        )
+        db.add(
+            ExternalSyncJob(
+                work_order_id=wo_id,
+                job_type="LIFECYCLE",
+                status=SyncJobStatus.PENDING,
+                actor_user_id=seed_data["admin"].id,
+            )
+        )
+        await db.commit()
+
+    response = await client.request(
+        "DELETE",
+        f"/api/work-orders/{wo_id}",
+        json={"confirm_ot_number": ot_number, "reason": "OT creada por error"},
+        headers=auth_headers(admin_token),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["deleted"] is True
+    assert response.json()["notifications_removed"] == 1
+    assert response.json()["evidence_files_removed"] == 1
+    assert deleted_google == [
+        ("monthly", "monthly-test", "SEPTIEMBRE", ot_number),
+        ("drive", "drive-file-test"),
+        ("drive", "drive-photo-test"),
+    ]
+
+    async with db_session_factory() as db:
+        assert await db.get(WorkOrder, wo_id) is None
+        assert await db.scalar(
+            select(func.count()).select_from(ExternalSyncJob).where(
+                ExternalSyncJob.work_order_id == wo_id
+            )
+        ) == 0
+        assert await db.scalar(
+            select(func.count()).select_from(Notification).where(
+                Notification.message.contains(ot_number)
+            )
+        ) == 0
+        assert await db.scalar(
+            select(func.count()).select_from(work_order_participants).where(
+                work_order_participants.c.work_order_id == wo_id
+            )
+        ) == 0
+        assert await db.scalar(
+            select(func.count()).select_from(WorkOrderEvidence).where(
+                WorkOrderEvidence.work_order_id == wo_id
+            )
+        ) == 0
+        audit = await db.scalar(
+            select(AuditLog).where(AuditLog.action == "DELETE_WORK_ORDER")
+        )
+        assert audit is not None
+        assert audit.entity_id is None
+        assert audit.new_data["ot_number"] == ot_number
+        assert audit.new_data["reason"] == "OT creada por error"
+
+
+async def test_only_admin_can_delete_and_ot_number_confirmation_is_required(
+    client, seed_data
+):
+    admin_token = await get_token(client, "admin@test.com")
+    create = await client.post(
+        "/api/work-orders",
+        json={
+            "title": "OT protegida",
+            "plant_area": "CEBADA",
+            "area_id": seed_data["area"].id,
+            "equipment_id": seed_data["equipment"].id,
+            "maintenance_type": "PREVENTIVE",
+        },
+        headers=auth_headers(admin_token),
+    )
+    wo_id = create.json()["id"]
+    ot_number = create.json()["ot_number"]
+
+    worker_token = await get_token(client, "ortiz@test.com")
+    denied = await client.request(
+        "DELETE",
+        f"/api/work-orders/{wo_id}",
+        json={"confirm_ot_number": ot_number, "reason": "OT creada por error"},
+        headers=auth_headers(worker_token),
+    )
+    assert denied.status_code == 403
+
+    wrong_confirmation = await client.request(
+        "DELETE",
+        f"/api/work-orders/{wo_id}",
+        json={"confirm_ot_number": "OT-INCORRECTA", "reason": "OT creada por error"},
+        headers=auth_headers(admin_token),
+    )
+    assert wrong_confirmation.status_code == 422
+    still_exists = await client.get(
+        f"/api/work-orders/{wo_id}", headers=auth_headers(admin_token)
+    )
+    assert still_exists.status_code == 200
+
+
+def _valid_png() -> bytes:
+    buffer = BytesIO()
+    Image.new("RGB", (8, 6), color=(20, 80, 140)).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+async def _create_evidence_test_order(client, seed_data, token, *, emit=False):
+    response = await client.post(
+        "/api/work-orders",
+        json={
+            "title": "OT con evidencia fotográfica",
+            "description": "Inspección de prueba para adjuntar evidencia",
+            "plant_area": "CEBADA",
+            "area_id": seed_data["area"].id,
+            "equipment_id": seed_data["equipment"].id,
+            "maintenance_type": "PREVENTIVE",
+            "execution_date": "2026-09-16",
+            "responsible_user_id": seed_data["worker"].id,
+            "participant_user_ids": [seed_data["worker"].id],
+            "emit": emit,
+        },
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def test_work_order_evidence_upload_list_and_private_download(
+    client, seed_data, monkeypatch
+):
+    uploads = []
+    monkeypatch.setattr(
+        "app.api.routes.work_orders.drive_service.upload_ot_evidence",
+        lambda *args: uploads.append(args) or f"drive-evidence-{len(uploads)}",
+    )
+    monkeypatch.setattr(
+        "app.api.routes.work_orders.drive_service.download_ot_evidence",
+        lambda file_id: b"private-image-bytes",
+    )
+
+    token = await get_token(client, "admin@test.com")
+    order = await _create_evidence_test_order(client, seed_data, token)
+    response = await client.post(
+        f"/api/work-orders/{order['id']}/evidence",
+        data={"stage": "ISSUE"},
+        files={"file": ("equipo.png", _valid_png(), "image/png")},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 201, response.text
+    evidence = response.json()
+    assert evidence["filename"] == "equipo.png"
+    assert evidence["stage"] == "ISSUE"
+    assert evidence["mime_type"] == "image/jpeg"
+    assert uploads[0][0] == order["ot_number"]
+    assert uploads[0][4] == "image/jpeg"
+
+    supervisor_token = await get_token(client, "supervisor@test.com")
+    supervisor_upload = await client.post(
+        f"/api/work-orders/{order['id']}/evidence",
+        data={"stage": "ISSUE"},
+        files={"file": ("supervisor.png", _valid_png(), "image/png")},
+        headers=auth_headers(supervisor_token),
+    )
+    assert supervisor_upload.status_code == 201, supervisor_upload.text
+    assert supervisor_upload.json()["uploaded_by_name"] == "Supervisor"
+
+    listed = await client.get(
+        f"/api/work-orders/{order['id']}/evidence", headers=auth_headers(token)
+    )
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()] == [evidence["id"], supervisor_upload.json()["id"]]
+
+    photo = await client.get(
+        f"/api/work-orders/{order['id']}/evidence/{evidence['id']}/content",
+        headers=auth_headers(token),
+    )
+    assert photo.status_code == 200
+    assert photo.headers["content-type"].startswith("image/jpeg")
+    assert photo.content == b"private-image-bytes"
+    assert photo.headers["cache-control"] == "private, max-age=300"
+
+
+async def test_work_order_evidence_limit_is_two_photos_per_user(
+    client, seed_data, monkeypatch
+):
+    uploaded = []
+    monkeypatch.setattr(
+        "app.api.routes.work_orders.drive_service.upload_ot_evidence",
+        lambda *args: uploaded.append(args) or f"drive-evidence-{len(uploaded)}",
+    )
+    token = await get_token(client, "admin@test.com")
+    order = await _create_evidence_test_order(
+        client, seed_data, token, emit=True
+    )
+
+    async def upload(user_token, stage):
+        return await client.post(
+            f"/api/work-orders/{order['id']}/evidence",
+            data={"stage": stage},
+            files={"file": ("foto.png", _valid_png(), "image/png")},
+            headers=auth_headers(user_token),
+        )
+
+    for _ in range(2):
+        response = await upload(token, "ISSUE")
+        assert response.status_code == 201, response.text
+
+    worker_token = await get_token(client, "ortiz@test.com")
+    for _ in range(2):
+        response = await upload(worker_token, "WORK")
+        assert response.status_code == 201, response.text
+
+    admin_third = await upload(token, "ISSUE")
+    worker_third = await upload(worker_token, "WORK")
+    assert admin_third.status_code == 409
+    assert worker_third.status_code == 409
+    assert "2 fotos" in admin_third.json()["detail"]
+    assert len(uploaded) == 4
+
+
+async def test_responsible_worker_can_upload_work_photo_but_not_issue_photo(
+    client, seed_data, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.api.routes.work_orders.drive_service.upload_ot_evidence",
+        lambda *args: "drive-worker-photo",
+    )
+    admin_token = await get_token(client, "admin@test.com")
+    order = await _create_evidence_test_order(
+        client, seed_data, admin_token, emit=True
+    )
+    worker_token = await get_token(client, "ortiz@test.com")
+
+    forbidden = await client.post(
+        f"/api/work-orders/{order['id']}/evidence",
+        data={"stage": "ISSUE"},
+        files={"file": ("trabajo.png", _valid_png(), "image/png")},
+        headers=auth_headers(worker_token),
+    )
+    assert forbidden.status_code == 403
+
+    uploaded = await client.post(
+        f"/api/work-orders/{order['id']}/evidence",
+        data={"stage": "WORK"},
+        files={"file": ("trabajo.png", _valid_png(), "image/png")},
+        headers=auth_headers(worker_token),
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    assert uploaded.json()["stage"] == "WORK"
+    assert uploaded.json()["uploaded_by_name"] == "Ortiz"
+
+
+async def test_supervisor_can_upload_work_photo_in_assigned_area(
+    client, seed_data, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.api.routes.work_orders.drive_service.upload_ot_evidence",
+        lambda *args: "drive-supervisor-work-photo",
+    )
+    admin_token = await get_token(client, "admin@test.com")
+    order = await _create_evidence_test_order(
+        client, seed_data, admin_token, emit=True
+    )
+    supervisor_token = await get_token(client, "supervisor@test.com")
+
+    uploaded = await client.post(
+        f"/api/work-orders/{order['id']}/evidence",
+        data={"stage": "WORK"},
+        files={"file": ("trabajo-supervisor.png", _valid_png(), "image/png")},
+        headers=auth_headers(supervisor_token),
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    assert uploaded.json()["stage"] == "WORK"
+    assert uploaded.json()["uploaded_by_name"] == "Supervisor"
+
+
+async def test_work_order_evidence_rejects_non_image_and_unauthorized_upload(
+    client, seed_data, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.api.routes.work_orders.drive_service.upload_ot_evidence",
+        lambda *args: "drive-evidence",
+    )
+    admin_token = await get_token(client, "admin@test.com")
+    order = await _create_evidence_test_order(client, seed_data, admin_token)
+    bad_file = await client.post(
+        f"/api/work-orders/{order['id']}/evidence",
+        data={"stage": "ISSUE"},
+        files={"file": ("nota.txt", b"not an image", "text/plain")},
+        headers=auth_headers(admin_token),
+    )
+    assert bad_file.status_code == 422
+
+    worker_token = await get_token(client, "valdes@test.com")
+    denied = await client.post(
+        f"/api/work-orders/{order['id']}/evidence",
+        data={"stage": "WORK"},
+        files={"file": ("foto.png", _valid_png(), "image/png")},
+        headers=auth_headers(worker_token),
+    )
+    assert denied.status_code == 403
 
 
 async def test_update_work_order(client, seed_data, monkeypatch):

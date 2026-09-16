@@ -21,6 +21,7 @@ import { SyncBadge } from "@/components/maintenance/sync-badge";
 import { PageLoading } from "@/components/ui/page-loading";
 import { formatDurationLong, formatDateOnly, todayDateInputValue } from "@/lib/utils";
 import { LOTO_CONTROL_OPTIONS } from "@/lib/loto";
+import { WorkOrderEvidencePanel } from "@/components/maintenance/work-order-evidence";
 
 const inputCls =
   "w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
@@ -783,6 +784,17 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
               <InfoRow label="N° vale" value={wo.voucher_number} />
             </CardContent>
           </Card>
+
+          <WorkOrderEvidencePanel
+            woId={wo.id}
+            stage="WORK"
+            currentUserId={user.id}
+            canUpload={
+              user.role === "WORKER" &&
+              wo.responsible_user_id === user.id &&
+              (wo.status === "PENDING" || wo.status === "IN_PROGRESS")
+            }
+          />
 
           {/* Lifecycle info */}
           {(wo.started_at || wo.completed_at || wo.work_time_mode || wo.actual_duration_minutes != null) && (

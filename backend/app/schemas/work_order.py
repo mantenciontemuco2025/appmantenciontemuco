@@ -218,6 +218,16 @@ class WorkOrderCounterResponse(BaseModel):
     next_ot_number: str
 
 
+class WorkOrderEvidenceResponse(BaseModel):
+    id: int
+    filename: str
+    mime_type: str
+    stage: Literal["ISSUE", "WORK"]
+    uploaded_by_user_id: int | None = None
+    uploaded_by_name: str
+    uploaded_at: datetime
+
+
 class WorkOrderListResponse(BaseModel):
     id: int
     ot_number: str

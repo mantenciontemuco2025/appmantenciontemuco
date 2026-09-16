@@ -16,11 +16,12 @@ import time
 from datetime import datetime, timezone, timedelta, date as _date, time as _time
 from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import noload, selectinload
+from starlette.concurrency import run_in_threadpool
 
 from app.api.dependencies import get_current_user, require_roles
 from app.core.config import settings
@@ -35,15 +36,18 @@ from app.models.user import User, UserRole
 from app.models.area import Area
 from app.models.equipment import Equipment
 from app.models.work_order import WorkOrder, WorkOrderStatus
+from app.models.work_order_evidence import WorkOrderEvidence
 from app.models.work_order_participants import work_order_participants
 from app.models.worker_column import WorkerColumn
 from app.models.sync_job import ExternalSyncJob, SyncJobStatus
+from app.models.notification import Notification
 from app.schemas.work_order import (
     WorkOrderCreate,
     WorkOrderUpdate,
     WorkOrderResponse,
     WorkOrderListResponse,
     WorkOrderCounterResponse,
+    WorkOrderEvidenceResponse,
 )
 from app.services.audit_service import create_audit_log
 from app.services import google_drive as drive_service
@@ -56,6 +60,7 @@ from app.services.ot_mapping import get_monthly_sheet_title
 from app.services.wo_state_machine import validate_transition, InvalidTransitionError
 from app.services import wo_permissions as perms
 from app.services import notification_service
+from app.services.evidence_images import MAX_UPLOAD_BYTES, prepare_evidence_image
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +211,12 @@ class CancelPayload(BaseModel):
 class ReopenPayload(BaseModel):
     """Body for reopening a closed OT. Reason is required (recorded in AuditLog)."""
     reopen_reason: str
+
+
+class DeleteWorkOrderPayload(BaseModel):
+    """Require an exact OT number and reason for an irreversible app deletion."""
+    confirm_ot_number: str
+    reason: str
 
 
 class ReassignPayload(BaseModel):
@@ -1562,6 +1573,153 @@ async def get_work_order(
     return _work_order_to_response(wo)
 
 
+@router.get("/{wo_id}/evidence", response_model=list[WorkOrderEvidenceResponse])
+async def list_work_order_evidence(
+    wo_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(_base_query().where(WorkOrder.id == wo_id))
+    wo = result.scalar_one_or_none()
+    if wo is None:
+        raise HTTPException(status_code=404, detail="Orden de trabajo no encontrada")
+    if not perms.can_view(wo, current_user):
+        raise HTTPException(status_code=403, detail="No tiene permiso para ver esta OT")
+
+    evidence_result = await db.execute(
+        select(WorkOrderEvidence)
+        .where(WorkOrderEvidence.work_order_id == wo_id)
+        .order_by(WorkOrderEvidence.uploaded_at, WorkOrderEvidence.id)
+    )
+    return list(evidence_result.scalars().all())
+
+
+@router.post(
+    "/{wo_id}/evidence",
+    response_model=WorkOrderEvidenceResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_work_order_evidence(
+    wo_id: int,
+    file: UploadFile = File(...),
+    stage: Literal["ISSUE", "WORK"] = Form(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        _base_query().where(WorkOrder.id == wo_id).with_for_update()
+    )
+    wo = result.scalar_one_or_none()
+    if wo is None:
+        raise HTTPException(status_code=404, detail="Orden de trabajo no encontrada")
+    if not perms.can_view(wo, current_user):
+        raise HTTPException(status_code=403, detail="No tiene permiso para ver esta OT")
+
+    if stage == "ISSUE":
+        if current_user.role not in manager_roles or not perms.can_issue(wo, current_user):
+            raise HTTPException(status_code=403, detail="Solo un administrador o supervisor puede adjuntar evidencia de emisión")
+        if wo.status not in (WorkOrderStatus.DRAFT.value, WorkOrderStatus.PENDING.value):
+            raise HTTPException(status_code=400, detail="La evidencia de emisión se adjunta antes de iniciar el trabajo")
+    else:
+        if current_user.role not in (UserRole.ADMIN, UserRole.SUPERVISOR, UserRole.WORKER):
+            raise HTTPException(status_code=403, detail="No tiene permiso para adjuntar evidencia del trabajo")
+        if current_user.role == UserRole.WORKER and not perms.can_complete(wo, current_user):
+            raise HTTPException(status_code=403, detail="Solo el trabajador responsable puede adjuntar evidencia del trabajo")
+        if current_user.role == UserRole.SUPERVISOR and not perms.can_issue(wo, current_user):
+            raise HTTPException(status_code=403, detail="No tiene permiso para adjuntar evidencia en esta área")
+        if wo.status not in (WorkOrderStatus.PENDING.value, WorkOrderStatus.IN_PROGRESS.value):
+            raise HTTPException(status_code=400, detail="La evidencia del trabajo se adjunta mientras la OT está pendiente o en proceso")
+
+    file_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
+    try:
+        image_bytes, mime_type = prepare_evidence_image(file_bytes, file.content_type)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    count_result = await db.execute(
+        select(func.count(WorkOrderEvidence.id)).where(
+            WorkOrderEvidence.work_order_id == wo_id,
+            WorkOrderEvidence.uploaded_by_user_id == current_user.id,
+        )
+    )
+    if int(count_result.scalar_one() or 0) >= 2:
+        raise HTTPException(status_code=409, detail="Ya subiste el máximo de 2 fotos para esta OT")
+
+    try:
+        drive_file_id = await run_in_threadpool(
+            drive_service.upload_ot_evidence,
+            wo.ot_number,
+            _exec_datetime(wo),
+            wo.google_ot_file_id,
+            image_bytes,
+            mime_type,
+            stage,
+        )
+    except Exception as exc:  # noqa: BLE001 - Google API errors vary by transport.
+        logger.exception("No se pudo subir evidencia de %s a Google Drive", wo.ot_number)
+        raise HTTPException(status_code=502, detail="No se pudo guardar la foto en Google Drive") from exc
+
+    original_name = (file.filename or "evidencia.jpg").replace("\\", "/").split("/")[-1]
+    evidence = WorkOrderEvidence(
+        work_order_id=wo_id,
+        drive_file_id=drive_file_id,
+        filename=original_name[:255] or "evidencia.jpg",
+        mime_type=mime_type,
+        stage=stage,
+        uploaded_by_user_id=current_user.id,
+        uploaded_by_name=current_user.full_name,
+    )
+    db.add(evidence)
+    try:
+        await db.flush()
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        try:
+            await run_in_threadpool(drive_service.trash_ot_file, drive_file_id)
+        except Exception:
+            logger.exception("No se pudo limpiar foto huérfana de Drive %s", drive_file_id)
+        raise HTTPException(status_code=500, detail="No se pudo registrar la foto en la OT") from exc
+
+    return evidence
+
+
+@router.get("/{wo_id}/evidence/{evidence_id}/content")
+async def get_work_order_evidence_content(
+    wo_id: int,
+    evidence_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(_base_query().where(WorkOrder.id == wo_id))
+    wo = result.scalar_one_or_none()
+    if wo is None:
+        raise HTTPException(status_code=404, detail="Orden de trabajo no encontrada")
+    if not perms.can_view(wo, current_user):
+        raise HTTPException(status_code=403, detail="No tiene permiso para ver esta OT")
+
+    evidence = await db.scalar(
+        select(WorkOrderEvidence).where(
+            WorkOrderEvidence.id == evidence_id,
+            WorkOrderEvidence.work_order_id == wo_id,
+        )
+    )
+    if evidence is None:
+        raise HTTPException(status_code=404, detail="Foto de evidencia no encontrada")
+    try:
+        contents = await run_in_threadpool(
+            drive_service.download_ot_evidence, evidence.drive_file_id
+        )
+    except Exception as exc:  # noqa: BLE001 - Google API errors vary by transport.
+        logger.exception("No se pudo leer evidencia %s desde Drive", evidence.id)
+        raise HTTPException(status_code=502, detail="No se pudo cargar la foto desde Google Drive") from exc
+    return Response(
+        contents,
+        media_type=evidence.mime_type,
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
 # ───────────────────────────────────────────────────────────────────────────
 # Update Work Order (managers only, blocked for APPROVED)
 # ───────────────────────────────────────────────────────────────────────────
@@ -2906,6 +3064,146 @@ async def reopen_work_order(
 # Re-runs the ENTIRE sync (OT document + monthly register row) so a previously
 # FAILED OT can be retried from the UI. Idempotent: reuses an already created
 # document instead of duplicating it in Drive.
+@router.delete("/{wo_id}", response_model=dict)
+async def delete_work_order(
+    wo_id: int,
+    payload: DeleteWorkOrderPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
+):
+    """Remove an erroneous OT from the app and its Google records (admin only)."""
+    result = await db.execute(
+        select(WorkOrder).where(WorkOrder.id == wo_id).with_for_update()
+    )
+    wo = result.scalar_one_or_none()
+    if wo is None:
+        raise HTTPException(status_code=404, detail="Orden de trabajo no encontrada")
+
+    reason = (payload.reason or "").strip()
+    if payload.confirm_ot_number.strip() != wo.ot_number:
+        raise HTTPException(
+            status_code=422,
+            detail="Escribe el número exacto de la OT para confirmar el borrado.",
+        )
+    if len(reason) < 8:
+        raise HTTPException(
+            status_code=422,
+            detail="Indica un motivo de al menos 8 caracteres.",
+        )
+
+    # Lock queue rows so the worker cannot start another Google sync while the
+    # external records are being removed. A live request must finish first.
+    job_result = await db.execute(
+        select(ExternalSyncJob)
+        .where(ExternalSyncJob.work_order_id == wo.id)
+        .with_for_update()
+    )
+    jobs = list(job_result.scalars().all())
+    if any(job.status == SyncJobStatus.PROCESSING for job in jobs):
+        raise HTTPException(
+            status_code=409,
+            detail="La OT se está sincronizando con Google. Espera y vuelve a intentar.",
+        )
+
+    ot_number = wo.ot_number
+    drive_file_id = wo.google_ot_file_id
+    evidence_result = await db.execute(
+        select(WorkOrderEvidence).where(WorkOrderEvidence.work_order_id == wo.id)
+    )
+    evidence_items = list(evidence_result.scalars().all())
+    execution_dt = _exec_datetime(wo)
+    register = await resolve_register(db, execution_dt.year)
+    spreadsheet_id = (
+        register.spreadsheet_id if register else settings.GOOGLE_MONTHLY_SPREADSHEET_ID
+    )
+    monthly_cleanup_needed = bool(drive_file_id) or wo.monthly_sheet_sync_status in {
+        "SYNCED", "FAILED"
+    }
+    drive_trashed = False
+    monthly_cleanup_attempted = bool(spreadsheet_id and monthly_cleanup_needed)
+
+    # Google APIs and the database do not share a transaction. Perform
+    # idempotent external cleanup first; if any call fails, keep the OT in the
+    # app so an administrator can retry without losing its source data.
+    try:
+        if monthly_cleanup_attempted:
+            await asyncio.to_thread(
+                delete_ot_from_register,
+                spreadsheet_id,
+                get_monthly_sheet_title(execution_dt.month),
+                ot_number,
+            )
+        if drive_file_id:
+            drive_trashed = await asyncio.to_thread(
+                drive_service.trash_ot_file, drive_file_id
+            )
+        for evidence in evidence_items:
+            await asyncio.to_thread(
+                drive_service.trash_ot_file, evidence.drive_file_id
+            )
+    except Exception as exc:  # noqa: BLE001 - report a retryable integration failure.
+        await db.rollback()
+        logger.exception("No se pudo completar el borrado externo de %s", ot_number)
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "No se eliminó la OT de la aplicación porque falló la limpieza de "
+                "Google. Puede que una parte externa ya se haya quitado; revisa y "
+                "vuelve a intentar."
+            ),
+        ) from exc
+
+    await db.execute(
+        delete(ExternalSyncJob).where(ExternalSyncJob.work_order_id == wo.id)
+    )
+    notification_result = await db.execute(
+        delete(Notification).where(
+            or_(
+                Notification.link.in_((f"/ordenes/{wo.id}", f"/mis-ordenes/{wo.id}")),
+                Notification.message == ot_number,
+                Notification.message.contains(f" {ot_number} ", autoescape=True),
+                Notification.message.startswith(f"{ot_number} ", autoescape=True),
+                Notification.message.endswith(f" {ot_number}.", autoescape=True),
+                Notification.message.endswith(f" {ot_number}", autoescape=True),
+            )
+        )
+    )
+    notifications_removed = max(notification_result.rowcount or 0, 0)
+
+    await db.execute(
+        delete(WorkOrderEvidence).where(WorkOrderEvidence.work_order_id == wo.id)
+    )
+    await db.delete(wo)
+    await db.flush()
+    await create_audit_log(
+        db,
+        user_id=current_user.id,
+        action="DELETE_WORK_ORDER",
+        entity_type="WorkOrder",
+        entity_id=None,
+        new_data={
+            "ot_number": ot_number,
+            "reason": reason,
+            "drive_moved_to_trash": drive_trashed,
+            "monthly_cleanup_attempted": monthly_cleanup_attempted,
+            "notifications_removed": notifications_removed,
+            "evidence_files_removed": len(evidence_items),
+        },
+    )
+    await db.commit()
+
+    global _counter_cache
+    _counter_cache = None
+    return {
+        "deleted": True,
+        "ot_number": ot_number,
+        "drive_moved_to_trash": drive_trashed,
+        "monthly_cleanup_attempted": monthly_cleanup_attempted,
+        "notifications_removed": notifications_removed,
+        "evidence_files_removed": len(evidence_items),
+    }
+
+
 @router.post("/{wo_id}/sync-google", response_model=WorkOrderResponse)
 async def sync_google(
     wo_id: int,

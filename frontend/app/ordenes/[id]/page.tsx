@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft, Loader2, Send, RotateCcw, CheckCircle, XCircle,
-  Clock, AlertTriangle, FileText, Eye, Users
+  Clock, AlertTriangle, FileText, Eye, Users, Trash2
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -22,6 +22,7 @@ import { cn, formatDateOnly } from "@/lib/utils";
 import { PageLoading } from "@/components/ui/page-loading";
 import { LOTO_CONTROL_LABELS } from "@/lib/loto";
 import { WORK_ORDER_AREAS } from "@/lib/work-order-areas";
+import { WorkOrderEvidencePanel } from "@/components/maintenance/work-order-evidence";
 
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   if (!value) return null;
@@ -53,6 +54,9 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
   const [returnReason, setReturnReason] = useState("");
   const [cancelReason, setCancelReason] = useState("");
   const [reopenReason, setReopenReason] = useState("");
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState("");
+  const [deleteReason, setDeleteReason] = useState("");
   const [completionNotes, setCompletionNotes] = useState("");
   // Reasignar — workers disponibles para el selector ({id, full_name}).
   const [assignableUsers, setAssignableUsers] = useState<{ id: number; full_name: string }[]>([]);
@@ -218,6 +222,24 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
       toast("success", "OT reabierta correctamente.");
     } catch (err) {
       toast("error", err instanceof Error ? err.message : "Error al reabrir la OT");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function handleDeleteWorkOrder() {
+    if (!wo || deleteConfirmation.trim() !== wo.ot_number || deleteReason.trim().length < 8) return;
+    setActionLoading(true);
+    try {
+      await api.del(`/api/work-orders/${id}`, {
+        confirm_ot_number: deleteConfirmation.trim(),
+        reason: deleteReason.trim(),
+      });
+      api.invalidateCache("/api/work-orders");
+      api.invalidateCache("/api/work-orders/counter");
+      router.replace("/ordenes");
+    } catch (err) {
+      toast("error", err instanceof Error ? err.message : "No se pudo eliminar la OT");
     } finally {
       setActionLoading(false);
     }
@@ -424,6 +446,16 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
             </CardContent>
           </Card>
 
+          <WorkOrderEvidencePanel
+            woId={wo.id}
+            stage={wo.status === "IN_PROGRESS" ? "WORK" : "ISSUE"}
+            currentUserId={user.id}
+            canUpload={
+              (user.role === "ADMIN" || user.role === "SUPERVISOR") &&
+              (wo.status === "DRAFT" || wo.status === "PENDING" || wo.status === "IN_PROGRESS")
+            }
+          />
+
           {/* Lifecycle card */}
           {(wo.started_at || wo.completed_at || wo.work_time_mode || wo.actual_duration_minutes != null) && (
             <Card className="mb-4">
@@ -561,6 +593,79 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
           )}
 
           {/* ── Confirmations (unificadas con ConfirmDialog) ─────────── */}
+          {user.role === "ADMIN" && (
+            <Card className="mt-5 border-red-200">
+              <CardContent className="p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="font-semibold text-red-800">Zona de peligro</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Elimina esta OT de la aplicación y del registro mensual; su documento de Drive irá a la papelera.
+                    </p>
+                  </div>
+                  {!showDeleteConfirm && (
+                    <Button
+                      variant="destructive"
+                      onClick={() => {
+                        setShowConfirm(null);
+                        setShowDeleteConfirm(true);
+                      }}
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" /> Eliminar OT
+                    </Button>
+                  )}
+                </div>
+                {showDeleteConfirm && (
+                  <ConfirmDialog
+                    title={`Eliminar ${wo.ot_number} y sus registros`}
+                    description={
+                      <>
+                        Se quitará de la aplicación y del registro mensual, y el archivo de Drive se moverá a la papelera.
+                        Las notificaciones dentro de la app se borrarán; los correos ya enviados no se pueden retirar.
+                        Se conservará una auditoría mínima del borrado. Esta acción no se puede deshacer desde la app.
+                      </>
+                    }
+                    confirmLabel="Eliminar OT y registros"
+                    tone="destructive"
+                    busy={actionLoading}
+                    disabled={
+                      deleteConfirmation.trim() !== wo.ot_number ||
+                      deleteReason.trim().length < 8
+                    }
+                    onConfirm={handleDeleteWorkOrder}
+                    onCancel={() => {
+                      setShowDeleteConfirm(false);
+                      setDeleteConfirmation("");
+                      setDeleteReason("");
+                    }}
+                  >
+                    <div className="mb-3 space-y-3">
+                      <label className="block text-sm font-medium">
+                        Escribe exactamente <span className="font-mono">{wo.ot_number}</span>
+                        <input
+                          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-sm"
+                          value={deleteConfirmation}
+                          onChange={(event) => setDeleteConfirmation(event.target.value)}
+                          autoComplete="off"
+                        />
+                      </label>
+                      <label className="block text-sm font-medium">
+                        Motivo del borrado (mínimo 8 caracteres)
+                        <textarea
+                          className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                          rows={2}
+                          value={deleteReason}
+                          onChange={(event) => setDeleteReason(event.target.value)}
+                          placeholder="Ej.: OT creada por error"
+                        />
+                      </label>
+                    </div>
+                  </ConfirmDialog>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {showConfirm === "issue" && (
             <ConfirmDialog
               title="¿Emitir esta OT?"

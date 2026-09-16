@@ -136,7 +136,9 @@ function canQueueMutation(path: string, method: string) {
     method !== "GET" &&
     method !== "HEAD" &&
     method !== "OPTIONS" &&
+    method !== "DELETE" &&
     path.startsWith("/api/work-orders/") &&
+    !path.includes("/evidence") &&
     !path.endsWith("/sync-google")
   );
 }
@@ -337,8 +339,53 @@ export async function apiFetch<T>(
   return data;
 }
 
+async function apiFetchBlob(path: string, allowRefresh = true): Promise<Blob> {
+  if (isBrowser() && !navigator.onLine) {
+    throw new ApiError("Sin conexión. No se puede cargar la foto de evidencia.", 0);
+  }
+
+  const token = getStoredToken();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}${path}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new ApiError("La foto está tardando demasiado en cargar.", 408);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (
+    response.status === 401 &&
+    allowRefresh &&
+    !path.endsWith("/api/auth/refresh")
+  ) {
+    const refreshedToken = await refreshAccessToken();
+    if (refreshedToken) return apiFetchBlob(path, false);
+  }
+  if (!response.ok) {
+    let detail = "No se pudo cargar la foto";
+    try {
+      const data = await response.json();
+      detail = data.detail || detail;
+    } catch {
+      // Keep the friendly fallback for non-JSON proxy errors.
+    }
+    throw new ApiError(detail, response.status);
+  }
+  return response.blob();
+}
+
 export const api = {
   get: <T>(path: string) => apiFetch<T>(path),
+  getBlob: (path: string) => apiFetchBlob(path),
   getCached: <T>(path: string, ttlMs: number) => apiGetCached<T>(path, ttlMs),
   invalidateCache: (path: string) => invalidateApiCache(path),
   post: <T>(path: string, body?: unknown) => apiFetch<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
@@ -346,5 +393,9 @@ export const api = {
   patch: <T>(path: string, body: unknown) => apiFetch<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
   upload: <T>(path: string, body: FormData, timeoutMs = 60000) =>
     apiFetch<T>(path, { method: "POST", body, timeoutMs }),
-  del: <T>(path: string) => apiFetch<T>(path, { method: "DELETE" }),
+  del: <T>(path: string, body?: unknown) =>
+    apiFetch<T>(path, {
+      method: "DELETE",
+      body: body === undefined ? undefined : JSON.stringify(body),
+    }),
 };
