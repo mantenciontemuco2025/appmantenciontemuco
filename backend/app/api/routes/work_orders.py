@@ -369,6 +369,10 @@ def _work_order_to_response(wo: WorkOrder) -> dict:
         "responsible_user_id": wo.responsible_user_id,
         "responsible_user_name": wo.responsible_user.full_name if wo.responsible_user else None,
         "participant_user_ids": participant_user_ids,
+        "is_external_work": wo.is_external_work,
+        "external_executor_name": wo.external_executor_name,
+        "external_company": wo.external_company,
+        "coordinator_user_id": wo.coordinator_user_id,
         "is_planned": wo.is_planned,
         "scheduled_date": wo.scheduled_date,
         "due_date": wo.due_date,
@@ -402,9 +406,11 @@ def _work_order_to_response(wo: WorkOrder) -> dict:
         "monthly_sheet_synced_at": wo.monthly_sheet_synced_at,
         "created_by_user_id": wo.created_by_user_id,
         "created_by_name": wo.created_by.full_name if wo.created_by else None,
-        "participant_names": [
-            n.strip() for n in (wo.participant_names or "").split(",") if n.strip()
-        ],
+        "participant_names": (
+            [] if wo.is_external_work else [
+                n.strip() for n in (wo.participant_names or "").split(",") if n.strip()
+            ]
+        ),
         "created_at": wo.created_at,
         "updated_at": wo.updated_at,
     }
@@ -541,6 +547,8 @@ async def _sync_work_order_to_monthly(
         participants = [
             n.strip() for n in (wo.participant_names or "").split(",") if n.strip()
         ]
+    if wo.is_external_work and wo.external_executor_name:
+        participants.append(wo.external_executor_name)
     participant_column_keys = await _monthly_worker_columns(
         db, participant_user_ids or []
     ) if participant_user_ids is not None else None
@@ -699,10 +707,11 @@ async def create_work_order(
         errors = []
         if not payload.description or not payload.description.strip():
             errors.append("Descripción del trabajo")
-        if not payload.responsible_user_id and not is_supervisor_submission:
+        if not payload.is_external_work and not payload.responsible_user_id and not is_supervisor_submission:
             errors.append("Responsable principal")
         if (
-            not payload.participant_user_ids
+            not payload.is_external_work
+            and not payload.participant_user_ids
             and not payload.responsible_user_id
             and not is_supervisor_submission
         ):
@@ -727,9 +736,13 @@ async def create_work_order(
         if is_supervisor_submission or not payload.emit
         else WorkOrderStatus.PENDING.value
     )
-    participant_ids = [] if is_supervisor else list(payload.participant_user_ids)
+    is_external_work = payload.is_external_work
+    participant_ids = (
+        [] if is_supervisor or is_external_work else list(payload.participant_user_ids)
+    )
     if (
         not is_supervisor
+        and not is_external_work
         and payload.responsible_user_id is not None
         and payload.responsible_user_id not in participant_ids
     ):
@@ -791,7 +804,17 @@ async def create_work_order(
         status=initial_status,
         submitted_for_review=is_supervisor_submission,
         created_by_user_id=current_user.id,
-        responsible_user_id=None if is_supervisor else payload.responsible_user_id,
+        responsible_user_id=(
+            None if is_supervisor or is_external_work else payload.responsible_user_id
+        ),
+        is_external_work=is_external_work,
+        external_executor_name=(payload.external_executor_name if is_external_work else None),
+        external_company=(payload.external_company if is_external_work else None),
+        coordinator_user_id=(
+            current_user.id
+            if is_external_work and current_user.role == UserRole.ADMIN
+            else None
+        ),
         # All new OTs are planned. If no separate scheduled date is supplied,
         # use the request date so the KPI has a stable planning period.
         is_planned=True,
@@ -824,6 +847,8 @@ async def create_work_order(
             "area_id": wo.area_id,
             "maintenance_type": wo.maintenance_type,
             "status": wo.status,
+            "is_external_work": wo.is_external_work,
+            "external_executor_name": wo.external_executor_name,
         },
     )
     await db.flush()
@@ -1194,6 +1219,8 @@ def _payload_from_wo(wo):
 async def _populate_individual_ot(wo: WorkOrder) -> None:
     """Write the current OT state, including immutable signature snapshots."""
     participants = [p.full_name for p in (wo.participants or [])]
+    if wo.is_external_work and wo.external_executor_name:
+        participants.append(wo.external_executor_name)
     await asyncio.to_thread(
         drive_service.populate_ot_fields,
         wo.google_ot_file_id,
@@ -1236,6 +1263,8 @@ async def _sync_ot_and_monthly(db, wo, area, equipment, payload, user_id):
         participants = [p.full_name for p in participant_objects]
     except Exception:
         participants = payload.participant_names or []
+    if wo.is_external_work and wo.external_executor_name:
+        participants.append(wo.external_executor_name)
     participant_column_keys = await _monthly_worker_columns(
         db, participant_user_ids or []
     ) if participant_user_ids is not None else None
@@ -1410,6 +1439,10 @@ async def list_work_orders(
             submitted_for_review=wo.submitted_for_review,
             responsible_user_id=wo.responsible_user_id,
             responsible_user_name=wo.responsible_user.full_name if wo.responsible_user else None,
+            is_external_work=wo.is_external_work,
+            external_executor_name=wo.external_executor_name,
+            external_company=wo.external_company,
+            coordinator_user_id=wo.coordinator_user_id,
             is_planned=wo.is_planned,
             scheduled_date=wo.scheduled_date,
             due_date=wo.due_date,
@@ -1429,7 +1462,7 @@ async def my_work_orders(
     limit: int | None = Query(default=None, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
-    """OTs where the current user is responsible or a participant."""
+    """OTs where the current user is responsible, coordinator, or participant."""
     # Subquery for participant IDs
     participant_wo_ids = select(work_order_participants.c.work_order_id).where(
         work_order_participants.c.user_id == current_user.id
@@ -1437,6 +1470,7 @@ async def my_work_orders(
 
     query = _list_query().where(
         (WorkOrder.responsible_user_id == current_user.id)
+        | (WorkOrder.coordinator_user_id == current_user.id)
         | (WorkOrder.id.in_(participant_wo_ids))
     )
 
@@ -1472,6 +1506,10 @@ async def my_work_orders(
             submitted_for_review=wo.submitted_for_review,
             responsible_user_id=wo.responsible_user_id,
             responsible_user_name=wo.responsible_user.full_name if wo.responsible_user else None,
+            is_external_work=wo.is_external_work,
+            external_executor_name=wo.external_executor_name,
+            external_company=wo.external_company,
+            coordinator_user_id=wo.coordinator_user_id,
             is_planned=wo.is_planned,
             scheduled_date=wo.scheduled_date,
             due_date=wo.due_date,
@@ -1759,6 +1797,58 @@ async def update_work_order(
     previous = {"title": wo.title, "status": wo.status}
     previous_execution_date = wo.execution_date
 
+    next_external_mode = (
+        payload.is_external_work
+        if "is_external_work" in payload.model_fields_set
+        else wo.is_external_work
+    )
+    next_external_name = (
+        payload.external_executor_name
+        if "external_executor_name" in payload.model_fields_set
+        else wo.external_executor_name
+    )
+    if next_external_mode and not next_external_name:
+        raise HTTPException(
+            status_code=400,
+            detail="Indica el nombre de la persona externa que realizará el trabajo",
+        )
+    if next_external_mode and (
+        payload.responsible_user_id is not None
+        or (payload.participant_user_ids is not None and payload.participant_user_ids)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Una OT externa no puede asignar trabajadores internos como ejecutores",
+        )
+    if "is_external_work" in payload.model_fields_set:
+        wo.is_external_work = bool(payload.is_external_work)
+        if wo.is_external_work:
+            wo.responsible_user_id = None
+            await db.execute(
+                work_order_participants.delete().where(
+                    work_order_participants.c.work_order_id == wo.id
+                )
+            )
+            wo.coordinator_user_id = (
+                current_user.id if current_user.role == UserRole.ADMIN else None
+            )
+        else:
+            wo.external_executor_name = None
+            wo.external_company = None
+            wo.coordinator_user_id = None
+    if "external_executor_name" in payload.model_fields_set:
+        wo.external_executor_name = payload.external_executor_name
+    if "external_company" in payload.model_fields_set:
+        wo.external_company = payload.external_company
+    if wo.is_external_work:
+        wo.participant_names = None
+    else:
+        # Do not leave contractor metadata attached after changing the OT back
+        # to the regular employee workflow.
+        wo.external_executor_name = None
+        wo.external_company = None
+        wo.coordinator_user_id = None
+
     if payload.title is not None:
         wo.title = payload.title.strip()
     if payload.description is not None:
@@ -1835,7 +1925,7 @@ async def update_work_order(
         wo.due_date = payload.due_date
 
     # Handle M2M participant updates
-    if payload.participant_user_ids is not None:
+    if payload.participant_user_ids is not None and not wo.is_external_work:
         participant_ids = list(payload.participant_user_ids)
         if wo.responsible_user_id is not None and wo.responsible_user_id not in participant_ids:
             participant_ids.append(wo.responsible_user_id)
@@ -1880,6 +1970,7 @@ async def update_work_order(
         "status", "title", "description", "area_id", "plant_area", "equipment_id",
         "section_name", "maintenance_type", "estimated_time",
         "execution_date", "participant_names", "responsible_user_id",
+        "is_external_work", "external_executor_name", "external_company",
     }
     changed = payload.model_dump(exclude_unset=True)
     monthly_relevant = set(changed) & _changed_monthly_fields
@@ -1894,6 +1985,7 @@ async def update_work_order(
         "request_date", "resources_required", "risks", "observations",
         "folio", "voucher_number", "requested_by",
         "responsible_user_id", "participant_user_ids", "participant_names",
+        "is_external_work", "external_executor_name", "external_company",
     }
     populate_individual = bool(set(changed) & _changed_ot_fields and wo.google_ot_file_id)
     should_sync = should_sync or populate_individual
@@ -1947,6 +2039,14 @@ async def reassign_work_order(
         raise HTTPException(
             status_code=403,
             detail="Solo el administrador puede asignar responsables y participantes",
+        )
+    if wo.is_external_work and (
+        payload.responsible_user_id is not None
+        or (payload.participant_user_ids is not None and payload.participant_user_ids)
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Una OT externa no puede asignar trabajadores internos como ejecutores",
         )
 
     if all(value is None for value in (
@@ -2148,6 +2248,11 @@ async def fulfill_work_order(
         wo.worked_duration_minutes = payload.worked_duration_minutes
     # Participants (M2M)
     if payload.participant_user_ids is not None:
+        if wo.is_external_work and payload.participant_user_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="Una OT externa no puede registrar trabajadores internos como ejecutores",
+            )
         participant_ids = list(payload.participant_user_ids)
         if wo.responsible_user_id is not None and wo.responsible_user_id not in participant_ids:
             participant_ids.append(wo.responsible_user_id)
@@ -2368,18 +2473,19 @@ async def issue_work_order(
     errors = []
     if not wo.description or not wo.description.strip():
         errors.append("Descripción del trabajo")
-    if not wo.responsible_user_id:
+    if wo.is_external_work and not wo.external_executor_name:
+        errors.append("Nombre de la persona externa")
+    if not wo.is_external_work and not wo.responsible_user_id:
         errors.append("Responsable principal")
-    await _ensure_responsible_is_participant(db, wo)
-    participant_result = await db.execute(
-        select(work_order_participants.c.user_id).where(
-            work_order_participants.c.work_order_id == wo.id
-        ).limit(1)
-    )
-    if participant_result.scalar_one_or_none() is None:
-        # Participants: who enters/participates in the OT — chosen by admin.
-        # Resolve from the M2M relationship (already loaded in _base_query).
-        errors.append("Al menos un participante")
+    if not wo.is_external_work:
+        await _ensure_responsible_is_participant(db, wo)
+        participant_result = await db.execute(
+            select(work_order_participants.c.user_id).where(
+                work_order_participants.c.work_order_id == wo.id
+            ).limit(1)
+        )
+        if participant_result.scalar_one_or_none() is None:
+            errors.append("Al menos un participante")
     if not current_user.signature:
         errors.append("Firma manuscrita en Mi firma")
 
@@ -2401,6 +2507,17 @@ async def issue_work_order(
     was_submitted_for_review = wo.submitted_for_review
     wo.status = WorkOrderStatus.PENDING.value
     wo.submitted_for_review = False
+    if wo.is_external_work:
+        # The accepting administrator is accountable for inspecting and
+        # closing the contractor's work, but is not recorded as a performer.
+        wo.responsible_user_id = None
+        wo.coordinator_user_id = current_user.id
+        await db.execute(
+            work_order_participants.delete().where(
+                work_order_participants.c.work_order_id == wo.id
+            )
+        )
+        wo.participant_names = None
     if not was_submitted_for_review:
         wo.requested_by = current_user.full_name
     # Only the administrator authorizes the emitted OT.
@@ -2502,16 +2619,20 @@ async def batch_issue_work_orders(
         errors = []
         if not wo.description or not wo.description.strip():
             errors.append("Descripción del trabajo")
-        if not wo.responsible_user_id:
-            errors.append("Responsable principal")
-        await _ensure_responsible_is_participant(db, wo)
-        participant_result = await db.execute(
-            select(work_order_participants.c.user_id).where(
-                work_order_participants.c.work_order_id == wo.id
-            ).limit(1)
-        )
-        if participant_result.scalar_one_or_none() is None:
-            errors.append("Al menos un participante")
+        if wo.is_external_work:
+            if not wo.external_executor_name:
+                errors.append("Nombre de la persona externa")
+        else:
+            if not wo.responsible_user_id:
+                errors.append("Responsable principal")
+            await _ensure_responsible_is_participant(db, wo)
+            participant_result = await db.execute(
+                select(work_order_participants.c.user_id).where(
+                    work_order_participants.c.work_order_id == wo.id
+                ).limit(1)
+            )
+            if participant_result.scalar_one_or_none() is None:
+                errors.append("Al menos un participante")
         if errors:
             failures.append(
                 {
@@ -2530,6 +2651,9 @@ async def batch_issue_work_orders(
         previous_status = wo.status
         wo.status = WorkOrderStatus.PENDING.value
         wo.submitted_for_review = False
+        if wo.is_external_work:
+            wo.responsible_user_id = None
+            wo.coordinator_user_id = current_user.id
         # Batch emission is for administrator-created drafts only, so the
         # administrator's signature is the requester signature in this path.
         wo.requested_by = current_user.full_name

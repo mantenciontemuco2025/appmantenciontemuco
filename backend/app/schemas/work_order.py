@@ -1,6 +1,6 @@
 from datetime import datetime, date, time
 from typing import Literal
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.work_order import WorkOrderStatus, LotoStatus
 from app.core.loto import normalize_loto_controls
@@ -29,6 +29,12 @@ class WorkOrderCreate(BaseModel):
     requested_by: str | None = None
     approved_by: str | None = None
     participant_names: list[str] = []
+
+    # External contractors are tracked by name only; they do not need an app
+    # account and are deliberately not inserted into the employee M2M roster.
+    is_external_work: bool = False
+    external_executor_name: str | None = Field(default=None, max_length=200)
+    external_company: str | None = Field(default=None, max_length=200)
 
     # ── Workflow fields ──────────────────────────────────────────────────
     responsible_user_id: int | None = None
@@ -78,6 +84,24 @@ class WorkOrderCreate(BaseModel):
             raise ValueError(f"Área no válida. Use: {', '.join(WORK_ORDER_AREAS)}")
         return normalized
 
+    @field_validator("external_executor_name", "external_company")
+    @classmethod
+    def normalize_external_text(cls, value: str | None) -> str | None:
+        value = value.strip() if value else None
+        return value or None
+
+    @model_validator(mode="after")
+    def external_name_required(self):
+        if self.is_external_work and not self.external_executor_name:
+            raise ValueError("Indica el nombre de la persona externa que realizará el trabajo")
+        if self.is_external_work and (
+            self.responsible_user_id
+            or self.participant_user_ids
+            or self.participant_names
+        ):
+            raise ValueError("Una OT externa no puede asignar trabajadores internos como ejecutores")
+        return self
+
 
 class WorkOrderUpdate(BaseModel):
     title: str | None = None
@@ -104,6 +128,9 @@ class WorkOrderUpdate(BaseModel):
     # ── Workflow fields ──────────────────────────────────────────────────
     responsible_user_id: int | None = None
     participant_user_ids: list[int] | None = None
+    is_external_work: bool | None = None
+    external_executor_name: str | None = Field(default=None, max_length=200)
+    external_company: str | None = Field(default=None, max_length=200)
     is_planned: bool | None = None
     scheduled_date: date | None = None
     due_date: date | None = None
@@ -129,6 +156,12 @@ class WorkOrderUpdate(BaseModel):
         if normalized not in WORK_ORDER_AREAS:
             raise ValueError(f"Área no válida. Use: {', '.join(WORK_ORDER_AREAS)}")
         return normalized
+
+    @field_validator("external_executor_name", "external_company")
+    @classmethod
+    def normalize_external_text(cls, value: str | None) -> str | None:
+        value = value.strip() if value else None
+        return value or None
 
 
 class WorkOrderResponse(BaseModel):
@@ -164,6 +197,10 @@ class WorkOrderResponse(BaseModel):
     responsible_user_id: int | None = None
     responsible_user_name: str | None = None
     participant_user_ids: list[int] = []
+    is_external_work: bool = False
+    external_executor_name: str | None = None
+    external_company: str | None = None
+    coordinator_user_id: int | None = None
     is_planned: bool = False
     scheduled_date: date | None = None
     due_date: date | None = None
@@ -249,6 +286,10 @@ class WorkOrderListResponse(BaseModel):
     # ── Workflow fields ──────────────────────────────────────────────────
     responsible_user_id: int | None = None
     responsible_user_name: str | None = None
+    is_external_work: bool = False
+    external_executor_name: str | None = None
+    external_company: str | None = None
+    coordinator_user_id: int | None = None
     is_planned: bool = False
     scheduled_date: date | None = None
     due_date: date | None = None

@@ -18,7 +18,10 @@ type SpeechRecognitionLike = {
   lang: string;
   continuous: boolean;
   interimResults: boolean;
-  onresult: ((event: { results: { [i: number]: { [j: number]: { transcript: string } }; length: number } }) => void) | null;
+  onresult: ((event: {
+    resultIndex?: number;
+    results: ArrayLike<{ isFinal?: boolean; 0: { transcript: string } }>;
+  }) => void) | null;
   onend: (() => void) | null;
   onerror: (() => void) | null;
   start: () => void;
@@ -36,6 +39,11 @@ export function VoiceDictation({
   const [listening, setListening] = useState(false);
   const [middleware, setMiddleware] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const onTranscriptRef = useRef(onTranscript);
+
+  useEffect(() => {
+    onTranscriptRef.current = onTranscript;
+  }, [onTranscript]);
 
   useEffect(() => {
     const SpeechRecognition =
@@ -48,11 +56,16 @@ export function VoiceDictation({
       rec.continuous = true;
       rec.interimResults = false;
       rec.onresult = (event) => {
-        let transcript = "";
-        for (let i = 0; i < event.results.length; i++) {
-          transcript += event.results[i][0].transcript;
-        }
-        onTranscript(transcript.trim());
+        const firstNewResult = event.resultIndex ?? 0;
+        const transcript = Array.from(
+          { length: event.results.length - firstNewResult },
+          (_, index) => event.results[firstNewResult + index],
+        )
+          .filter((result) => result.isFinal !== false)
+          .map((result) => result[0].transcript.trim())
+          .filter(Boolean)
+          .join(" ");
+        if (transcript) onTranscriptRef.current(transcript);
       };
       rec.onend = () => setListening(false);
       rec.onerror = () => setListening(false);

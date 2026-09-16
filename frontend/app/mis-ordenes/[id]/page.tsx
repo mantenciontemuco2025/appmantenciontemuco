@@ -197,7 +197,10 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wo?.ot_sheet_sync_status, wo?.monthly_sheet_sync_status]);
 
-  const isResponsible = user && wo && wo.responsible_user_id === user.id;
+  const isResponsible = user && wo && (
+    wo.responsible_user_id === user.id ||
+    (user.role === "ADMIN" && wo.is_external_work && wo.coordinator_user_id === user.id)
+  );
   // Can fulfill details while PENDING (before work starts) or IN_PROGRESS
   const canFulfill =
     isResponsible && (wo?.status === "PENDING" || wo?.status === "IN_PROGRESS");
@@ -246,8 +249,17 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
   }
 
   function updateFormField<K extends keyof FulfillForm>(key: K, value: FulfillForm[K]) {
-    const next = { ...form, [key]: value } as FulfillForm;
-    setForm(next);
+    setForm((current) => ({ ...current, [key]: value }) as FulfillForm);
+  }
+
+  function appendDictation(
+    key: "resources_required" | "risks" | "observations",
+    text: string,
+  ) {
+    setForm((current) => ({
+      ...current,
+      [key]: current[key] ? `${current[key]} ${text}` : text,
+    }));
   }
 
   function toggleLotoControl(control: Exclude<LotoControl, "NOT_APPLICABLE">) {
@@ -671,14 +683,7 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                     onChange={(e) => updateFormField("resources_required", e.target.value)}
                   />
                   <VoiceDictation
-                    onTranscript={(text) =>
-                      updateFormField(
-                        "resources_required",
-                        form.resources_required
-                          ? `${form.resources_required} ${text}`
-                          : text
-                      )
-                    }
+                    onTranscript={(text) => appendDictation("resources_required", text)}
                   />
                 </div>
 
@@ -691,12 +696,7 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                     onChange={(e) => updateFormField("risks", e.target.value)}
                   />
                   <VoiceDictation
-                    onTranscript={(text) =>
-                      updateFormField(
-                        "risks",
-                        form.risks ? `${form.risks} ${text}` : text
-                      )
-                    }
+                    onTranscript={(text) => appendDictation("risks", text)}
                   />
                 </div>
 
@@ -708,12 +708,7 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                     onChange={(e) => updateFormField("observations", e.target.value)}
                   />
                   <VoiceDictation
-                    onTranscript={(text) =>
-                      updateFormField(
-                        "observations",
-                        form.observations ? `${form.observations} ${text}` : text
-                      )
-                    }
+                    onTranscript={(text) => appendDictation("observations", text)}
                   />
                 </div>
 
@@ -770,9 +765,17 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                 value={formatDateOnly(wo.request_date)}
               />
               <InfoRow
-                label="Responsable"
-                value={wo.responsible_user_name || <span className="text-muted-foreground">No asignado</span>}
+                label={wo.is_external_work ? "Coordinador interno" : "Responsable"}
+                value={wo.is_external_work
+                  ? <span className="font-medium">Coordinación: {wo.coordinator_user_id === user.id ? "tú" : "administrador"}</span>
+                  : wo.responsible_user_name || <span className="text-muted-foreground">No asignado</span>}
               />
+              {wo.is_external_work && (
+                <>
+                  <InfoRow label="Persona externa" value={wo.external_executor_name} />
+                  <InfoRow label="Empresa contratista" value={wo.external_company} />
+                </>
+              )}
               {wo.participant_names.length > 0 && (
                 <InfoRow label="Participantes" value={wo.participant_names.join(", ")} />
               )}
@@ -790,8 +793,8 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
             stage="WORK"
             currentUserId={user.id}
             canUpload={
-              user.role === "WORKER" &&
-              wo.responsible_user_id === user.id &&
+              ((user.role === "WORKER" && wo.responsible_user_id === user.id) ||
+                (user.role === "ADMIN" && wo.is_external_work && wo.coordinator_user_id === user.id)) &&
               (wo.status === "PENDING" || wo.status === "IN_PROGRESS")
             }
           />

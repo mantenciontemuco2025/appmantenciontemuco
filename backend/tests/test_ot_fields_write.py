@@ -564,6 +564,30 @@ def test_sync_writes_new_participant_in_summary_column(oauth_settings, monkeypat
     assert row[ord("X") - ord("A")] == "Trabajador Nuevo"
 
 
+def test_sync_records_external_name_without_marking_an_employee_column(
+    oauth_settings, monkeypatch
+):
+    """Contractor is visible in the existing summary cell, never as an employee X."""
+    fake = _FakeSheetsWithHeaders()
+    fake.monthly_rows["SEPTIEMBRE"] = []
+    monkeypatch.setattr(google_drive, "_build_sheets_write_service", lambda: fake)
+    monkeypatch.setattr(google_drive, "_build_sheets_service", lambda: fake)
+    monkeypatch.setattr(google_drive.settings, "GOOGLE_MONTHLY_SPREADSHEET_ID", "m1")
+
+    exec_dt = datetime.combine(date(2026, 9, 3), time.min)
+    google_drive.sync_to_monthly_sheet(
+        "OT-2026-0708", exec_dt,
+        area_name="CEBADA", section_name="Malta", equipment_name="Filtro",
+        description="Mantención contratista", maintenance_type="CORRECTIVE",
+        participants=["Wilson Contratista"], duration_hours=2.0,
+        participant_user_ids=[], participant_column_keys={},
+    )
+
+    row = fake.writes[0][1]
+    assert row[ord("X") - ord("A")] == "Wilson Contratista"
+    assert row[ord("G") - ord("A")] == ""
+
+
 def test_sync_estado_full_cycle_updates_same_row(oauth_settings, monkeypatch, tmp_path):
     """PENDING -> IN_PROGRESS -> COMPLETED updates the SAME row (one append + updates)."""
     fake = _FakeSheetsWithHeaders()

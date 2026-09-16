@@ -29,6 +29,9 @@ interface Form {
   description: string;
   responsible_user_id: number | null;
   participant_ids: number[];
+  is_external_work: boolean;
+  external_executor_name: string;
+  external_company: string;
 }
 
 function emptyForm(): Form {
@@ -41,6 +44,9 @@ function emptyForm(): Form {
     description: "",
     responsible_user_id: null,
     participant_ids: [],
+    is_external_work: false,
+    external_executor_name: "",
+    external_company: "",
   };
 }
 
@@ -146,6 +152,7 @@ export function OrderWizard() {
       : [];
   const supervisorWithoutArea = user?.role === "SUPERVISOR" && supervisorAreaIds.length === 0;
   const isSupervisor = user?.role === "SUPERVISOR";
+  const isExternalWork = form.is_external_work;
   const canCreateEquipment = user?.role === "ADMIN" || isSupervisor;
 
   function set<K extends keyof Form>(key: K, value: Form[K]) {
@@ -197,9 +204,9 @@ export function OrderWizard() {
     !!form.area_id &&
     !!form.equipment_id &&
     !!form.description.trim() &&
-    (isSupervisor || (
-      form.responsible_user_id !== null
-    ));
+    (isExternalWork
+      ? !!form.external_executor_name.trim()
+      : isSupervisor || form.responsible_user_id !== null);
 
   function buildPayload(emit: boolean) {
     return {
@@ -213,8 +220,11 @@ export function OrderWizard() {
       request_date: form.request_date || null,
       is_planned: true,
       scheduled_date: form.scheduled_date || form.request_date || null,
-      responsible_user_id: isSupervisor ? null : form.responsible_user_id,
-      participant_user_ids: isSupervisor ? [] : form.participant_ids,
+      responsible_user_id: isSupervisor || isExternalWork ? null : form.responsible_user_id,
+      participant_user_ids: isSupervisor || isExternalWork ? [] : form.participant_ids,
+      is_external_work: isExternalWork,
+      external_executor_name: isExternalWork ? form.external_executor_name.trim() : null,
+      external_company: isExternalWork ? (form.external_company.trim() || null) : null,
       emit,
     };
   }
@@ -395,7 +405,12 @@ export function OrderWizard() {
         )}
         <VoiceDictation
           onTranscript={(text) =>
-            set("description", form.description ? `${form.description} ${text}` : text)
+            setForm((current) => ({
+              ...current,
+              description: current.description
+                ? `${current.description} ${text}`
+                : text,
+            }))
           }
         />
         <div className="flex items-center justify-between gap-3 rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
@@ -438,12 +453,67 @@ export function OrderWizard() {
         </div>
 
         {/* La asignación la realiza el administrador después de revisar la OT. */}
-        {isSupervisor ? (
+        <div className="rounded-lg border p-3">
+          <label className="flex cursor-pointer items-start gap-3">
+            <input
+              type="checkbox"
+              checked={form.is_external_work}
+              onChange={(event) => set("is_external_work", event.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-input"
+            />
+            <span>
+              <span className="block text-sm font-medium">Trabajo realizado por externo</span>
+              <span className="mt-0.5 block text-xs text-muted-foreground">
+                La persona externa no necesita una cuenta en la aplicación.
+              </span>
+            </span>
+          </label>
+          {form.is_external_work && (
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-sm font-medium" htmlFor="external-executor-name">
+                  Nombre de quien hará el trabajo *
+                </label>
+                <Input
+                  id="external-executor-name"
+                  maxLength={200}
+                  autoComplete="name"
+                  value={form.external_executor_name}
+                  onChange={(event) => set("external_executor_name", event.target.value)}
+                  placeholder="Nombre y apellido"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium" htmlFor="external-company">
+                  Empresa (opcional)
+                </label>
+                <Input
+                  id="external-company"
+                  maxLength={200}
+                  autoComplete="organization"
+                  value={form.external_company}
+                  onChange={(event) => set("external_company", event.target.value)}
+                  placeholder="Empresa contratista"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground sm:col-span-2">
+                El administrador quedará a cargo de iniciar, verificar y cerrar la OT. Las horas se atribuirán al trabajo externo, no a sus horas personales.
+              </p>
+            </div>
+          )}
+        </div>
+
+        {isSupervisor || isExternalWork ? (
           <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
-            <p className="font-medium">La asignación la realizará el administrador</p>
+            <p className="font-medium">
+              {isExternalWork ? "El administrador coordinará el trabajo externo" : "La asignación la realizará el administrador"}
+            </p>
             <p className="mt-1 text-xs text-blue-800">
-              Envía la solicitud con la información del trabajo. El administrador la revisará,
-              elegirá al responsable y agregará los participantes antes de emitirla.
+              {isExternalWork
+                ? isSupervisor
+                  ? "Envía la solicitud y, al aceptarla, el administrador verá la OT en sus órdenes para supervisar y cerrar el trabajo."
+                  : "La OT quedará en tus órdenes. Iníciala, registra las horas reales del contratista y ciérrala después de verificar el trabajo."
+                : "Envía la solicitud con la información del trabajo. El administrador la revisará, elegirá al responsable y agregará los participantes antes de emitirla."}
             </p>
           </div>
         ) : (

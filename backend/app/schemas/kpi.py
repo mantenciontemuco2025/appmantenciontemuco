@@ -15,6 +15,8 @@ class KpiSummary(BaseModel):
     compliance_target_percent: float
     total_hours: float
     total_person_hours: float
+    external_ots: int
+    external_hours: float
     average_hours_per_ot: float
     overdue_ots: int
     stale_pending_ots: int
@@ -44,6 +46,16 @@ class KpiWorkerDetailRow(BaseModel):
     assigned_ots: int
     completed_ots: int
     person_hours: float
+
+
+class KpiExternalWorkRow(BaseModel):
+    executor_name: str
+    company: str | None
+    area_name: str
+    maintenance_type: str
+    total_ots: int
+    completed_ots: int
+    total_hours: float
 
 
 class KpiAreaTypeRow(BaseModel):
@@ -91,6 +103,7 @@ class KpiResponse(BaseModel):
     by_maintenance_type: list[KpiMaintenanceRow]
     by_worker: list[KpiWorkerRow]
     by_worker_detail: list[KpiWorkerDetailRow]
+    by_external_work: list[KpiExternalWorkRow]
     by_area: list[KpiAreaRow]
     by_area_type: list[KpiAreaTypeRow]
     by_section: list[KpiSectionRow]

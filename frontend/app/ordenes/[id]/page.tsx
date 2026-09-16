@@ -386,7 +386,9 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
           )}
           {wo.submitted_for_review && user.role === "ADMIN" && (
             <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-              Esta OT fue enviada por el supervisor. Asigna el responsable y los participantes para poder aceptarla y emitirla.
+              {wo.is_external_work
+                ? `Solicitud de trabajo externo enviada por el supervisor. Al aceptarla, quedarás a cargo de coordinar, verificar y cerrar la OT de ${wo.external_executor_name || "la persona externa"}.`
+                : "Esta OT fue enviada por el supervisor. Asigna el responsable y los participantes para poder aceptarla y emitirla."}
             </div>
           )}
 
@@ -429,9 +431,12 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
               />
               <InfoRow label="Tiempo estimado" value={wo.estimated_time ? `${wo.estimated_time} minutos` : null} />
               <InfoRow
-                label="Responsable"
-                value={wo.responsible_user_name || <span className="text-orange-600 font-medium">No asignado</span>}
+                label={wo.is_external_work ? "Persona externa" : "Responsable"}
+                value={wo.is_external_work
+                  ? wo.external_executor_name
+                  : wo.responsible_user_name || <span className="text-orange-600 font-medium">No asignado</span>}
               />
+              {wo.is_external_work && <InfoRow label="Empresa contratista" value={wo.external_company} />}
               {wo.participant_names.length > 0 && (
                 <InfoRow label="Participantes" value={wo.participant_names.join(", ")} />
               )}

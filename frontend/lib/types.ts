@@ -57,6 +57,8 @@ export interface KpiSummary {
   compliance_target_percent: number;
   total_hours: number;
   total_person_hours: number;
+  external_ots: number;
+  external_hours: number;
   average_hours_per_ot: number;
   overdue_ots: number;
   stale_pending_ots: number;
@@ -86,6 +88,16 @@ export interface KpiWorkerDetailRow {
   assigned_ots: number;
   completed_ots: number;
   person_hours: number;
+}
+
+export interface KpiExternalWorkRow {
+  executor_name: string;
+  company: string | null;
+  area_name: string;
+  maintenance_type: string;
+  total_ots: number;
+  completed_ots: number;
+  total_hours: number;
 }
 
 export interface KpiAreaTypeRow {
@@ -133,6 +145,7 @@ export interface KpiResponse {
   by_maintenance_type: KpiMaintenanceRow[];
   by_worker: KpiWorkerRow[];
   by_worker_detail: KpiWorkerDetailRow[];
+  by_external_work: KpiExternalWorkRow[];
   by_area: KpiAreaRow[];
   by_area_type: KpiAreaTypeRow[];
   by_section: KpiSectionRow[];
@@ -240,6 +253,10 @@ export interface WorkOrderRecord {
   responsible_user_id: number | null;
   responsible_user_name: string | null;
   participant_user_ids: number[];
+  is_external_work: boolean;
+  external_executor_name: string | null;
+  external_company: string | null;
+  coordinator_user_id: number | null;
   is_planned: boolean;
   scheduled_date: string | null;
   due_date: string | null;
@@ -306,6 +323,10 @@ export interface WorkOrderListItem {
   created_at: string;
   responsible_user_id: number | null;
   responsible_user_name: string | null;
+  is_external_work: boolean;
+  external_executor_name: string | null;
+  external_company: string | null;
+  coordinator_user_id: number | null;
   is_planned: boolean;
   scheduled_date: string | null;
   due_date: string | null;

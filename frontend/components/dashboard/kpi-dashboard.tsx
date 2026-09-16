@@ -85,11 +85,16 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
   const summary = data.summary;
   const target = summary.compliance_target_percent;
   const compliance = summary.compliance_percent ?? 0;
+  // The dashboard can stay open while an API process is being upgraded. Treat
+  // fields added by newer API versions as optional during that short window.
+  const externalHours = summary.external_hours ?? 0;
+  const externalOts = summary.external_ots ?? 0;
+  const externalWorkRows = data.by_external_work ?? [];
   const progress = Math.min(100, Math.round((compliance / Math.max(target, 1)) * 100));
 
   return (
     <>
-      <div className="mt-4 grid gap-3 sm:grid-cols-3">
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
           label="Horas-persona"
           value={formatHours(summary.total_person_hours)}
@@ -111,6 +116,13 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
           icon={<Clock3 className="h-5 w-5 text-amber-700" />}
           tone="bg-amber-100"
         />
+        <KpiCard
+          label="Trabajo externo"
+          value={formatHours(externalHours)}
+          helper={`${externalOts} OTs; separado de las horas del personal interno`}
+          icon={<Users className="h-5 w-5 text-cyan-700" />}
+          tone="bg-cyan-100"
+        />
       </div>
 
       <div className="mt-4 rounded-2xl border bg-muted/20 p-4">
@@ -129,6 +141,43 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
         <p className="mt-2 text-xs text-muted-foreground">
           El porcentaje usa solo OTs planificadas: {summary.executed_planned_ots} ejecutadas de {summary.planned_ots}.
         </p>
+      </div>
+
+      <div className="mt-5 overflow-hidden rounded-2xl border">
+        <div className="border-b p-4">
+          <h3 className="font-semibold">Trabajos realizados por externos</h3>
+          <p className="text-xs text-muted-foreground">Horas y OTs del contratista, sin sumarlas a las horas-persona del administrador.</p>
+        </div>
+        <div className="max-h-80 overflow-auto">
+          <table className="w-full min-w-[700px] text-left text-sm">
+            <thead className="sticky top-0 bg-muted/90 text-xs uppercase text-muted-foreground">
+              <tr>
+                <th className="px-4 py-3">Persona externa</th>
+                <th className="px-4 py-3">Empresa</th>
+                <th className="px-4 py-3">Área</th>
+                <th className="px-4 py-3">Tipo</th>
+                <th className="px-4 py-3 text-right">OTs</th>
+                <th className="px-4 py-3 text-right">Finalizadas</th>
+                <th className="px-4 py-3 text-right">Horas</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {externalWorkRows.length ? externalWorkRows.map((row) => (
+                <tr key={`${row.executor_name}-${row.company || ""}-${row.area_name}-${row.maintenance_type}`}>
+                  <td className="px-4 py-3 font-medium">{row.executor_name}</td>
+                  <td className="px-4 py-3">{row.company || "—"}</td>
+                  <td className="px-4 py-3">{row.area_name}</td>
+                  <td className="px-4 py-3">{TYPE_LABELS[row.maintenance_type] || row.maintenance_type}</td>
+                  <td className="px-4 py-3 text-right">{row.total_ots}</td>
+                  <td className="px-4 py-3 text-right">{row.completed_ots}</td>
+                  <td className="px-4 py-3 text-right font-semibold text-primary">{formatHours(row.total_hours)}</td>
+                </tr>
+              )) : (
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No hay trabajos externos en este período.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <div className="mt-5 overflow-hidden rounded-2xl border">

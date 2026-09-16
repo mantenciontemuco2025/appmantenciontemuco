@@ -24,6 +24,7 @@ from app.schemas.kpi import (
     KpiSummary,
     KpiWorkerRow,
     KpiWorkerDetailRow,
+    KpiExternalWorkRow,
 )
 
 
@@ -142,11 +143,14 @@ async def get_kpis(
     type_counts: dict[str, dict[str, float]] = defaultdict(lambda: {"total": 0, "completed": 0, "minutes": 0.0})
     worker_counts: dict[int, dict[str, float | str]] = {}
     worker_detail_counts: dict[tuple[int, str, str], dict[str, float | str]] = {}
+    external_counts: dict[tuple[str, str, str, str], dict[str, float | int | str | None]] = {}
     area_counts: dict[str, dict[str, float | int]] = {}
     area_type_counts: dict[tuple[str, str], dict[str, float | int]] = {}
     section_counts: dict[tuple[str, str], dict[str, float | int]] = {}
     month_counts: dict[str, dict[str, float | int]] = {}
     planned = executed_planned = completed = total_minutes = total_person_minutes = 0
+    external_ots = 0
+    external_minutes = 0.0
     overdue_ots = stale_pending_ots = 0
     stale_cutoff = today - timedelta(days=7)
 
@@ -228,8 +232,8 @@ async def get_kpis(
         month_row["executed_planned"] += int(wo.is_planned and is_completed)
         month_row["minutes"] += minutes
 
-        participants = list(wo.participants or [])
-        if not participants and wo.responsible_user:
+        participants = [] if wo.is_external_work else list(wo.participants or [])
+        if not wo.is_external_work and not participants and wo.responsible_user:
             participants = [wo.responsible_user]
         total_person_minutes += minutes * len(participants)
         for worker in participants:
@@ -248,6 +252,28 @@ async def get_kpis(
             detail_row["assigned"] += 1
             detail_row["completed"] += int(is_completed)
             detail_row["minutes"] += minutes
+
+        if wo.is_external_work and wo.external_executor_name:
+            external_ots += 1
+            external_minutes += minutes
+            external_key = (
+                wo.external_executor_name,
+                wo.external_company or "",
+                area,
+                kind,
+            )
+            external_row = external_counts.setdefault(external_key, {
+                "name": wo.external_executor_name,
+                "company": wo.external_company,
+                "area": area,
+                "kind": kind,
+                "total": 0,
+                "completed": 0,
+                "minutes": 0.0,
+            })
+            external_row["total"] += 1
+            external_row["completed"] += int(is_completed)
+            external_row["minutes"] += minutes
 
     def hours(minutes: float) -> float:
         return round(minutes / 60, 2)
@@ -286,6 +312,25 @@ async def get_kpis(
             person_hours=hours(row["minutes"]),
         )
         for user_id, row in sorted(worker_counts.items(), key=lambda item: str(item[1]["name"]).lower())
+    ]
+    external_rows = [
+        KpiExternalWorkRow(
+            executor_name=str(row["name"]),
+            company=row["company"] if row["company"] else None,
+            area_name=str(row["area"]),
+            maintenance_type=str(row["kind"]),
+            total_ots=int(row["total"]),
+            completed_ots=int(row["completed"]),
+            total_hours=hours(float(row["minutes"])),
+        )
+        for _key, row in sorted(
+            external_counts.items(),
+            key=lambda item: (
+                str(item[1]["name"]).lower(),
+                str(item[1]["area"]).lower(),
+                str(item[1]["kind"]),
+            ),
+        )
     ]
     section_rows = [
         KpiSectionRow(
@@ -351,6 +396,8 @@ async def get_kpis(
             compliance_target_percent=COMPLIANCE_TARGET_PERCENT,
             total_hours=hours(total_minutes),
             total_person_hours=hours(total_person_minutes),
+            external_ots=external_ots,
+            external_hours=hours(external_minutes),
             average_hours_per_ot=hours(total_minutes / len(orders)) if orders else 0.0,
             overdue_ots=overdue_ots,
             stale_pending_ots=stale_pending_ots,
@@ -358,6 +405,7 @@ async def get_kpis(
         by_maintenance_type=maintenance_rows,
         by_worker=worker_rows,
         by_worker_detail=worker_detail_rows,
+        by_external_work=external_rows,
         by_area=area_rows,
         by_area_type=area_type_rows,
         by_section=section_rows,

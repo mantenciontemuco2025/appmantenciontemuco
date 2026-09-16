@@ -5,12 +5,14 @@ the /my worker view, and monthly-sync behavior across transitions.
 """
 
 import pytest
+from types import SimpleNamespace
 
 from sqlalchemy import insert, select, update
 
 from tests.conftest import get_token, auth_headers
 from app.models.supervisor_area import supervisor_areas
 from app.models.user import User
+from app.models.work_order_participants import work_order_participants
 
 
 async def _mock_google(client, monkeypatch, create_ok=True):
@@ -112,6 +114,244 @@ async def test_supervisor_can_emit_without_signature(
     assert resp.json()["area_name"] == "CEBADA"
     assert resp.json()["section_name"] == "Malta"
     assert resp.json()["equipment_name"] == "Filtro"
+
+
+async def test_external_ot_is_coordinated_by_admin_without_internal_participants(
+    client, seed_data, monkeypatch
+):
+    admin = await get_token(client, "admin@test.com")
+    created = await _create_ot(
+        client,
+        seed_data,
+        monkeypatch,
+        token=admin,
+        emit=True,
+        extra={
+            "is_external_work": True,
+            "external_executor_name": "Wilson Contratista",
+            "external_company": "Servicios Industriales Ltda.",
+        },
+    )
+
+    assert created.status_code == 201, created.text
+    order = created.json()
+    assert order["is_external_work"] is True
+    assert order["external_executor_name"] == "Wilson Contratista"
+    assert order["external_company"] == "Servicios Industriales Ltda."
+    assert order["coordinator_user_id"] == seed_data["admin"].id
+    assert order["responsible_user_id"] is None
+    assert order["participant_user_ids"] == []
+    assert order["participant_names"] == []
+
+    admin_orders = await client.get("/api/work-orders/my", headers=auth_headers(admin))
+    assert created.json()["id"] in [item["id"] for item in admin_orders.json()]
+    worker = await get_token(client, "ortiz@test.com")
+    worker_orders = await client.get("/api/work-orders/my", headers=auth_headers(worker))
+    assert created.json()["id"] not in [item["id"] for item in worker_orders.json()]
+
+
+async def test_external_ot_rejects_internal_performers(
+    client, seed_data, monkeypatch
+):
+    admin = await get_token(client, "admin@test.com")
+    response = await _create_ot(
+        client,
+        seed_data,
+        monkeypatch,
+        token=admin,
+        emit=True,
+        participant_user_ids=[seed_data["worker"].id],
+        extra={
+            "is_external_work": True,
+            "external_executor_name": "Wilson",
+        },
+    )
+    assert response.status_code == 422
+    assert "Una OT externa" in response.text
+
+
+async def test_external_executor_is_written_in_existing_ot_participant_field(
+    monkeypatch,
+):
+    from app.api.routes.work_orders import _populate_individual_ot
+
+    captured = {}
+    monkeypatch.setattr(
+        "app.api.routes.work_orders.drive_service.populate_ot_fields",
+        lambda _file_id, **kwargs: captured.update(kwargs),
+    )
+    order = SimpleNamespace(
+        participants=[],
+        is_external_work=True,
+        external_executor_name="Wilson Contratista",
+        google_ot_file_id="drive-file-test",
+        ot_number="OT-2026-EXT1",
+        plant_area="CEBADA",
+        area=SimpleNamespace(name="Malta"),
+        section_name="Malta",
+        equipment=SimpleNamespace(name="Filtro"),
+        maintenance_type="CORRECTIVE",
+        loto_status="NOT_APPLICABLE",
+        loto_controls=["NOT_APPLICABLE"],
+        description="Cambio de rodamiento",
+        estimated_time="2 horas",
+        execution_date=None,
+        request_date=None,
+        resources_required=None,
+        risks=None,
+        observations=None,
+        folio=None,
+        voucher_number=None,
+        requested_by="Admin",
+        approved_by=None,
+        requested_signature=None,
+        approved_signature=None,
+        status="PENDING",
+    )
+
+    await _populate_individual_ot(order)
+    assert captured["participants"] == ["Wilson Contratista"]
+
+
+async def test_supervisor_external_request_is_assigned_to_accepting_admin(
+    client, seed_data, monkeypatch, db_session_factory
+):
+    async with db_session_factory() as db:
+        await db.execute(
+            insert(supervisor_areas).values(
+                supervisor_id=seed_data["supervisor"].id,
+                area_id=seed_data["area"].id,
+            )
+        )
+        await db.commit()
+
+    supervisor = await get_token(client, "supervisor@test.com")
+    submitted = await _create_ot(
+        client,
+        seed_data,
+        monkeypatch,
+        token=supervisor,
+        emit=True,
+        extra={
+            "is_external_work": True,
+            "external_executor_name": "Wilson",
+            "external_company": "Mantenciones Ltda.",
+        },
+    )
+    assert submitted.status_code == 201, submitted.text
+    assert submitted.json()["submitted_for_review"] is True
+    assert submitted.json()["coordinator_user_id"] is None
+
+    admin = await get_token(client, "admin@test.com")
+    accepted = await client.post(
+        f"/api/work-orders/{submitted.json()['id']}/issue",
+        headers=auth_headers(admin),
+    )
+    assert accepted.status_code == 200, accepted.text
+    order = accepted.json()
+    assert order["status"] == "PENDING"
+    assert order["submitted_for_review"] is False
+    assert order["coordinator_user_id"] == seed_data["admin"].id
+    assert order["responsible_user_id"] is None
+    assert order["participant_user_ids"] == []
+    admin_orders = await client.get("/api/work-orders/my", headers=auth_headers(admin))
+    assert order["id"] in [item["id"] for item in admin_orders.json()]
+
+
+async def test_admin_records_external_duration_without_worker_hours_or_kpi_pollution(
+    client, seed_data, monkeypatch
+):
+    admin = await get_token(client, "admin@test.com")
+    created = await _create_ot(
+        client,
+        seed_data,
+        monkeypatch,
+        token=admin,
+        emit=True,
+        extra={
+            "is_external_work": True,
+            "external_executor_name": "Wilson",
+            "external_company": "Mantenciones Ltda.",
+        },
+    )
+    wo_id = created.json()["id"]
+
+    started = await client.post(
+        f"/api/work-orders/{wo_id}/start", headers=auth_headers(admin)
+    )
+    assert started.status_code == 200, started.text
+    completed = await client.patch(
+        f"/api/work-orders/{wo_id}/complete",
+        json={"work_time_mode": "MANUAL", "worked_duration_minutes": 135},
+        headers=auth_headers(admin),
+    )
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["status"] == "COMPLETED"
+    assert completed.json()["worked_duration_minutes"] == 135
+    assert completed.json()["estimated_time"] == "2 horas 15 minutos"
+    approved = await client.post(
+        f"/api/work-orders/{wo_id}/approve",
+        json={},
+        headers=auth_headers(admin),
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "APPROVED"
+
+    report = await client.get(
+        "/api/kpis?date_from=2020-01-01&date_to=2099-12-31",
+        headers=auth_headers(admin),
+    )
+    assert report.status_code == 200, report.text
+    data = report.json()
+    assert data["summary"]["total_ots"] == 1
+    assert data["summary"]["total_hours"] == 2.25
+    assert data["summary"]["total_person_hours"] == 0
+    assert data["summary"]["external_ots"] == 1
+    assert data["summary"]["external_hours"] == 2.25
+    assert data["by_worker"] == []
+    assert data["by_external_work"] == [{
+        "executor_name": "Wilson",
+        "company": "Mantenciones Ltda.",
+        "area_name": "CEBADA",
+        "maintenance_type": "PREVENTIVE",
+        "total_ots": 1,
+        "completed_ots": 1,
+        "total_hours": 2.25,
+    }]
+
+
+async def test_external_fulfillment_cannot_add_employee_participants(
+    client, seed_data, monkeypatch, db_session_factory
+):
+    admin = await get_token(client, "admin@test.com")
+    created = await _create_ot(
+        client,
+        seed_data,
+        monkeypatch,
+        token=admin,
+        emit=True,
+        extra={
+            "is_external_work": True,
+            "external_executor_name": "Wilson",
+        },
+    )
+    wo_id = created.json()["id"]
+    response = await client.patch(
+        f"/api/work-orders/{wo_id}/fulfill",
+        json={"participant_user_ids": [seed_data["worker"].id]},
+        headers=auth_headers(admin),
+    )
+    assert response.status_code == 400
+    assert "Una OT externa" in response.text
+    async with db_session_factory() as db:
+        participants = (
+            await db.execute(
+                select(work_order_participants.c.user_id).where(
+                    work_order_participants.c.work_order_id == wo_id
+                )
+            )
+        ).scalars().all()
+    assert participants == []
 
 
 async def test_admin_signature_is_used_when_accepting_supervisor_submission(

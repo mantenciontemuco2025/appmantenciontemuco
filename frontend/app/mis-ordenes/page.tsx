@@ -102,7 +102,7 @@ export default function MisOrdenesPage() {
     <Shell fullName={user.full_name} role={user.role} onLogout={logout}>
       <div className="mb-5">
         <h1 className="text-2xl font-bold">Mis Órdenes de Trabajo</h1>
-        <p className="text-muted-foreground">Órdenes asignadas como responsable o participante</p>
+        <p className="text-muted-foreground">Órdenes asignadas a tu equipo y trabajos externos que coordinas</p>
       </div>
 
       {/* Tabs */}
@@ -168,6 +168,12 @@ export default function MisOrdenesPage() {
                         Responsable: <span className="font-medium text-foreground">{o.responsible_user_name}</span>
                       </div>
                     )}
+                    {o.is_external_work && (
+                      <div className="mt-0.5 text-xs text-cyan-800">
+                        Trabajo externo: <span className="font-medium">{o.external_executor_name}</span>
+                        {o.external_company ? ` · ${o.external_company}` : ""}
+                      </div>
+                    )}
                     <div className="mt-0.5 text-sm text-muted-foreground">
                       {maintenanceTypeLabel(o.maintenance_type)} ·{" "}
                       {o.execution_date
@@ -194,14 +200,20 @@ export default function MisOrdenesPage() {
                         <Eye className="mr-1 h-3.5 w-3.5" /> Ver
                       </Button>
                     </Link>
-                    {o.status === "PENDING" && user && o.responsible_user_id === user.id && (
+                    {o.status === "PENDING" && user && (
+                      o.responsible_user_id === user.id ||
+                      (user.role === "ADMIN" && o.is_external_work && o.coordinator_user_id === user.id)
+                    ) && (
                       <Link href={`/mis-ordenes/${o.id}?action=start`}>
                         <Button size="sm">
                           <Play className="mr-1 h-3.5 w-3.5" /> Iniciar
                         </Button>
                       </Link>
                     )}
-                    {o.status === "IN_PROGRESS" && user && o.responsible_user_id === user.id && (
+                    {o.status === "IN_PROGRESS" && user && (
+                      o.responsible_user_id === user.id ||
+                      (user.role === "ADMIN" && o.is_external_work && o.coordinator_user_id === user.id)
+                    ) && (
                       <Link href={`/mis-ordenes/${o.id}?action=complete`}>
                         <Button size="sm">
                           <CheckCircle className="mr-1 h-3.5 w-3.5" /> Finalizar

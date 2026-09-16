@@ -420,7 +420,9 @@ export default function OrdenesPage() {
                           : "sin fecha"}
                       </div>
                       <div className="mt-0.5 text-xs text-muted-foreground">
-                        {o.responsible_user_name ? (
+                        {o.is_external_work ? (
+                          <span className="text-cyan-800">Externo: <span className="font-medium">{o.external_executor_name}</span>{o.external_company ? ` · ${o.external_company}` : ""}</span>
+                        ) : o.responsible_user_name ? (
                           <>Responsable: <span className="font-medium text-foreground">{o.responsible_user_name}</span></>
                         ) : (
                           <span className="text-orange-600">Sin responsable asignado</span>

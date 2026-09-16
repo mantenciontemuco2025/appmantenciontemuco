@@ -43,6 +43,7 @@ class WorkOrder(Base):
         # Supports overdue queries and status-filtered lists ordered by date.
         Index("ix_work_orders_due_date_status", "due_date", "status"),
         Index("ix_work_orders_status_created_at", "status", "created_at"),
+        Index("ix_work_orders_coordinator_user_id", "coordinator_user_id"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -94,6 +95,16 @@ class WorkOrder(Base):
     # ── Responsible ──────────────────────────────────────────────────────
     responsible_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id"), nullable=True
+    )
+
+    # External performers have no application account. Keep their identity and
+    # the internal administrator coordinating/verifying the OT separate from
+    # the employee participant list used by person-hour KPIs.
+    is_external_work: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    external_executor_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    external_company: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    coordinator_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
     # ── Planning ─────────────────────────────────────────────────────────

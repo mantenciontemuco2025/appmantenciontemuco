@@ -29,6 +29,8 @@ def _assigned_recipient_ids(
     recipients: set[int] = set()
     if wo.responsible_user_id is not None:
         recipients.add(wo.responsible_user_id)
+    if wo.coordinator_user_id is not None:
+        recipients.add(wo.coordinator_user_id)
     if participant_user_ids is not None:
         recipients.update(participant_user_ids)
     else:
