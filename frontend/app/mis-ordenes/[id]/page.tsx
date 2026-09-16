@@ -627,9 +627,9 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                 </div>}
 
                 <div>
-                  <label className={labelCls}>Duracion manual</label>
+                  <label className={labelCls}>Duración manual</label>
                   <p className={hintCls}>
-                    Usa estos campos solo si elegiste &quot;Duracion manual&quot;.
+                    Usa estos campos solo si elegiste &quot;Duración manual&quot;.
                   </p>
                   <div className="grid grid-cols-2 gap-3">
                     <Input
@@ -657,7 +657,7 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                   </div>
                   {form.time_mode === "MANUAL" && reportedWorkMinutes(form) != null && (
                     <p className="mt-2 text-sm font-medium text-blue-800">
-                      Se registrarÃ¡n {deriveEstimatedTime(reportedWorkMinutes(form))}.
+                      Se registrarán {deriveEstimatedTime(reportedWorkMinutes(form))}.
                     </p>
                   )}
                 </div>
@@ -820,7 +820,7 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                   />
                 )}
                 {wo.work_time_mode === "MANUAL" && wo.worked_duration_minutes != null && (
-                  <InfoRow label="DuraciÃ³n manual" value={formatDurationLong(wo.worked_duration_minutes)} />
+                  <InfoRow label="Duración manual" value={formatDurationLong(wo.worked_duration_minutes)} />
                 )}
                 {wo.actual_duration_minutes != null && (
                   <InfoRow label="Horas declaradas por trabajador" value={formatDurationLong(wo.actual_duration_minutes)} />

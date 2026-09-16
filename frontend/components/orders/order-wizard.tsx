@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Save, Send, Trash2 } from "lucide-react";
+import { Check, Loader2, Plus, Save, Send, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { AreaNode, WorkOrderRecord } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Card, CardContent } from "@/components/ui/card";
 import { VoiceDictation } from "@/components/maintenance/voice-dictation";
 import { todayDateInputValue } from "@/lib/utils";
@@ -52,6 +53,10 @@ export function OrderWizard() {
   const [draftReady, setDraftReady] = useState(false);
   const [draftRestored, setDraftRestored] = useState(false);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
+  const [showNewEquipment, setShowNewEquipment] = useState(false);
+  const [newEquipmentName, setNewEquipmentName] = useState("");
+  const [creatingEquipment, setCreatingEquipment] = useState(false);
+  const [equipmentError, setEquipmentError] = useState("");
 
   const [areas, setAreas] = useState<AreaNode[]>([]);
   const [workers, setWorkers] = useState<WorkerOption[]>([]);
@@ -141,6 +146,7 @@ export function OrderWizard() {
       : [];
   const supervisorWithoutArea = user?.role === "SUPERVISOR" && supervisorAreaIds.length === 0;
   const isSupervisor = user?.role === "SUPERVISOR";
+  const canCreateEquipment = user?.role === "ADMIN" || isSupervisor;
 
   function set<K extends keyof Form>(key: K, value: Form[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -153,6 +159,36 @@ export function OrderWizard() {
         ? f.participant_ids.filter((pid) => pid !== id)
         : [...f.participant_ids, id],
     }));
+  }
+
+  async function createEquipment() {
+    const name = newEquipmentName.trim();
+    if (!name || !form.area_id || creatingEquipment) return;
+    setCreatingEquipment(true);
+    setEquipmentError("");
+    try {
+      const created = await api.post<{ id: number; name: string; area_id: number }>(
+        "/api/catalogs/equipment",
+        { name, area_id: form.area_id }
+      );
+      setAreas((current) => current.map((area) =>
+        area.id === created.area_id
+          ? {
+              ...area,
+              equipment: [...area.equipment, { id: created.id, name: created.name }]
+                .sort((a, b) => a.name.localeCompare(b.name, "es")),
+            }
+          : area
+      ));
+      api.invalidateCache("/api/catalogs/tree");
+      set("equipment_id", created.id);
+      setNewEquipmentName("");
+      setShowNewEquipment(false);
+    } catch (err) {
+      setEquipmentError(err instanceof Error ? err.message : "No se pudo guardar el equipo.");
+    } finally {
+      setCreatingEquipment(false);
+    }
   }
 
   const formValid =
@@ -251,28 +287,94 @@ export function OrderWizard() {
               value={form.plant_area}
               onChange={(e) => set("plant_area", e.target.value)}
             />
-            <Select
+            <SearchableSelect
               label="Sección"
               options={areas.map((a) => ({ value: String(a.id), label: a.name }))}
               value={form.area_id ? String(form.area_id) : ""}
+              placeholder="Buscar sección..."
               disabled={supervisorWithoutArea}
-              onChange={(e) => {
-                const id = e.target.value ? Number(e.target.value) : null;
+              onValueChange={(value) => {
+                const id = value ? Number(value) : null;
                 setForm((f) => ({ ...f, area_id: id, equipment_id: null }));
+                setShowNewEquipment(false);
+                setEquipmentError("");
               }}
             />
-            <Select
+            <SearchableSelect
               label="Equipo"
-              options={filteredEquipment.map((eq) => ({
-                value: String(eq.id),
-                label: eq.name,
-              }))}
+              options={filteredEquipment.map((eq) => ({ value: String(eq.id), label: eq.name }))}
               value={form.equipment_id ? String(form.equipment_id) : ""}
+              placeholder={form.area_id ? "Buscar equipo..." : "Primero selecciona una sección"}
+              emptyMessage="No hay equipos que coincidan con la búsqueda."
               disabled={!form.area_id}
-              onChange={(e) =>
-                set("equipment_id", e.target.value ? Number(e.target.value) : null)
-              }
+              onValueChange={(value) => set("equipment_id", value ? Number(value) : null)}
             />
+            {form.area_id && canCreateEquipment && (
+              <div className="-mt-1">
+                {!showNewEquipment ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setEquipmentError("");
+                      setShowNewEquipment(true);
+                    }}
+                  >
+                    <Plus className="mr-1.5 h-4 w-4" /> No aparece el equipo: agregarlo
+                  </Button>
+                ) : (
+                  <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+                    <label className="block text-sm font-medium" htmlFor="new-equipment-name">
+                      Nuevo equipo para {selectedSection?.name}
+                    </label>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <Input
+                        id="new-equipment-name"
+                        autoFocus
+                        maxLength={200}
+                        value={newEquipmentName}
+                        onChange={(event) => setNewEquipmentName(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            void createEquipment();
+                          }
+                        }}
+                        placeholder="Nombre del equipo"
+                        disabled={creatingEquipment}
+                      />
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={() => void createEquipment()}
+                          disabled={!newEquipmentName.trim() || creatingEquipment}
+                        >
+                          {creatingEquipment ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Check className="mr-1 h-4 w-4" />}
+                          Guardar
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setShowNewEquipment(false);
+                            setNewEquipmentName("");
+                            setEquipmentError("");
+                          }}
+                          disabled={creatingEquipment}
+                        >
+                          <X className="mr-1 h-4 w-4" /> Cancelar
+                        </Button>
+                      </div>
+                    </div>
+                    {equipmentError && <p role="alert" className="text-sm text-destructive">{equipmentError}</p>}
+                    <p className="text-xs text-muted-foreground">Se guardará en el catálogo de la sección y quedará seleccionado en esta OT.</p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 

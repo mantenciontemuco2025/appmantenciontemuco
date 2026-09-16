@@ -8,7 +8,7 @@ Section is NOT part of the catalog — it is free text on each record.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -34,6 +34,7 @@ from app.services.audit_service import create_audit_log
 router = APIRouter(prefix="/api/catalogs", tags=["catalogs"])
 
 admin_only = require_roles(UserRole.ADMIN)
+catalog_writer = require_roles(UserRole.ADMIN, UserRole.SUPERVISOR)
 
 
 # --------------------------------------------------------------------------
@@ -164,7 +165,7 @@ async def list_equipment(
 async def create_equipment(
     payload: EquipmentCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(admin_only),
+    current_user: User = Depends(catalog_writer),
 ):
     name = payload.name.strip()
     if not name:
@@ -172,6 +173,25 @@ async def create_equipment(
     area = await db.get(Area, payload.area_id)
     if area is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Área no válida")
+    if (
+        current_user.role == UserRole.SUPERVISOR
+        and payload.area_id not in current_user.area_ids
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo puedes agregar equipos a tus secciones asignadas",
+        )
+    duplicate_id = await db.scalar(
+        select(Equipment.id).where(
+            Equipment.area_id == payload.area_id,
+            func.lower(func.trim(Equipment.name)) == name.lower(),
+        ).limit(1)
+    )
+    if duplicate_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ya existe un equipo con ese nombre en esta sección",
+        )
     equipment = Equipment(name=name, area_id=payload.area_id)
     db.add(equipment)
     await db.flush()

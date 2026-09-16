@@ -480,7 +480,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                   />
                 )}
                 {wo.work_time_mode === "MANUAL" && wo.worked_duration_minutes != null && (
-                  <InfoRow label="DuraciÃ³n manual" value={`${wo.worked_duration_minutes} minutos`} />
+                  <InfoRow label="Duración manual" value={`${wo.worked_duration_minutes} minutos`} />
                 )}
                 {wo.actual_duration_minutes != null && (
                   <InfoRow label="Horas declaradas por trabajador" value={`${wo.actual_duration_minutes} minutos`} />
