@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     GOOGLE_SPREADSHEET_ID: str = ""
     GOOGLE_SHEET_NAME: str = "Hoja1"
 
+    # Dedicated water/discharge register. Keep this separate from the
+    # maintenance and work-order spreadsheets so local tests cannot redirect
+    # existing integrations.
+    GOOGLE_WATER_REGISTER_SPREADSHEET_ID: str = ""
+    GOOGLE_WATER_REGISTER_SHEET_NAME: str = "base de datos"
+
     # Google Drive — Work Order integration
     GOOGLE_OT_TEMPLATE_FILE_ID: str = ""
     # Optional dedicated template for contractor/external work orders.

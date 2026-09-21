@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Wrench, LayoutDashboard, ClipboardList, ClipboardCheck, Users, LogOut, PenLine } from "lucide-react";
+import { Wrench, LayoutDashboard, ClipboardList, ClipboardCheck, Users, LogOut, PenLine, Droplets } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NotificationBell } from "@/components/notifications/bell";
 
@@ -19,6 +19,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/mis-ordenes", label: "Mis Órdenes", icon: <ClipboardCheck className="h-4 w-4" /> },
   { href: "/ordenes", label: "Órdenes", icon: <ClipboardList className="h-4 w-4" />, managerOnly: true },
   { href: "/perfil", label: "Mi perfil", icon: <PenLine className="h-4 w-4" /> },
+  { href: "/registro-agua", label: "Registro de agua", icon: <Droplets className="h-4 w-4" /> },
   { href: "/admin", label: "Admin", icon: <Users className="h-4 w-4" />, adminOnly: true },
 ];
 
