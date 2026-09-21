@@ -1,6 +1,6 @@
 export type UserRole = "ADMIN" | "SUPERVISOR" | "WORKER";
 
-export type MaintenanceType = "PREVENTIVE" | "CORRECTIVE" | "PREDICTIVE" | "PROYECTO" | "MONTAJE";
+export type MaintenanceType = "PREVENTIVE" | "CORRECTIVE" | "PREDICTIVE" | "PROYECTO" | "MONTAJE" | "URGENTE";
 export type SyncStatus = "PENDING" | "SYNCED" | "FAILED";
 export type LotoControl =
   | "LOTO_BLOQUEO"
@@ -256,6 +256,11 @@ export interface WorkOrderRecord {
   is_external_work: boolean;
   external_executor_name: string | null;
   external_company: string | null;
+  external_quote_number: string | null;
+  external_oc_number: string | null;
+  external_invoice_number: string | null;
+  external_account_number: string | null;
+  external_oc_amount: string | null;
   coordinator_user_id: number | null;
   is_planned: boolean;
   scheduled_date: string | null;
@@ -326,6 +331,11 @@ export interface WorkOrderListItem {
   is_external_work: boolean;
   external_executor_name: string | null;
   external_company: string | null;
+  external_quote_number: string | null;
+  external_oc_number: string | null;
+  external_invoice_number: string | null;
+  external_account_number: string | null;
+  external_oc_amount: string | null;
   coordinator_user_id: number | null;
   is_planned: boolean;
   scheduled_date: string | null;

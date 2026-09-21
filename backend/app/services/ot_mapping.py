@@ -43,6 +43,35 @@ OT_FIELD_MAP: dict[str, str] = {
     "performed_by":       "E31",      # alias of approved_by (REALIZADO POR) — E31:G33
 }
 
+# Dedicated contractor template. It keeps the common OT layout but replaces
+# the internal "Recursos y materiales" block with procurement/accounting
+# fields. These coordinates come from the external template supplied by the
+# user. Regular OTs continue using OT_FIELD_MAP above.
+EXTERNAL_OT_FIELD_MAP: dict[str, str] = {
+    "ot_number":          "G2",
+    "area":               "C6",
+    "section":            "C7",
+    "equipment":          "C8",
+    "folio":              "G10",
+    "description":        "B12",
+    "participants":       "C15",
+    "external_company":   "C16",
+    "estimated_time":     "C17",
+    "request_date":       "C18",
+    "execution_date":     "F18",
+    "external_quote_number":   "C19",
+    "external_oc_number":      "E19",
+    "external_invoice_number": "G19",
+    "external_account_number": "C20",
+    "external_oc_amount":     "E20",
+    "voucher_number":     "C21",
+    "risks":              "B23",
+    "observations":       "B27",
+    "requested_by":       "B31",
+    "approved_by":        "E31",
+    "performed_by":       "E31",
+}
+
 # ── Autorización cell text (requested_by / realized_by) ────────────────────────
 # The new template puts the label + "Firma digital" line inside the merged cell
 # (B31:D33 / E31:G33). To show who requested/completed WITHOUT destroying the
@@ -86,6 +115,14 @@ MAINTENANCE_TYPE_CELLS: dict[str, str] = {
 # rewrite the type row (all 5 option cells).
 MAINTENANCE_TYPE_CLEAR_CELLS = list(MAINTENANCE_TYPE_CELLS.values())
 
+EXTERNAL_MAINTENANCE_TYPE_CELLS: dict[str, str] = {
+    "PREVENTIVE": "C9",
+    "CORRECTIVE": "D9",
+    "PREDICTIVE": "E9",
+    "PROYECTO": "F9",
+    "URGENTE": "G9",
+}
+
 # Backwards-compatible alias: the anchor/maintenance cell (used by tests/tools).
 MAINTENANCE_TYPE_CELL = "C9"
 
@@ -95,6 +132,14 @@ _MAINTENANCE_LABELS = {
     "PREDICTIVE": "Predictivo",
     "PROYECTO":   "Proyecto",
     "MONTAJE":    "Montaje",
+}
+
+_EXTERNAL_MAINTENANCE_LABELS = {
+    "PREVENTIVE": "Preventivo",
+    "CORRECTIVE": "Correctivo",
+    "PREDICTIVE": "Predictivo",
+    "PROYECTO": "Proyecto",
+    "URGENTE": "Urgente",
 }
 
 _MAINTENANCE_ORDER = ["PREVENTIVE", "CORRECTIVE", "PREDICTIVE", "PROYECTO", "MONTAJE"]
@@ -131,6 +176,16 @@ def build_maintenance_cell_texts(selected: str) -> dict[str, str]:
         for key, cell in MAINTENANCE_TYPE_CELLS.items()
         for mark in ["X" if key == sel else " "]
     }
+
+
+def build_external_maintenance_cell_texts(selected: str) -> dict[str, str]:
+    """Return maintenance checkbox text for the contractor template."""
+    sel = selected.upper()
+    result = {}
+    for key, cell in EXTERNAL_MAINTENANCE_TYPE_CELLS.items():
+        mark = "X" if key == sel else " "
+        result[cell] = f"[{mark}] {_EXTERNAL_MAINTENANCE_LABELS[key]}"
+    return result
 
 
 # ──────────────────────────────────────────────────────────────────────

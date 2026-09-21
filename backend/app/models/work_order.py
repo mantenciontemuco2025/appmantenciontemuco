@@ -103,6 +103,14 @@ class WorkOrder(Base):
     is_external_work: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     external_executor_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     external_company: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Administrative/procurement fields used only by the external-work OT
+    # template. They remain nullable so historical and regular OTs are
+    # completely unaffected.
+    external_quote_number: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    external_oc_number: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    external_invoice_number: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    external_account_number: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    external_oc_amount: Mapped[str | None] = mapped_column(String(80), nullable=True)
     coordinator_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -156,6 +164,9 @@ class WorkOrder(Base):
     google_ot_file_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     google_ot_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     google_ot_sheet_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # EXTERNAL for new contractor-template OTs, REGULAR for the original
+    # template. Nullable keeps historical records unchanged.
+    google_ot_template_kind: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     ot_sheet_sync_status: Mapped[str] = mapped_column(String(20), default="PENDING")
     ot_sheet_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -797,6 +797,11 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                 (user.role === "ADMIN" && wo.is_external_work && wo.coordinator_user_id === user.id)) &&
               (wo.status === "PENDING" || wo.status === "IN_PROGRESS")
             }
+            canDeleteAny={
+              user.role === "ADMIN" &&
+              wo.status !== "APPROVED" &&
+              wo.status !== "CANCELLED"
+            }
           />
 
           {/* Lifecycle info */}

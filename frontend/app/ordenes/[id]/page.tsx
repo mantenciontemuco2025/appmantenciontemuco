@@ -459,6 +459,11 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
               (user.role === "ADMIN" || user.role === "SUPERVISOR") &&
               (wo.status === "DRAFT" || wo.status === "PENDING" || wo.status === "IN_PROGRESS")
             }
+            canDeleteAny={
+              user.role === "ADMIN" &&
+              wo.status !== "APPROVED" &&
+              wo.status !== "CANCELLED"
+            }
           />
 
           {/* Lifecycle card */}

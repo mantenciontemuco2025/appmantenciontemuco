@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ImagePlus, Loader2, Camera } from "lucide-react";
+import { ImagePlus, Loader2, Camera, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -17,7 +17,19 @@ interface EvidenceItem {
   uploaded_at: string;
 }
 
-function EvidencePhoto({ woId, item }: { woId: number; item: EvidenceItem }) {
+function EvidencePhoto({
+  woId,
+  item,
+  canDelete,
+  deleting,
+  onDelete,
+}: {
+  woId: number;
+  item: EvidenceItem;
+  canDelete: boolean;
+  deleting: boolean;
+  onDelete: () => void;
+}) {
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState(false);
 
@@ -60,6 +72,21 @@ function EvidencePhoto({ woId, item }: { woId: number; item: EvidenceItem }) {
         <p className="text-muted-foreground">
           {new Date(item.uploaded_at).toLocaleString("es-CL")}
         </p>
+        {canDelete && (
+          <button
+            type="button"
+            className="mt-2 inline-flex h-8 items-center rounded-md border border-destructive/40 px-2.5 text-xs font-medium text-destructive hover:bg-destructive/10 disabled:opacity-60"
+            disabled={deleting}
+            onClick={onDelete}
+          >
+            {deleting ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            {deleting ? "Eliminando…" : "Eliminar foto"}
+          </button>
+        )}
       </figcaption>
     </figure>
   );
@@ -70,15 +97,18 @@ export function WorkOrderEvidencePanel({
   stage,
   canUpload,
   currentUserId,
+  canDeleteAny,
 }: {
   woId: number;
   stage: EvidenceStage;
   canUpload: boolean;
   currentUserId: number;
+  canDeleteAny: boolean;
 }) {
   const [items, setItems] = useState<EvidenceItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   async function loadEvidence() {
@@ -130,6 +160,22 @@ export function WorkOrderEvidencePanel({
     } finally {
       setUploading(false);
       input.value = "";
+    }
+  }
+
+  async function handleDelete(item: EvidenceItem) {
+    if (!window.confirm(`¿Eliminar la foto "${item.filename}"? Esta acción no se puede deshacer.`)) return;
+
+    setDeletingId(item.id);
+    setMessage(null);
+    try {
+      await api.del<void>(`/api/work-orders/${woId}/evidence/${item.id}`);
+      setItems((current) => current.filter((currentItem) => currentItem.id !== item.id));
+      setMessage("Foto eliminada correctamente.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "No se pudo eliminar la foto.");
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -193,7 +239,16 @@ export function WorkOrderEvidencePanel({
           </div>
         ) : items.length ? (
           <div className="grid gap-3 sm:grid-cols-2">
-            {items.map((item) => <EvidencePhoto key={item.id} woId={woId} item={item} />)}
+            {items.map((item) => (
+              <EvidencePhoto
+                key={item.id}
+                woId={woId}
+                item={item}
+                canDelete={canDeleteAny || (canUpload && item.uploaded_by_user_id === currentUserId)}
+                deleting={deletingId === item.id}
+                onDelete={() => void handleDelete(item)}
+              />
+            ))}
           </div>
         ) : (
           <p className="py-2 text-sm text-muted-foreground">Todavía no hay fotos adjuntas.</p>

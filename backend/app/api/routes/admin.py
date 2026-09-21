@@ -159,6 +159,7 @@ class GoogleDriveStatus(BaseModel):
     auth_method: str | None = None  # "oauth" | "service_account" | null
     write_enabled: bool = False  # True only when OAuth is configured (writes allowed)
     template_access: bool
+    external_template_access: bool = False
     ot_folder_access: bool
     monthly_sheet_access: bool
     monthly_tabs_valid: bool

@@ -70,6 +70,10 @@ class Settings(BaseSettings):
 
     # Google Drive — Work Order integration
     GOOGLE_OT_TEMPLATE_FILE_ID: str = ""
+    # Optional dedicated template for contractor/external work orders.
+    # When empty, external OTs use the regular template for backwards
+    # compatibility; regular OTs are never affected by this setting.
+    GOOGLE_EXTERNAL_OT_TEMPLATE_FILE_ID: str = ""
     GOOGLE_OT_ROOT_FOLDER_ID: str = ""
     # Legacy single monthly spreadsheet (kept for backfill/compat only; new
     # per-year resolution uses GoogleMonthlyRegister in PostgreSQL).

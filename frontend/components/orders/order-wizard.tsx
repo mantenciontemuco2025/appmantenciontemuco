@@ -22,6 +22,7 @@ interface WorkerOption {
 
 interface Form {
   scheduled_date: string;
+  execution_date: string;
   request_date: string;   // Fecha de solicitud — la coloca el admin al solicitar
   plant_area: string;
   area_id: number | null;
@@ -32,12 +33,25 @@ interface Form {
   is_external_work: boolean;
   external_executor_name: string;
   external_company: string;
+  maintenance_type: string;
+  loto_controls: string[];
+  folio: string;
+  voucher_number: string;
+  estimated_time: string;
+  external_quote_number: string;
+  external_oc_number: string;
+  external_invoice_number: string;
+  external_account_number: string;
+  external_oc_amount: string;
+  risks: string;
+  observations: string;
 }
 
 function emptyForm(): Form {
   return {
     scheduled_date: "",
     request_date: todayDateInputValue(),
+    execution_date: "",
     plant_area: "",
     area_id: null,
     equipment_id: null,
@@ -47,6 +61,18 @@ function emptyForm(): Form {
     is_external_work: false,
     external_executor_name: "",
     external_company: "",
+    maintenance_type: "PREVENTIVE",
+    loto_controls: ["NOT_APPLICABLE"],
+    folio: "",
+    voucher_number: "",
+    estimated_time: "",
+    external_quote_number: "",
+    external_oc_number: "",
+    external_invoice_number: "",
+    external_account_number: "",
+    external_oc_amount: "",
+    risks: "",
+    observations: "",
   };
 }
 
@@ -168,6 +194,19 @@ export function OrderWizard() {
     }));
   }
 
+  function toggleExternalLoto(control: string) {
+    setForm((current) => {
+      if (control === "NOT_APPLICABLE") {
+        return { ...current, loto_controls: ["NOT_APPLICABLE"] };
+      }
+      const next = current.loto_controls.filter((item) => item !== "NOT_APPLICABLE");
+      const updated = next.includes(control)
+        ? next.filter((item) => item !== control)
+        : [...next, control];
+      return { ...current, loto_controls: updated.length ? updated : ["NOT_APPLICABLE"] };
+    });
+  }
+
   async function createEquipment() {
     const name = newEquipmentName.trim();
     if (!name || !form.area_id || creatingEquipment) return;
@@ -215,9 +254,16 @@ export function OrderWizard() {
       plant_area: form.plant_area,
       area_id: form.area_id,
       equipment_id: form.equipment_id,
-      maintenance_type: "PREVENTIVE",
+      maintenance_type: isExternalWork ? form.maintenance_type : "PREVENTIVE",
       loto_status: "NOT_APPLICABLE",
+      loto_controls: isExternalWork ? form.loto_controls : ["NOT_APPLICABLE"],
       request_date: form.request_date || null,
+      execution_date: isExternalWork ? (form.execution_date || null) : null,
+      folio: isExternalWork ? (form.folio.trim() || null) : null,
+      voucher_number: isExternalWork ? (form.voucher_number.trim() || null) : null,
+      estimated_time: isExternalWork ? (form.estimated_time.trim() || null) : null,
+      risks: isExternalWork ? (form.risks.trim() || null) : null,
+      observations: isExternalWork ? (form.observations.trim() || null) : null,
       is_planned: true,
       scheduled_date: form.scheduled_date || form.request_date || null,
       responsible_user_id: isSupervisor || isExternalWork ? null : form.responsible_user_id,
@@ -225,6 +271,11 @@ export function OrderWizard() {
       is_external_work: isExternalWork,
       external_executor_name: isExternalWork ? form.external_executor_name.trim() : null,
       external_company: isExternalWork ? (form.external_company.trim() || null) : null,
+      external_quote_number: isExternalWork ? (form.external_quote_number.trim() || null) : null,
+      external_oc_number: isExternalWork ? (form.external_oc_number.trim() || null) : null,
+      external_invoice_number: isExternalWork ? (form.external_invoice_number.trim() || null) : null,
+      external_account_number: isExternalWork ? (form.external_account_number.trim() || null) : null,
+      external_oc_amount: isExternalWork ? (form.external_oc_amount.trim() || null) : null,
       emit,
     };
   }
@@ -502,6 +553,109 @@ export function OrderWizard() {
             </div>
           )}
         </div>
+
+        {isExternalWork && user?.role === "ADMIN" && (
+          <div className="space-y-4 rounded-lg border border-cyan-200 bg-cyan-50/40 p-4">
+            <div>
+              <h3 className="text-sm font-semibold text-cyan-950">Datos de la OT externa</h3>
+              <p className="mt-1 text-xs text-cyan-900/80">
+                Estos datos se guardarán en la plantilla especial para trabajos externos.
+              </p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Select
+                label="Tipo de mantenimiento"
+                options={[
+                  { value: "PREVENTIVE", label: "Preventivo" },
+                  { value: "CORRECTIVE", label: "Correctivo" },
+                  { value: "PREDICTIVE", label: "Predictivo" },
+                  { value: "PROYECTO", label: "Proyecto" },
+                  { value: "URGENTE", label: "Urgente" },
+                ]}
+                value={form.maintenance_type}
+                onChange={(event) => set("maintenance_type", event.target.value)}
+              />
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Folio</label>
+                <Input value={form.folio} maxLength={50} onChange={(event) => set("folio", event.target.value)} placeholder="Folio" />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Fecha de ejecución</label>
+                <Input type="date" value={form.execution_date} onChange={(event) => set("execution_date", event.target.value)} />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Tiempo estimado</label>
+                <Input value={form.estimated_time} maxLength={20} onChange={(event) => set("estimated_time", event.target.value)} placeholder="Ej: 2 horas 30 minutos" />
+              </div>
+            </div>
+
+            <div>
+              <span className="mb-2 block text-sm font-medium">LOTO / Bloqueo / AST</span>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {[
+                  ["LOTO_BLOQUEO", "LOTO / Bloqueo"],
+                  ["AST", "AST"],
+                  ["TARJETA_ROJA", "Tarjeta roja"],
+                  ["CHECKLIST_HERRAMIENTAS", "Checklist herramientas"],
+                  ["NOT_APPLICABLE", "No aplica"],
+                ].map(([value, label]) => (
+                  <label key={value} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={form.loto_controls.includes(value)}
+                      onChange={() => toggleExternalLoto(value)}
+                      className="h-4 w-4 rounded border-input"
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {[
+                ["external_quote_number", "N° cotización", "Número de cotización"],
+                ["external_oc_number", "N° OC", "Orden de compra"],
+                ["external_invoice_number", "N° factura", "Número de factura"],
+                ["external_account_number", "N° cuenta", "Cuenta"],
+                ["external_oc_amount", "Monto OC", "Monto"],
+                ["voucher_number", "N° de vale", "Vale"],
+              ].map(([key, label, placeholder]) => (
+                <div key={key}>
+                  <label className="mb-1.5 block text-sm font-medium">{label}</label>
+                  <Input
+                    value={form[key as keyof Form] as string}
+                    maxLength={80}
+                    onChange={(event) => set(key as keyof Form, event.target.value as never)}
+                    placeholder={placeholder}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Riesgos e identificación de peligros</label>
+                <textarea
+                  className="min-h-[90px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  value={form.risks}
+                  onChange={(event) => set("risks", event.target.value)}
+                  placeholder="Riesgos identificados..."
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-sm font-medium">Observaciones</label>
+                <textarea
+                  className="min-h-[90px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  value={form.observations}
+                  onChange={(event) => set("observations", event.target.value)}
+                  placeholder="Observaciones administrativas..."
+                />
+              </div>
+            </div>
+          </div>
+        )}
 
         {isSupervisor || isExternalWork ? (
           <div className="rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">

@@ -20,6 +20,7 @@ from app.services.google_api_cache import build_cached_service
 from app.services.signature_sheet_images import insert_signature_image
 from app.services.ot_mapping import (
     OT_FIELD_MAP,
+    EXTERNAL_OT_FIELD_MAP,
     STATUS_CELL,
     MONTHLY_COLUMN_MAP,
     MONTHLY_DATA_START_ROW,
@@ -27,6 +28,7 @@ from app.services.ot_mapping import (
     WORKER_COLUMN_KEYS,
     SPANISH_MONTHS,
     build_maintenance_cell_texts,
+    build_external_maintenance_cell_texts,
     build_loto_cell_texts,
     build_loto_control_cell_texts,
     build_status_text,
@@ -219,14 +221,20 @@ def _find_named_file(drive, parent_id: str, name: str) -> dict | None:
     return files[0] if files else None
 
 
-def _copy_template(ot_number: str, destination_folder_id: str) -> dict:
+def _copy_template(
+    ot_number: str,
+    destination_folder_id: str,
+    template_file_id: str | None = None,
+) -> dict:
     """Copy the OT template and move it into the destination folder.
 
     Returns {"file_id": ..., "url": ...}.
     Never modifies the original template.
     """
     drive = _build_drive_write_service()  # copying the template is a WRITE
-    template_id = settings.GOOGLE_OT_TEMPLATE_FILE_ID
+    template_id = template_file_id or settings.GOOGLE_OT_TEMPLATE_FILE_ID
+    if not template_id:
+        raise RuntimeError("No hay plantilla de OT configurada en Google Drive.")
 
     # Drive copies are not transactional with Sheets updates. If a previous
     # attempt copied the file but failed later, reuse that copy instead of
@@ -433,6 +441,7 @@ def check_google_drive_status() -> dict:
         "auth_method": None,
         "write_enabled": False,
         "template_access": False,
+        "external_template_access": False,
         "ot_folder_access": False,
         "monthly_sheet_access": False,
         "monthly_tabs_valid": False,
@@ -466,6 +475,17 @@ def check_google_drive_status() -> dict:
     except Exception as exc:
         result["error"] = f"Sin acceso a la plantilla OT: {type(exc).__name__}"
         return result
+
+    if settings.GOOGLE_EXTERNAL_OT_TEMPLATE_FILE_ID:
+        try:
+            drive.files().get(
+                fileId=settings.GOOGLE_EXTERNAL_OT_TEMPLATE_FILE_ID,
+                fields="id, name",
+            ).execute()
+            result["external_template_access"] = True
+        except Exception as exc:
+            result["error"] = f"Sin acceso a la plantilla OT externa: {type(exc).__name__}"
+            return result
 
     # Check OT root folder access
     try:
@@ -527,13 +547,23 @@ def check_google_drive_status() -> dict:
     return result
 
 
-def create_ot_file(ot_number: str, execution_date: datetime) -> dict:
+def create_ot_file(
+    ot_number: str,
+    execution_date: datetime,
+    *,
+    is_external_work: bool = False,
+) -> dict:
     """Copy the OT template into the correct year/month folder.
 
     Returns {"file_id": ..., "url": ...}.
     """
     folder_id = _ensure_month_folder(execution_date.year, execution_date.month)
-    return _copy_template(ot_number, folder_id)
+    template_id = (
+        settings.GOOGLE_EXTERNAL_OT_TEMPLATE_FILE_ID
+        if is_external_work and settings.GOOGLE_EXTERNAL_OT_TEMPLATE_FILE_ID
+        else settings.GOOGLE_OT_TEMPLATE_FILE_ID
+    )
+    return _copy_template(ot_number, folder_id, template_id)
 
 
 def trash_ot_file(file_id: str) -> bool:
@@ -632,6 +662,13 @@ def populate_ot_fields(
     requested_signature: str | None = None,
     approved_signature: str | None = None,
     status: str = "PENDING",
+    is_external_work: bool = False,
+    external_company: str | None = None,
+    external_quote_number: str | None = None,
+    external_oc_number: str | None = None,
+    external_invoice_number: str | None = None,
+    external_account_number: str | None = None,
+    external_oc_amount: str | None = None,
 ) -> None:
     """Write all OT fields into the template spreadsheet.
 
@@ -653,6 +690,7 @@ def populate_ot_fields(
             # Keep already formatted or legacy values unchanged.
             return value
 
+    field_map = EXTERNAL_OT_FIELD_MAP if is_external_work else OT_FIELD_MAP
     range_values = []
 
     # ── Text fields (from OT_FIELD_MAP) ──
@@ -671,6 +709,12 @@ def populate_ot_fields(
         "folio":              folio or "",
         "risks":              risks or "",
         "observations":       observations or "",
+        "external_company":   external_company or "",
+        "external_quote_number": external_quote_number or "",
+        "external_oc_number": external_oc_number or "",
+        "external_invoice_number": external_invoice_number or "",
+        "external_account_number": external_account_number or "",
+        "external_oc_amount": external_oc_amount or "",
         # Autorización cells hold label + name + firma line; build the full text.
     }
 
@@ -682,9 +726,9 @@ def populate_ot_fields(
         text_fields["performed_by"] = build_authorization_text(REALIZADO_BY_LABEL, approved_by)
 
     for field, value in text_fields.items():
-        if value and field in OT_FIELD_MAP:
+        if field in field_map and (value or is_external_work):
             range_values.append({
-                "range": OT_FIELD_MAP[field],
+                "range": field_map[field],
                 "values": [[str(value)]],
             })
 
@@ -699,7 +743,12 @@ def populate_ot_fields(
     # targets themselves — no stale glyph cells to clear.
 
     # Maintenance type (per-cell)
-    for cell, text in build_maintenance_cell_texts(maintenance_type).items():
+    maintenance_cells = (
+        build_external_maintenance_cell_texts(maintenance_type)
+        if is_external_work
+        else build_maintenance_cell_texts(maintenance_type)
+    )
+    for cell, text in maintenance_cells.items():
         _write_single(spreadsheet_id, cell, text)
 
     # LOTO controls (per-cell). None keeps compatibility with older callers

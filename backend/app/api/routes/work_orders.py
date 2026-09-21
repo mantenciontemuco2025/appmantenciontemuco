@@ -372,6 +372,11 @@ def _work_order_to_response(wo: WorkOrder) -> dict:
         "is_external_work": wo.is_external_work,
         "external_executor_name": wo.external_executor_name,
         "external_company": wo.external_company,
+        "external_quote_number": wo.external_quote_number,
+        "external_oc_number": wo.external_oc_number,
+        "external_invoice_number": wo.external_invoice_number,
+        "external_account_number": wo.external_account_number,
+        "external_oc_amount": wo.external_oc_amount,
         "coordinator_user_id": wo.coordinator_user_id,
         "is_planned": wo.is_planned,
         "scheduled_date": wo.scheduled_date,
@@ -810,6 +815,11 @@ async def create_work_order(
         is_external_work=is_external_work,
         external_executor_name=(payload.external_executor_name if is_external_work else None),
         external_company=(payload.external_company if is_external_work else None),
+        external_quote_number=(payload.external_quote_number if is_external_work else None),
+        external_oc_number=(payload.external_oc_number if is_external_work else None),
+        external_invoice_number=(payload.external_invoice_number if is_external_work else None),
+        external_account_number=(payload.external_account_number if is_external_work else None),
+        external_oc_amount=(payload.external_oc_amount if is_external_work else None),
         coordinator_user_id=(
             current_user.id
             if is_external_work and current_user.role == UserRole.ADMIN
@@ -1204,6 +1214,12 @@ def _payload_from_wo(wo):
         observations = wo.observations
         folio = wo.folio
         voucher_number = wo.voucher_number
+        external_company = wo.external_company
+        external_quote_number = wo.external_quote_number
+        external_oc_number = wo.external_oc_number
+        external_invoice_number = wo.external_invoice_number
+        external_account_number = wo.external_account_number
+        external_oc_amount = wo.external_oc_amount
         requested_by = wo.requested_by
         approved_by = wo.approved_by
         requested_signature = wo.requested_signature
@@ -1219,7 +1235,8 @@ def _payload_from_wo(wo):
 async def _populate_individual_ot(wo: WorkOrder) -> None:
     """Write the current OT state, including immutable signature snapshots."""
     participants = [p.full_name for p in (wo.participants or [])]
-    if wo.is_external_work and wo.external_executor_name:
+    uses_external_template = getattr(wo, "google_ot_template_kind", None) == "EXTERNAL"
+    if getattr(wo, "is_external_work", False) and getattr(wo, "external_executor_name", None):
         participants.append(wo.external_executor_name)
     await asyncio.to_thread(
         drive_service.populate_ot_fields,
@@ -1241,6 +1258,13 @@ async def _populate_individual_ot(wo: WorkOrder) -> None:
         observations=wo.observations,
         folio=wo.folio,
         voucher_number=wo.voucher_number,
+        is_external_work=uses_external_template,
+        external_company=getattr(wo, "external_company", None),
+        external_quote_number=getattr(wo, "external_quote_number", None),
+        external_oc_number=getattr(wo, "external_oc_number", None),
+        external_invoice_number=getattr(wo, "external_invoice_number", None),
+        external_account_number=getattr(wo, "external_account_number", None),
+        external_oc_amount=getattr(wo, "external_oc_amount", None),
         requested_by=wo.requested_by,
         approved_by=wo.approved_by,
         requested_signature=wo.requested_signature,
@@ -1280,12 +1304,21 @@ async def _sync_ot_and_monthly(db, wo, area, equipment, payload, user_id):
         if wo.google_ot_file_id:
             doc_id = wo.google_ot_file_id
         else:
+            template_kind = (
+                "EXTERNAL"
+                if wo.is_external_work and settings.GOOGLE_EXTERNAL_OT_TEMPLATE_FILE_ID
+                else "REGULAR"
+            )
             ot_result = await asyncio.to_thread(
-                drive_service.create_ot_file, wo.ot_number, exec_dt
+                drive_service.create_ot_file,
+                wo.ot_number,
+                exec_dt,
+                is_external_work=wo.is_external_work,
             )
             doc_id = ot_result["file_id"]
             wo.google_ot_file_id = ot_result["file_id"]
             wo.google_ot_url = ot_result["url"]
+            wo.google_ot_template_kind = template_kind
 
             # Persist the Drive ID before populating Sheets or calling Apps
             # Script. Those later operations can fail independently. Keeping
@@ -1312,6 +1345,13 @@ async def _sync_ot_and_monthly(db, wo, area, equipment, payload, user_id):
             observations=payload.observations,
             folio=payload.folio,
             voucher_number=payload.voucher_number,
+            is_external_work=wo.google_ot_template_kind == "EXTERNAL",
+            external_company=wo.external_company,
+            external_quote_number=wo.external_quote_number,
+            external_oc_number=wo.external_oc_number,
+            external_invoice_number=wo.external_invoice_number,
+            external_account_number=wo.external_account_number,
+            external_oc_amount=wo.external_oc_amount,
             requested_by=payload.requested_by,
             # The REALIZADO POR block is populated only when the responsible
             # worker completes the OT; never accept a pre-filled name here.
@@ -1722,6 +1762,123 @@ async def upload_work_order_evidence(
     return evidence
 
 
+@router.delete("/{wo_id}/evidence/{evidence_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_work_order_evidence(
+    wo_id: int,
+    evidence_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Remove an evidence photo from Drive and its metadata from the OT.
+
+    The uploader may remove their own photo while the corresponding stage is
+    still editable. Administrators may correct any photo until the OT is
+    approved or cancelled. The Drive file is trashed before deleting metadata
+    so a database failure never leaves a visible orphan in the OT folder.
+    """
+    result = await db.execute(
+        _base_query().where(WorkOrder.id == wo_id).with_for_update()
+    )
+    wo = result.scalar_one_or_none()
+    if wo is None:
+        raise HTTPException(status_code=404, detail="Orden de trabajo no encontrada")
+    if not perms.can_view(wo, current_user):
+        raise HTTPException(status_code=403, detail="No tiene permiso para ver esta OT")
+
+    evidence = await db.scalar(
+        select(WorkOrderEvidence)
+        .where(
+            WorkOrderEvidence.id == evidence_id,
+            WorkOrderEvidence.work_order_id == wo_id,
+        )
+        .with_for_update()
+    )
+    if evidence is None:
+        raise HTTPException(status_code=404, detail="Foto de evidencia no encontrada")
+
+    closed_statuses = {
+        WorkOrderStatus.APPROVED.value,
+        WorkOrderStatus.CANCELLED.value,
+    }
+    if wo.status in closed_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail="No se pueden modificar fotos de una OT aprobada o cancelada",
+        )
+
+    is_admin = current_user.role == UserRole.ADMIN
+    if not is_admin:
+        if evidence.uploaded_by_user_id != current_user.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Solo puedes eliminar tus propias fotos",
+            )
+
+        if evidence.stage == "ISSUE":
+            allowed = (
+                current_user.role in manager_roles
+                and perms.can_issue(wo, current_user)
+                and wo.status in (
+                    WorkOrderStatus.DRAFT.value,
+                    WorkOrderStatus.PENDING.value,
+                )
+            )
+        else:
+            allowed = (
+                wo.status in (
+                    WorkOrderStatus.PENDING.value,
+                    WorkOrderStatus.IN_PROGRESS.value,
+                )
+                and (
+                    (current_user.role == UserRole.WORKER
+                     and perms.can_complete(wo, current_user))
+                    or (current_user.role == UserRole.SUPERVISOR
+                        and perms.can_issue(wo, current_user))
+                )
+            )
+        if not allowed:
+            raise HTTPException(
+                status_code=403,
+                detail="La foto ya no se puede modificar en esta etapa de la OT",
+            )
+
+    try:
+        await run_in_threadpool(drive_service.trash_ot_file, evidence.drive_file_id)
+    except Exception as exc:  # noqa: BLE001 - Google API errors vary by transport.
+        logger.exception("No se pudo eliminar evidencia %s desde Drive", evidence.id)
+        raise HTTPException(
+            status_code=502,
+            detail="No se pudo eliminar la foto de Google Drive",
+        ) from exc
+
+    deleted_data = {
+        "filename": evidence.filename,
+        "stage": evidence.stage,
+        "uploaded_by_user_id": evidence.uploaded_by_user_id,
+        "drive_file_id": evidence.drive_file_id,
+    }
+    await db.delete(evidence)
+    await create_audit_log(
+        db,
+        user_id=current_user.id,
+        action="DELETE_WORK_ORDER_EVIDENCE",
+        entity_type="WorkOrderEvidence",
+        entity_id=evidence_id,
+        previous_data=deleted_data,
+        new_data={"work_order_id": wo_id, "ot_number": wo.ot_number},
+    )
+    try:
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="La foto fue retirada de Drive, pero no se pudo actualizar la OT",
+        ) from exc
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get("/{wo_id}/evidence/{evidence_id}/content")
 async def get_work_order_evidence_content(
     wo_id: int,
@@ -1835,11 +1992,25 @@ async def update_work_order(
         else:
             wo.external_executor_name = None
             wo.external_company = None
+            wo.external_quote_number = None
+            wo.external_oc_number = None
+            wo.external_invoice_number = None
+            wo.external_account_number = None
+            wo.external_oc_amount = None
             wo.coordinator_user_id = None
     if "external_executor_name" in payload.model_fields_set:
         wo.external_executor_name = payload.external_executor_name
     if "external_company" in payload.model_fields_set:
         wo.external_company = payload.external_company
+    for field in (
+        "external_quote_number",
+        "external_oc_number",
+        "external_invoice_number",
+        "external_account_number",
+        "external_oc_amount",
+    ):
+        if field in payload.model_fields_set:
+            setattr(wo, field, getattr(payload, field))
     if wo.is_external_work:
         wo.participant_names = None
     else:
@@ -1847,6 +2018,11 @@ async def update_work_order(
         # to the regular employee workflow.
         wo.external_executor_name = None
         wo.external_company = None
+        wo.external_quote_number = None
+        wo.external_oc_number = None
+        wo.external_invoice_number = None
+        wo.external_account_number = None
+        wo.external_oc_amount = None
         wo.coordinator_user_id = None
 
     if payload.title is not None:
@@ -1971,6 +2147,8 @@ async def update_work_order(
         "section_name", "maintenance_type", "estimated_time",
         "execution_date", "participant_names", "responsible_user_id",
         "is_external_work", "external_executor_name", "external_company",
+        "external_quote_number", "external_oc_number", "external_invoice_number",
+        "external_account_number", "external_oc_amount",
     }
     changed = payload.model_dump(exclude_unset=True)
     monthly_relevant = set(changed) & _changed_monthly_fields
@@ -1986,6 +2164,8 @@ async def update_work_order(
         "folio", "voucher_number", "requested_by",
         "responsible_user_id", "participant_user_ids", "participant_names",
         "is_external_work", "external_executor_name", "external_company",
+        "external_quote_number", "external_oc_number", "external_invoice_number",
+        "external_account_number", "external_oc_amount",
     }
     populate_individual = bool(set(changed) & _changed_ot_fields and wo.google_ot_file_id)
     should_sync = should_sync or populate_individual

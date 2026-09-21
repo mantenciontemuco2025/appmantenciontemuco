@@ -35,6 +35,11 @@ class WorkOrderCreate(BaseModel):
     is_external_work: bool = False
     external_executor_name: str | None = Field(default=None, max_length=200)
     external_company: str | None = Field(default=None, max_length=200)
+    external_quote_number: str | None = Field(default=None, max_length=80)
+    external_oc_number: str | None = Field(default=None, max_length=80)
+    external_invoice_number: str | None = Field(default=None, max_length=80)
+    external_account_number: str | None = Field(default=None, max_length=80)
+    external_oc_amount: str | None = Field(default=None, max_length=80)
 
     # ── Workflow fields ──────────────────────────────────────────────────
     responsible_user_id: int | None = None
@@ -58,7 +63,7 @@ class WorkOrderCreate(BaseModel):
     @field_validator("maintenance_type")
     @classmethod
     def valid_maintenance_type(cls, v: str) -> str:
-        valid = {"PREVENTIVE", "CORRECTIVE", "PREDICTIVE", "PROYECTO", "MONTAJE"}
+        valid = {"PREVENTIVE", "CORRECTIVE", "PREDICTIVE", "PROYECTO", "MONTAJE", "URGENTE"}
         if v.upper() not in valid:
             raise ValueError(f"Tipo de mantención inválido. Use: {', '.join(sorted(valid))}")
         return v.upper()
@@ -84,7 +89,15 @@ class WorkOrderCreate(BaseModel):
             raise ValueError(f"Área no válida. Use: {', '.join(WORK_ORDER_AREAS)}")
         return normalized
 
-    @field_validator("external_executor_name", "external_company")
+    @field_validator(
+        "external_executor_name",
+        "external_company",
+        "external_quote_number",
+        "external_oc_number",
+        "external_invoice_number",
+        "external_account_number",
+        "external_oc_amount",
+    )
     @classmethod
     def normalize_external_text(cls, value: str | None) -> str | None:
         value = value.strip() if value else None
@@ -131,6 +144,11 @@ class WorkOrderUpdate(BaseModel):
     is_external_work: bool | None = None
     external_executor_name: str | None = Field(default=None, max_length=200)
     external_company: str | None = Field(default=None, max_length=200)
+    external_quote_number: str | None = Field(default=None, max_length=80)
+    external_oc_number: str | None = Field(default=None, max_length=80)
+    external_invoice_number: str | None = Field(default=None, max_length=80)
+    external_account_number: str | None = Field(default=None, max_length=80)
+    external_oc_amount: str | None = Field(default=None, max_length=80)
     is_planned: bool | None = None
     scheduled_date: date | None = None
     due_date: date | None = None
@@ -157,7 +175,15 @@ class WorkOrderUpdate(BaseModel):
             raise ValueError(f"Área no válida. Use: {', '.join(WORK_ORDER_AREAS)}")
         return normalized
 
-    @field_validator("external_executor_name", "external_company")
+    @field_validator(
+        "external_executor_name",
+        "external_company",
+        "external_quote_number",
+        "external_oc_number",
+        "external_invoice_number",
+        "external_account_number",
+        "external_oc_amount",
+    )
     @classmethod
     def normalize_external_text(cls, value: str | None) -> str | None:
         value = value.strip() if value else None
@@ -200,6 +226,11 @@ class WorkOrderResponse(BaseModel):
     is_external_work: bool = False
     external_executor_name: str | None = None
     external_company: str | None = None
+    external_quote_number: str | None = None
+    external_oc_number: str | None = None
+    external_invoice_number: str | None = None
+    external_account_number: str | None = None
+    external_oc_amount: str | None = None
     coordinator_user_id: int | None = None
     is_planned: bool = False
     scheduled_date: date | None = None

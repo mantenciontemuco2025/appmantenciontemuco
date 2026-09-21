@@ -27,6 +27,7 @@ const TYPE_LABELS: Record<string, string> = {
   PREDICTIVE: "Predictivo",
   PROYECTO: "Proyecto",
   MONTAJE: "Montaje",
+  URGENTE: "Urgente",
 };
 
 function localDate(date: Date) {

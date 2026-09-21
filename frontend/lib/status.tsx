@@ -60,6 +60,7 @@ const MAINTENANCE_TYPE_LABELS: Record<MaintenanceType, string> = {
   PREDICTIVE: "Predictivo",
   PROYECTO: "Proyecto",
   MONTAJE: "Montaje",
+  URGENTE: "Urgente",
 };
 
 export function maintenanceTypeLabel(type: MaintenanceType): string {
