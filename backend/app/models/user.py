@@ -26,6 +26,12 @@ class User(Base):
         ForeignKey("areas.id"), nullable=True, index=True
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Permite habilitar el mÃ³dulo de registro de agua para usuarios que no
+    # tienen rol de supervisor. Los administradores y supervisores conservan
+    # el acceso por su rol.
+    can_manage_water_register: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     # URL de Drive de la firma manuscrita del usuario (cargada una vez, en su
     # perfil). Se usa para pegarla como imagen en el documento de la OT y para
     # mostrarla en la app. NULL si el usuario aún no ha subido su firma.

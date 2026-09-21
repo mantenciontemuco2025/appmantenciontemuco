@@ -218,6 +218,7 @@ async def create_user(
         role=payload.role,
         area_id=assigned_area_ids[0] if assigned_area_ids else None,
         is_active=payload.is_active,
+        can_manage_water_register=payload.can_manage_water_register,
     )
     user.supervised_areas = assigned_areas
     db.add(user)
@@ -234,6 +235,7 @@ async def create_user(
             "email": user.email,
             "role": user.role.value,
             "area_ids": assigned_area_ids,
+            "can_manage_water_register": user.can_manage_water_register,
         },
     )
     await db.refresh(user)
@@ -286,6 +288,7 @@ async def update_user(
         "email": user.email,
         "role": user.role.value,
         "is_active": user.is_active,
+        "can_manage_water_register": user.can_manage_water_register,
         "signature": user.signature,
         "area_id": user.area_id,
         "area_ids": user.area_ids,
@@ -355,6 +358,8 @@ async def update_user(
     user.supervised_areas = [area_by_id[area_id] for area_id in next_area_ids]
     if payload.is_active is not None:
         user.is_active = payload.is_active
+    if payload.can_manage_water_register is not None:
+        user.can_manage_water_register = payload.can_manage_water_register
     if payload.password is not None:
         user.password_hash = hash_password(payload.password)
     await create_audit_log(
@@ -369,6 +374,7 @@ async def update_user(
             "email": user.email,
             "role": user.role.value,
             "is_active": user.is_active,
+            "can_manage_water_register": user.can_manage_water_register,
             "signature": user.signature,
             "area_id": user.area_id,
             "area_ids": next_area_ids,

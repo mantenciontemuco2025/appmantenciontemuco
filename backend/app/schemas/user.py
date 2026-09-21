@@ -11,6 +11,7 @@ class UserBase(BaseModel):
     area_id: int | None = None
     area_ids: list[int] = []
     is_active: bool = True
+    can_manage_water_register: bool = False
 
 
 class UserCreate(UserBase):
@@ -24,6 +25,7 @@ class UserUpdate(BaseModel):
     area_id: int | None = None
     area_ids: list[int] | None = None
     is_active: bool | None = None
+    can_manage_water_register: bool | None = None
     password: str | None = None
 
     @field_validator("password")

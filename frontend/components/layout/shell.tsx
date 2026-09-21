@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { Wrench, LayoutDashboard, ClipboardList, ClipboardCheck, Users, LogOut, PenLine, Droplets } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NotificationBell } from "@/components/notifications/bell";
+import { getAuthUser } from "@/lib/auth";
 
 interface NavItem {
   href: string;
@@ -12,6 +13,7 @@ interface NavItem {
   icon: React.ReactNode;
   adminOnly?: boolean;
   managerOnly?: boolean;
+  waterRegisterOnly?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -19,7 +21,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/mis-ordenes", label: "Mis Órdenes", icon: <ClipboardCheck className="h-4 w-4" /> },
   { href: "/ordenes", label: "Órdenes", icon: <ClipboardList className="h-4 w-4" />, managerOnly: true },
   { href: "/perfil", label: "Mi perfil", icon: <PenLine className="h-4 w-4" /> },
-  { href: "/registro-agua", label: "Registro de agua", icon: <Droplets className="h-4 w-4" /> },
+  { href: "/registro-agua", label: "Registro de agua", icon: <Droplets className="h-4 w-4" />, waterRegisterOnly: true },
   { href: "/admin", label: "Admin", icon: <Users className="h-4 w-4" />, adminOnly: true },
 ];
 
@@ -27,14 +29,25 @@ export function Shell({
   children,
   fullName,
   role,
+  waterRegisterAccess,
   onLogout,
 }: {
   children: React.ReactNode;
   fullName: string;
   role: string;
+  waterRegisterAccess?: boolean;
   onLogout: () => void;
 }) {
   const pathname = usePathname();
+  // Se lee desde el almacenamiento porque todas las pantallas ya cargan el
+  // usuario autenticado antes de renderizar Shell. ADMIN y SUPERVISOR siguen
+  // entrando por rol; el permiso adicional habilita a un trabajador asignado.
+  const storedUser = getAuthUser();
+  const canAccessWater =
+    role === "ADMIN" ||
+    role === "SUPERVISOR" ||
+    waterRegisterAccess === true ||
+    storedUser?.can_manage_water_register === true;
 
   function isActive(item: NavItem): boolean {
     // Los enlaces con sub-rutas (detalles, creación) cuentan como activos en su
@@ -86,7 +99,8 @@ export function Shell({
             {NAV_ITEMS.filter(
               (item) =>
                 (!item.adminOnly || role === "ADMIN") &&
-                (!item.managerOnly || role === "ADMIN" || role === "SUPERVISOR")
+                (!item.managerOnly || role === "ADMIN" || role === "SUPERVISOR") &&
+                (!item.waterRegisterOnly || canAccessWater)
             ).map((item) => (
               <Link
                 key={item.href}

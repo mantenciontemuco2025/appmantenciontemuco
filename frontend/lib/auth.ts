@@ -24,6 +24,7 @@ export interface AuthUser {
   area_ids: number[];
   area_names: string[];
   is_active: boolean;
+  can_manage_water_register: boolean;
   signature: string | null;
   created_at: string;
   updated_at: string;

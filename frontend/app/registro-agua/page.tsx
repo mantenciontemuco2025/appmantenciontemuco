@@ -80,7 +80,14 @@ export default function WaterRegisterPage() {
   const [history, setHistory] = useState<HistoricalData | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const isManager = user?.role === "ADMIN" || user?.role === "SUPERVISOR";
+  const canManageWater = isManager || user?.can_manage_water_register === true;
   const hasBaselines = (data?.baselines.length ?? 0) === (data?.meters.length ?? -1) && !!data?.meters.length;
+
+  useEffect(() => {
+    if (!loading && user && !canManageWater) {
+      router.replace("/dashboard");
+    }
+  }, [loading, user, canManageWater, router]);
 
   const load = useCallback(async () => {
     const result = await api.get<WaterData>("/api/water-register");
@@ -218,7 +225,7 @@ export default function WaterRegisterPage() {
   if (loading || !user) return <PageLoading message={loading ? "Validando sesión…" : "Redirigiendo al inicio de sesión…"} />;
 
   return (
-    <Shell fullName={user.full_name} role={user.role} onLogout={logout}>
+      <Shell fullName={user.full_name} role={user.role} waterRegisterAccess={user.can_manage_water_register} onLogout={logout}>
       <div className="mb-6 flex items-start gap-3">
         <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-sky-100 text-sky-700"><Droplets className="h-6 w-6" /></span>
         <div><h1 className="text-2xl font-bold">Registro de agua y RILES</h1><p className="text-muted-foreground">Lecturas diarias, medidores y control de DQO.</p></div>
@@ -226,7 +233,7 @@ export default function WaterRegisterPage() {
 
       {(error || message) && <div className={`mb-4 rounded-lg border p-3 text-sm ${error ? "border-red-200 bg-red-50 text-red-800" : "border-emerald-200 bg-emerald-50 text-emerald-800"}`}>{error || message}</div>}
 
-      {isManager && !hasBaselines && (
+      {canManageWater && !hasBaselines && (
         <Card className="mb-5 border-amber-200 bg-amber-50/70 p-4">
           <h2 className="font-semibold">Configuración inicial requerida</h2>
           <p className="mt-1 text-sm text-muted-foreground">Importa desde la copia de la planilla la última lectura válida de cada medidor. Se ignoran los ceros de las filas futuras.</p>
@@ -234,7 +241,7 @@ export default function WaterRegisterPage() {
         </Card>
       )}
 
-      {isManager && hasBaselines && (
+      {canManageWater && hasBaselines && (
         <Card className="mb-6 p-4 sm:p-6">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <div><h2 className="text-lg font-semibold">{editingId ? "Editar registro diario" : "Nuevo registro diario"}</h2><p className="text-sm text-muted-foreground">Una fila por día. Las columnas de volumen las calcula la hoja.</p></div>
@@ -306,8 +313,6 @@ export default function WaterRegisterPage() {
         </div>}
       </Card>
 
-      {!isManager && <Card className="mb-5 p-4 text-sm text-muted-foreground">Tienes acceso de consulta. Solo administradores y supervisores pueden registrar o editar datos.</Card>}
-
       <section>
         <h2 className="mb-3 text-lg font-semibold">Registros recientes</h2>
         {!data?.records.length ? <Card className="p-8 text-center text-muted-foreground">Aún no hay registros diarios.</Card> : <div className="space-y-3">
@@ -318,7 +323,7 @@ export default function WaterRegisterPage() {
                 <div><div className="flex flex-wrap items-center gap-2"><h3 className="font-semibold">{fmtDate(record.record_date)}</h3><span className={`rounded-full px-2.5 py-1 text-xs font-medium ${sync.tone}`}>{record.sync_status === "SYNCED" ? <Check className="mr-1 inline h-3 w-3" /> : record.sync_status === "FAILED" ? <AlertCircle className="mr-1 inline h-3 w-3" /> : <Clock3 className="mr-1 inline h-3 w-3" />}{sync.text}</span>{record.sheet_row && <span className="text-xs text-muted-foreground">Fila {record.sheet_row}</span>}</div>
                   <p className="mt-2 text-sm text-muted-foreground">Caudal: {numberText(record.discharge_flow_m3)} m³ · pH PLC: {numberText(record.ph_plc)} · pH descarga: {numberText(record.ph_discharge)} · Temp.: {numberText(record.discharge_temp_c)} °C</p>
                 </div>
-                {isManager && <div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => editRecord(record)}>Editar</Button>{record.sync_status === "FAILED" && <Button variant="outline" size="sm" onClick={() => retrySync(record.id)}><RefreshCw className="mr-1 h-3.5 w-3.5" /> Reintentar</Button>}</div>}
+                {canManageWater && <div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => editRecord(record)}>Editar</Button>{record.sync_status === "FAILED" && <Button variant="outline" size="sm" onClick={() => retrySync(record.id)}><RefreshCw className="mr-1 h-3.5 w-3.5" /> Reintentar</Button>}</div>}
               </div>
               {record.meter_readings.length > 0 && <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{record.meter_readings.map((reading) => <div key={reading.meter_key} className="rounded-md bg-muted/40 px-3 py-2 text-sm"><span className="font-medium">{data.meters.find((meter) => meter.key === reading.meter_key)?.label}</span><p className="text-muted-foreground">{numberText(reading.initial_reading)} → {numberText(reading.final_reading)}</p></div>)}</div>}
               {(record.dqo_samples?.length ?? 0) > 0 && <div className="mt-3 space-y-1 text-sm"><p className="font-medium">Análisis DQO</p>{record.dqo_samples.map((sample, index) => <p key={sample.id ?? index} className="text-muted-foreground">Muestra {index + 1}: {fmtDate(sample.date)} · {sample.time || "sin hora"} · Piscina {sample.pool || "—"} · {numberText(sample.mg_l)} mg/L</p>)}</div>}

@@ -36,8 +36,19 @@ from app.services.water_register_sheet import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/water-register", tags=["water-register"])
-manager_roles = require_roles(UserRole.ADMIN, UserRole.SUPERVISOR)
 admin_only = require_roles(UserRole.ADMIN)
+
+
+async def water_register_access(current_user: User = Depends(get_current_user)) -> User:
+    """Allow the normal maintenance managers and explicitly assigned users."""
+    if current_user.role in (UserRole.ADMIN, UserRole.SUPERVISOR):
+        return current_user
+    if getattr(current_user, "can_manage_water_register", False):
+        return current_user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="No tiene habilitado el mÃ³dulo de registro de agua.",
+    )
 
 
 def _record_to_sheet(record: WaterRegisterRecord) -> dict:
@@ -363,7 +374,7 @@ async def _save_payload(
 @router.post("", response_model=WaterRegisterRecordResponse, status_code=status.HTTP_201_CREATED)
 async def create_water_record(
     payload: WaterRegisterInput,
-    current_user: User = Depends(manager_roles),
+    current_user: User = Depends(water_register_access),
     db: AsyncSession = Depends(get_db),
 ):
     return await _save_payload(payload, current_user, db, None)
@@ -373,7 +384,7 @@ async def create_water_record(
 async def update_water_record(
     record_date: date,
     payload: WaterRegisterInput,
-    current_user: User = Depends(manager_roles),
+    current_user: User = Depends(water_register_access),
     db: AsyncSession = Depends(get_db),
 ):
     if record_date != payload.record_date:
@@ -390,7 +401,7 @@ async def update_water_record(
 @router.post("/{record_id}/retry-sync")
 async def retry_water_sync(
     record_id: int,
-    current_user: User = Depends(manager_roles),
+    current_user: User = Depends(water_register_access),
     db: AsyncSession = Depends(get_db),
 ):
     record = await _loaded_record(db, record_id)

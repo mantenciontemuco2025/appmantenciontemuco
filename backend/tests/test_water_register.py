@@ -48,6 +48,28 @@ async def test_admin_and_supervisor_can_write_but_worker_is_read_only(
     assert len(readable.json()["records"]) == 1
 
 
+async def test_admin_can_assign_water_register_to_worker(
+    client, seed_data, db_session_factory
+):
+    await _seed_baselines(db_session_factory, seed_data["admin"].id)
+    admin = auth_headers(await get_token(client, "admin@test.com"))
+    assigned = await client.patch(
+        f"/api/users/{seed_data['worker'].id}",
+        json={"can_manage_water_register": True},
+        headers=admin,
+    )
+    assert assigned.status_code == 200, assigned.text
+    assert assigned.json()["can_manage_water_register"] is True
+
+    worker = auth_headers(await get_token(client, "ortiz@test.com"))
+    response = await client.post(
+        "/api/water-register",
+        json={"record_date": "2026-09-17", "meter_final_readings": {"riles_aa": "1001"}},
+        headers=worker,
+    )
+    assert response.status_code == 201, response.text
+
+
 async def test_unique_daily_record_and_multiple_dqo_samples(
     client, seed_data, db_session_factory
 ):

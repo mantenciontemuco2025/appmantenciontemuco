@@ -19,6 +19,7 @@ export interface User {
   area_ids: number[];
   area_names: string[];
   is_active: boolean;
+  can_manage_water_register: boolean;
   signature: string | null;
 }
 
