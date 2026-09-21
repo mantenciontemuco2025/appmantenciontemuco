@@ -31,6 +31,7 @@ const hintCls = "text-xs text-muted-foreground mb-2";
 interface FulfillForm {
   maintenance_type: string;
   loto_controls: LotoControl[];
+  request_date: string;
   execution_date: string;   // fecha de ejecución — la coloca el trabajador
   time_mode: WorkTimeMode;
   start_time: string;
@@ -43,6 +44,13 @@ interface FulfillForm {
   observations: string;
   folio: string;
   voucher_number: string;
+  external_executor_name: string;
+  external_company: string;
+  external_quote_number: string;
+  external_oc_number: string;
+  external_invoice_number: string;
+  external_account_number: string;
+  external_oc_amount: string;
 }
 
 interface AlertState {
@@ -76,6 +84,7 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
   const [form, setForm] = useState<FulfillForm>({
     maintenance_type: "PREVENTIVE",
     loto_controls: ["NOT_APPLICABLE"],
+    request_date: "",
     execution_date: "",
     time_mode: "RANGE",
     start_time: "",
@@ -88,6 +97,13 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
     observations: "",
     folio: "",
     voucher_number: "",
+    external_executor_name: "",
+    external_company: "",
+    external_quote_number: "",
+    external_oc_number: "",
+    external_invoice_number: "",
+    external_account_number: "",
+    external_oc_amount: "",
   });
   const [savingFulfill, setSavingFulfill] = useState(false);
   const [autoSaveState, setAutoSaveState] = useState<AutoSaveState>("idle");
@@ -142,6 +158,7 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
               : data.loto_status === "YES"
                 ? ["LOTO_BLOQUEO"]
                 : ["NOT_APPLICABLE"],
+          request_date: (data.request_date || "").slice(0, 10),
           execution_date:
             (data.execution_date || "").slice(0, 10) ||
             todayDateInputValue(),
@@ -162,6 +179,13 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
           observations: data.observations || "",
           folio: data.folio || "",
           voucher_number: data.voucher_number || "",
+          external_executor_name: data.external_executor_name || "",
+          external_company: data.external_company || "",
+          external_quote_number: data.external_quote_number || "",
+          external_oc_number: data.external_oc_number || "",
+          external_invoice_number: data.external_invoice_number || "",
+          external_account_number: data.external_account_number || "",
+          external_oc_amount: data.external_oc_amount || "",
           ...localDraft,
         }));
         setFormHydratedId(id);
@@ -204,6 +228,9 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
   // Can fulfill details while PENDING (before work starts) or IN_PROGRESS
   const canFulfill =
     isResponsible && (wo?.status === "PENDING" || wo?.status === "IN_PROGRESS");
+  const canEditExternalAdminData = Boolean(
+    canFulfill && user?.role === "ADMIN" && wo?.is_external_work,
+  );
 
   function toast(variant: AlertState["variant"], message: string) {
     setNotice({ variant, message });
@@ -274,6 +301,7 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
       maintenance_type: values.maintenance_type,
       loto_status: values.loto_controls.includes("NOT_APPLICABLE") ? "NOT_APPLICABLE" : "YES",
       loto_controls: values.loto_controls,
+      request_date: values.request_date || null,
       execution_date: values.execution_date || null,
       work_time_mode: values.time_mode,
       work_start_time: values.time_mode === "RANGE" ? values.start_time || null : null,
@@ -288,6 +316,17 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
       observations: values.observations || null,
       folio: values.folio || null,
       voucher_number: values.voucher_number || null,
+      ...(wo?.is_external_work
+        ? {
+            external_executor_name: values.external_executor_name.trim() || null,
+            external_company: values.external_company.trim() || null,
+            external_quote_number: values.external_quote_number.trim() || null,
+            external_oc_number: values.external_oc_number.trim() || null,
+            external_invoice_number: values.external_invoice_number.trim() || null,
+            external_account_number: values.external_account_number.trim() || null,
+            external_oc_amount: values.external_oc_amount.trim() || null,
+          }
+        : {}),
     };
   }
 
@@ -561,6 +600,55 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                   <p className="text-xs text-destructive">
                     No se perdió lo escrito. Se conserva una copia local. {autoSaveError}
                   </p>
+                )}
+
+                {canEditExternalAdminData && (
+                  <div className="space-y-4 rounded-lg border border-cyan-200 bg-cyan-50/60 p-4">
+                    <div>
+                      <h4 className="font-semibold text-cyan-950">Datos administrativos de la OT externa</h4>
+                      <p className="mt-1 text-xs text-cyan-800">
+                        El administrador puede corregir o completar estos datos antes de aprobar la OT. También se actualizarán en la plantilla de Drive.
+                      </p>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className={labelCls}>Persona externa</label>
+                        <Input value={form.external_executor_name} onChange={(e) => updateFormField("external_executor_name", e.target.value)} />
+                      </div>
+                      <div>
+                        <label className={labelCls}>Empresa contratista</label>
+                        <Input value={form.external_company} onChange={(e) => updateFormField("external_company", e.target.value)} />
+                      </div>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className={labelCls}>Fecha de solicitud</label>
+                        <Input type="date" value={form.request_date} onChange={(e) => updateFormField("request_date", e.target.value)} />
+                      </div>
+                      <div>
+                        <label className={labelCls}>N° cotización</label>
+                        <Input value={form.external_quote_number} onChange={(e) => updateFormField("external_quote_number", e.target.value)} />
+                      </div>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      <div>
+                        <label className={labelCls}>N° OC</label>
+                        <Input value={form.external_oc_number} onChange={(e) => updateFormField("external_oc_number", e.target.value)} />
+                      </div>
+                      <div>
+                        <label className={labelCls}>N° factura</label>
+                        <Input value={form.external_invoice_number} onChange={(e) => updateFormField("external_invoice_number", e.target.value)} />
+                      </div>
+                      <div>
+                        <label className={labelCls}>N° cuenta</label>
+                        <Input value={form.external_account_number} onChange={(e) => updateFormField("external_account_number", e.target.value)} />
+                      </div>
+                    </div>
+                    <div>
+                      <label className={labelCls}>Monto OC</label>
+                      <Input value={form.external_oc_amount} onChange={(e) => updateFormField("external_oc_amount", e.target.value)} />
+                    </div>
+                  </div>
                 )}
 
                 <Select

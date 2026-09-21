@@ -708,6 +708,12 @@ async def create_work_order(
     )
     is_supervisor = current_user.role == UserRole.SUPERVISOR
 
+    if is_supervisor and payload.is_external_work:
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el administrador puede crear o convertir una OT en trabajo externo",
+        )
+
     if payload.emit:
         errors = []
         if not payload.description or not payload.description.strip():
@@ -1964,6 +1970,11 @@ async def update_work_order(
         if "external_executor_name" in payload.model_fields_set
         else wo.external_executor_name
     )
+    if current_user.role == UserRole.SUPERVISOR and next_external_mode:
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el administrador puede crear o convertir una OT en trabajo externo",
+        )
     if next_external_mode and not next_external_name:
         raise HTTPException(
             status_code=400,
@@ -2085,6 +2096,19 @@ async def update_work_order(
         wo.resources_required = payload.resources_required
     if payload.voucher_number is not None:
         wo.voucher_number = payload.voucher_number
+    if "external_executor_name" in payload.model_fields_set:
+        wo.external_executor_name = payload.external_executor_name
+    if "external_company" in payload.model_fields_set:
+        wo.external_company = payload.external_company
+    for field in (
+        "external_quote_number",
+        "external_oc_number",
+        "external_invoice_number",
+        "external_account_number",
+        "external_oc_amount",
+    ):
+        if field in payload.model_fields_set:
+            setattr(wo, field, getattr(payload, field))
     if payload.risks is not None:
         wo.risks = payload.risks
     if payload.observations is not None:
@@ -2414,6 +2438,19 @@ async def fulfill_work_order(
         wo.resources_required = payload.resources_required
     if payload.voucher_number is not None:
         wo.voucher_number = payload.voucher_number
+    if "external_executor_name" in payload.model_fields_set:
+        wo.external_executor_name = payload.external_executor_name
+    if "external_company" in payload.model_fields_set:
+        wo.external_company = payload.external_company
+    for field in (
+        "external_quote_number",
+        "external_oc_number",
+        "external_invoice_number",
+        "external_account_number",
+        "external_oc_amount",
+    ):
+        if field in payload.model_fields_set:
+            setattr(wo, field, getattr(payload, field))
     if payload.risks is not None:
         wo.risks = payload.risks
     if payload.observations is not None:
@@ -2482,6 +2519,9 @@ async def fulfill_work_order(
         "estimated_time", "execution_date", "participant_names", "loto_status", "loto_controls",
         "work_time_mode", "work_start_time", "work_end_time", "worked_duration_minutes",
         "risks", "observations", "resources_required", "folio", "voucher_number",
+        "request_date", "external_executor_name", "external_company",
+        "external_quote_number", "external_oc_number", "external_invoice_number",
+        "external_account_number", "external_oc_amount",
     }
     changed = payload.model_dump(exclude_unset=True)
     should_sync = bool(set(changed) & _changed and wo.google_ot_file_id)
@@ -2567,6 +2607,21 @@ async def autosave_fulfill_work_order(
         wo.folio = payload.folio
     if "voucher_number" in fields:
         wo.voucher_number = payload.voucher_number
+    if "request_date" in fields:
+        wo.request_date = payload.request_date
+    if "external_executor_name" in fields:
+        wo.external_executor_name = payload.external_executor_name
+    if "external_company" in fields:
+        wo.external_company = payload.external_company
+    for field in (
+        "external_quote_number",
+        "external_oc_number",
+        "external_invoice_number",
+        "external_account_number",
+        "external_oc_amount",
+    ):
+        if field in fields:
+            setattr(wo, field, getattr(payload, field))
 
     # Keep the OT's displayed duration aligned with either worker input mode.
     # Autosave may run while a range is incomplete, so only replace the value

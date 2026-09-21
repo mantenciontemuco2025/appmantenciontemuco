@@ -213,7 +213,7 @@ async def test_external_executor_is_written_in_existing_ot_participant_field(
     assert captured["participants"] == ["Wilson Contratista"]
 
 
-async def test_supervisor_external_request_is_assigned_to_accepting_admin(
+async def test_supervisor_cannot_create_external_work_request(
     client, seed_data, monkeypatch, db_session_factory
 ):
     async with db_session_factory() as db:
@@ -238,24 +238,63 @@ async def test_supervisor_external_request_is_assigned_to_accepting_admin(
             "external_company": "Mantenciones Ltda.",
         },
     )
+    assert submitted.status_code == 403, submitted.text
+    assert "Solo el administrador" in submitted.text
+
+
+async def test_admin_can_convert_supervisor_request_to_external(
+    client, seed_data, monkeypatch, db_session_factory
+):
+    async with db_session_factory() as db:
+        await db.execute(
+            insert(supervisor_areas).values(
+                supervisor_id=seed_data["supervisor"].id,
+                area_id=seed_data["area"].id,
+            )
+        )
+        await db.commit()
+
+    supervisor = await get_token(client, "supervisor@test.com")
+    submitted = await _create_ot(
+        client, seed_data, monkeypatch, token=supervisor, emit=True
+    )
     assert submitted.status_code == 201, submitted.text
     assert submitted.json()["submitted_for_review"] is True
-    assert submitted.json()["coordinator_user_id"] is None
+    assert submitted.json()["is_external_work"] is False
 
     admin = await get_token(client, "admin@test.com")
-    accepted = await client.post(
-        f"/api/work-orders/{submitted.json()['id']}/issue",
+    converted = await client.patch(
+        f"/api/work-orders/{submitted.json()['id']}",
+        json={
+            "is_external_work": True,
+            "external_executor_name": "Contratista de prueba",
+            "external_company": "Servicios Ltda.",
+            "responsible_user_id": None,
+            "participant_user_ids": [],
+        },
         headers=auth_headers(admin),
     )
-    assert accepted.status_code == 200, accepted.text
-    order = accepted.json()
-    assert order["status"] == "PENDING"
-    assert order["submitted_for_review"] is False
-    assert order["coordinator_user_id"] == seed_data["admin"].id
-    assert order["responsible_user_id"] is None
-    assert order["participant_user_ids"] == []
-    admin_orders = await client.get("/api/work-orders/my", headers=auth_headers(admin))
-    assert order["id"] in [item["id"] for item in admin_orders.json()]
+    assert converted.status_code == 200, converted.text
+    assert converted.json()["is_external_work"] is True
+    assert converted.json()["external_executor_name"] == "Contratista de prueba"
+    assert converted.json()["responsible_user_id"] is None
+    assert converted.json()["participant_user_ids"] == []
+
+    reverted = await client.patch(
+        f"/api/work-orders/{submitted.json()['id']}",
+        json={
+            "is_external_work": False,
+            "external_executor_name": None,
+            "external_company": None,
+            "responsible_user_id": None,
+            "participant_user_ids": [],
+        },
+        headers=auth_headers(admin),
+    )
+    assert reverted.status_code == 200, reverted.text
+    assert reverted.json()["is_external_work"] is False
+    assert reverted.json()["external_executor_name"] is None
+    assert reverted.json()["external_company"] is None
 
 
 async def test_admin_records_external_duration_without_worker_hours_or_kpi_pollution(

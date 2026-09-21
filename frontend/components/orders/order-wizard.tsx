@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check, Loader2, Plus, Save, Send, Trash2, X } from "lucide-react";
+import { Camera, Check, ImagePlus, Loader2, Plus, Save, Send, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { AreaNode, WorkOrderRecord } from "@/lib/types";
@@ -46,6 +46,14 @@ interface Form {
   risks: string;
   observations: string;
 }
+
+interface PendingEvidence {
+  id: string;
+  file: File;
+  previewUrl: string;
+}
+
+const EVIDENCE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 function emptyForm(): Form {
   return {
@@ -94,6 +102,10 @@ export function OrderWizard() {
   const [workers, setWorkers] = useState<WorkerOption[]>([]);
 
   const [form, setForm] = useState<Form>(() => emptyForm());
+  const [pendingEvidence, setPendingEvidence] = useState<PendingEvidence[]>([]);
+  const pendingEvidenceRef = useRef<PendingEvidence[]>([]);
+  const [evidenceMessage, setEvidenceMessage] = useState("");
+  const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
 
   const draftKey = user ? `mantencion:order-draft:${user.id}` : null;
 
@@ -128,6 +140,12 @@ export function OrderWizard() {
     }, 500);
     return () => window.clearTimeout(timer);
   }, [draftKey, draftReady, form]);
+
+  useEffect(() => {
+    return () => {
+      pendingEvidenceRef.current.forEach((item) => URL.revokeObjectURL(item.previewUrl));
+    };
+  }, []);
 
   function discardLocalDraft() {
     if (draftKey) window.localStorage.removeItem(draftKey);
@@ -183,6 +201,65 @@ export function OrderWizard() {
 
   function set<K extends keyof Form>(key: K, value: Form[K]) {
     setForm((f) => ({ ...f, [key]: value }));
+  }
+
+  function removePendingEvidence(id: string) {
+    const item = pendingEvidenceRef.current.find((current) => current.id === id);
+    if (item) URL.revokeObjectURL(item.previewUrl);
+    const next = pendingEvidenceRef.current.filter((current) => current.id !== id);
+    pendingEvidenceRef.current = next;
+    setPendingEvidence(next);
+  }
+
+  function handlePendingEvidenceFiles(files: FileList | null, input: HTMLInputElement) {
+    if (!files?.length) return;
+
+    const selectedFiles = Array.from(files);
+    const validFiles = selectedFiles.filter((file) => EVIDENCE_IMAGE_TYPES.has(file.type));
+    const available = Math.max(0, 2 - pendingEvidenceRef.current.length);
+    const selected = validFiles.slice(0, available);
+    const messages: string[] = [];
+
+    if (validFiles.length < selectedFiles.length) {
+      messages.push("Solo se aceptan imágenes JPG, PNG o WEBP.");
+    }
+    if (selected.length < validFiles.length) {
+      messages.push("Puedes adjuntar hasta 2 fotos de emisión por OT.");
+    }
+
+    const additions = selected.map((file) => ({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      file,
+      previewUrl: URL.createObjectURL(file),
+    }));
+    const next = [...pendingEvidenceRef.current, ...additions];
+    pendingEvidenceRef.current = next;
+    setPendingEvidence(next);
+    setEvidenceMessage(messages.join(" "));
+    input.value = "";
+  }
+
+  async function uploadPendingEvidence(woId: number) {
+    const photos = [...pendingEvidenceRef.current];
+    let failed = 0;
+
+    for (const photo of photos) {
+      if (!pendingEvidenceRef.current.some((current) => current.id === photo.id)) continue;
+      const evidenceForm = new FormData();
+      evidenceForm.append("file", photo.file);
+      evidenceForm.append("stage", "ISSUE");
+      try {
+        await api.upload(
+          `/api/work-orders/${woId}/evidence`,
+          evidenceForm,
+          120000,
+        );
+        removePendingEvidence(photo.id);
+      } catch {
+        failed += 1;
+      }
+    }
+    return failed;
   }
 
   function toggleParticipant(id: number) {
@@ -285,14 +362,35 @@ export function OrderWizard() {
     setSubmitting(mode);
     setError("");
     try {
-      await api.post<WorkOrderRecord>("/api/work-orders", buildPayload(mode === "emit"));
+      const created = await api.post<WorkOrderRecord>("/api/work-orders", buildPayload(mode === "emit"));
       if (draftKey) window.localStorage.removeItem(draftKey);
+      if (pendingEvidenceRef.current.length) {
+        const failed = await uploadPendingEvidence(created.id);
+        if (failed) {
+          setCreatedOrderId(created.id);
+          setError(`La OT ${created.ot_number} fue creada, pero ${failed} foto(s) no se pudieron subir. Puedes reintentarlo ahora o desde la OT.`);
+          return;
+        }
+      }
       router.push("/ordenes");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error al registrar la orden de trabajo");
     } finally {
       setSubmitting(null);
     }
+  }
+
+  async function retryPendingEvidence() {
+    if (!createdOrderId || !pendingEvidenceRef.current.length) return;
+    setSubmitting("emit");
+    setError("");
+    const failed = await uploadPendingEvidence(createdOrderId);
+    setSubmitting(null);
+    if (failed) {
+      setError(`La OT ya está creada, pero ${failed} foto(s) siguen pendientes. Puedes reintentarlo nuevamente.`);
+      return;
+    }
+    router.push("/ordenes");
   }
 
   if (loadingCatalog) {
@@ -504,6 +602,7 @@ export function OrderWizard() {
         </div>
 
         {/* La asignación la realiza el administrador después de revisar la OT. */}
+        {!isSupervisor && (
         <div className="rounded-lg border p-3">
           <label className="flex cursor-pointer items-start gap-3">
             <input
@@ -553,6 +652,7 @@ export function OrderWizard() {
             </div>
           )}
         </div>
+        )}
 
         {isExternalWork && user?.role === "ADMIN" && (
           <div className="space-y-4 rounded-lg border border-cyan-200 bg-cyan-50/40 p-4">
@@ -733,11 +833,93 @@ export function OrderWizard() {
         </>
         )}
 
+        {/* Evidencia seleccionada antes de crear la OT. Los archivos se suben
+            solamente después de confirmar la creación. */}
+        <div className="rounded-lg border border-sky-200 bg-sky-50/50 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-sky-950">Fotos de evidencia de la emisión</h3>
+              <p className="mt-1 text-xs text-sky-900/80">
+                Puedes adjuntar hasta 2 fotos. Se subirán a Google Drive solo cuando confirmes la creación de la OT.
+                Si cancelas este formulario, no se guardará ninguna foto.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <label className="inline-flex cursor-pointer">
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  capture="environment"
+                  className="sr-only"
+                  disabled={submitting !== null || pendingEvidence.length >= 2 || createdOrderId !== null}
+                  onChange={(event) => handlePendingEvidenceFiles(event.currentTarget.files, event.currentTarget)}
+                />
+                <span className="inline-flex h-9 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60">
+                  <Camera className="mr-2 h-4 w-4" /> Tomar foto
+                </span>
+              </label>
+              <label className="inline-flex cursor-pointer">
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  multiple
+                  className="sr-only"
+                  disabled={submitting !== null || pendingEvidence.length >= 2 || createdOrderId !== null}
+                  onChange={(event) => handlePendingEvidenceFiles(event.currentTarget.files, event.currentTarget)}
+                />
+                <span className="inline-flex h-9 items-center rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent">
+                  <ImagePlus className="mr-2 h-4 w-4" /> Elegir foto ({2 - pendingEvidence.length})
+                </span>
+              </label>
+            </div>
+          </div>
+
+          {evidenceMessage && (
+            <p className="mt-3 text-xs text-amber-800" role="status">{evidenceMessage}</p>
+          )}
+          {pendingEvidence.length > 0 && (
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              {pendingEvidence.map((item) => (
+                <figure key={item.id} className="relative overflow-hidden rounded-lg border bg-background">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={item.previewUrl} alt={item.file.name} className="aspect-video h-full w-full object-cover" />
+                  <figcaption className="flex items-center justify-between gap-2 p-2 text-xs">
+                    <span className="truncate" title={item.file.name}>{item.file.name}</span>
+                    <button
+                      type="button"
+                      className="inline-flex shrink-0 items-center rounded-md px-2 py-1 text-destructive hover:bg-destructive/10"
+                      onClick={() => removePendingEvidence(item.id)}
+                      disabled={submitting !== null || createdOrderId !== null}
+                    >
+                      <Trash2 className="mr-1 h-3.5 w-3.5" /> Quitar
+                    </button>
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
+          )}
+        </div>
+
         {error && (
           <p className="text-sm text-destructive bg-destructive/5 rounded-md p-2">{error}</p>
         )}
 
         {/* Actions */}
+        {createdOrderId ? (
+          <div className="flex flex-wrap gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <Button
+              type="button"
+              onClick={() => void retryPendingEvidence()}
+              disabled={submitting !== null || pendingEvidence.length === 0}
+            >
+              {submitting === "emit" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Reintentar fotos
+            </Button>
+            <Button type="button" variant="outline" onClick={() => router.push(`/ordenes/${createdOrderId}`)}>
+              Abrir OT creada
+            </Button>
+          </div>
+        ) : (
         <div className="flex gap-2 pt-2">
           <Button
             variant="outline"
@@ -767,6 +949,7 @@ export function OrderWizard() {
             {isSupervisor ? "Enviar al administrador" : "Emitir OT"}
           </Button>
         </div>
+        )}
       </CardContent>
     </Card>
   );

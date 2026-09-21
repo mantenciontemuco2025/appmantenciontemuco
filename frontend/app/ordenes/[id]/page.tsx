@@ -34,7 +34,7 @@ function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-type ConfirmAction = "issue" | "return" | "approve" | "cancel" | "reopen" | "reassign";
+type ConfirmAction = "issue" | "return" | "approve" | "cancel" | "reopen" | "reassign" | "external" | "internal";
 
 interface AlertState {
   variant: "success" | "error";
@@ -66,6 +66,8 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
   const [reassignPlantArea, setReassignPlantArea] = useState("");
   const [reassignSectionId, setReassignSectionId] = useState<number | null>(null);
   const [reassignEquipmentId, setReassignEquipmentId] = useState<number | null>(null);
+  const [externalExecutorName, setExternalExecutorName] = useState("");
+  const [externalCompany, setExternalCompany] = useState("");
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
@@ -153,6 +155,57 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
     } finally {
       setActionLoading(false);
       setCompletionNotes("");
+    }
+  }
+
+  async function handleConvertToExternal() {
+    if (!externalExecutorName.trim()) {
+      toast("error", "Indica el nombre de la persona externa.");
+      return;
+    }
+    setActionLoading(true);
+    try {
+      const updated = await api.patch<WorkOrderRecord>(`/api/work-orders/${id}`, {
+        is_external_work: true,
+        external_executor_name: externalExecutorName.trim(),
+        external_company: externalCompany.trim() || null,
+        responsible_user_id: null,
+        participant_user_ids: [],
+      });
+      setWo(updated);
+      setShowConfirm(null);
+      setExternalExecutorName("");
+      setExternalCompany("");
+      toast("success", "La OT quedó configurada como trabajo externo. Ahora puedes aceptarla y emitirla.");
+    } catch (err) {
+      toast("error", err instanceof Error ? err.message : "No se pudo configurar la OT externa");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function handleConvertToInternal() {
+    setActionLoading(true);
+    try {
+      const updated = await api.patch<WorkOrderRecord>(`/api/work-orders/${id}`, {
+        is_external_work: false,
+        external_executor_name: null,
+        external_company: null,
+        external_quote_number: null,
+        external_oc_number: null,
+        external_invoice_number: null,
+        external_account_number: null,
+        external_oc_amount: null,
+        responsible_user_id: null,
+        participant_user_ids: [],
+      });
+      setWo(updated);
+      setShowConfirm(null);
+      toast("success", "La OT volvió a ser interna. Ahora puedes asignar responsable y participantes.");
+    } catch (err) {
+      toast("error", err instanceof Error ? err.message : "No se pudo volver a OT interna");
+    } finally {
+      setActionLoading(false);
     }
   }
 
@@ -389,6 +442,20 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
               {wo.is_external_work
                 ? `Solicitud de trabajo externo enviada por el supervisor. Al aceptarla, quedarás a cargo de coordinar, verificar y cerrar la OT de ${wo.external_executor_name || "la persona externa"}.`
                 : "Esta OT fue enviada por el supervisor. Asigna el responsable y los participantes para poder aceptarla y emitirla."}
+              {wo.is_external_work && wo.status === "DRAFT" && (
+                <div className="mt-2">
+                  <Button type="button" size="sm" variant="outline" onClick={() => setShowConfirm("internal")}>
+                    Volver a OT interna
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {wo.submitted_for_review && user.role === "ADMIN" && !wo.is_external_work && (
+            <div className="mb-4 rounded-lg border border-cyan-200 bg-cyan-50 p-3 text-sm text-cyan-900">
+              <p>Si este trabajo lo realizará un contratista, puedes convertir esta solicitud antes de emitirla.</p>
+              <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => setShowConfirm("external")}>Convertir a trabajo externo</Button>
             </div>
           )}
 
@@ -562,6 +629,16 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
             </div>
           )}
 
+          {!showConfirm &&
+            user.role === "ADMIN" &&
+            wo.is_external_work &&
+            wo.status === "DRAFT" &&
+            !wo.submitted_for_review && (
+              <Button variant="outline" className="mt-2 w-full" onClick={() => setShowConfirm("internal")}>
+                Volver a OT interna
+              </Button>
+            )}
+
           {!showConfirm && wo.status === "COMPLETED" && user.role === "ADMIN" && (
             <div className="flex gap-2">
               <Button variant="outline" className="flex-1" onClick={() => setShowConfirm("return")}>
@@ -582,6 +659,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
           {/* Reasignar — solo managers, en estados activos (no terminales) */}
           {!showConfirm &&
             user.role === "ADMIN" &&
+            !wo.is_external_work &&
             (wo.status === "DRAFT" || wo.status === "PENDING" || wo.status === "IN_PROGRESS") && (
               <Button
                 variant="outline"
@@ -799,6 +877,38 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                 />
               </div>
             </ConfirmDialog>
+          )}
+
+          {showConfirm === "external" && (
+            <ConfirmDialog
+              title="Configurar trabajo externo"
+              description="La OT no tendrá trabajadores internos. El administrador quedará a cargo de coordinar, verificar y cerrar el trabajo."
+              confirmLabel="Guardar externo"
+              busy={actionLoading}
+              disabled={!externalExecutorName.trim()}
+              onConfirm={handleConvertToExternal}
+              onCancel={() => { setShowConfirm(null); setExternalExecutorName(""); setExternalCompany(""); }}
+            >
+              <div className="space-y-3">
+                <label className="block text-sm font-medium">Persona externa
+                  <input className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={externalExecutorName} onChange={(event) => setExternalExecutorName(event.target.value)} placeholder="Nombre de quien realizará el trabajo" autoFocus />
+                </label>
+                <label className="block text-sm font-medium">Empresa (opcional)
+                  <input className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={externalCompany} onChange={(event) => setExternalCompany(event.target.value)} placeholder="Empresa contratista" />
+                </label>
+              </div>
+            </ConfirmDialog>
+          )}
+
+          {showConfirm === "internal" && (
+            <ConfirmDialog
+              title="¿Volver a OT interna?"
+              description="Se eliminarán los datos de la persona externa y la empresa. Después podrás asignar un responsable y participantes internos."
+              confirmLabel="Sí, volver a interna"
+              busy={actionLoading}
+              onConfirm={handleConvertToInternal}
+              onCancel={() => setShowConfirm(null)}
+            />
           )}
 
           {showConfirm === "reassign" && (
