@@ -2,14 +2,15 @@
 
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertCircle, Check, Clock3, Droplets, Loader2, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { AlertCircle, Check, Clock3, Download, Droplets, Loader2, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import { Shell } from "@/components/layout/shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { PageLoading } from "@/components/ui/page-loading";
 import { useAuth } from "@/lib/auth";
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
+import type { WaterRegisterAccess } from "@/lib/types";
 
 type Meter = { key: string; label: string };
 type Baseline = { meter_key: string; final_reading: string; reading_date: string; source_row: number };
@@ -32,7 +33,7 @@ type WaterRecord = {
   sheet_row: number | null;
   meter_readings: MeterReading[];
 };
-type WaterData = { records: WaterRecord[]; baselines: Baseline[]; meters: Meter[]; latest_readings: Record<string, string> };
+type WaterData = { records: WaterRecord[]; baselines: Baseline[]; meters: Meter[]; latest_readings: Record<string, string>; latest_reading_dates: Record<string, string> };
 type HistoricalMeter = { meter_key: string; label: string; initial_reading: string | null; final_reading: string | null; volume_m3: string | null };
 type HistoricalDqo = { date: string; time: string | null; pool: string | null; mg_l: string | null };
 type HistoricalRow = { sheet_row: number; record_date: string; discharge_flow_m3: string | null; ph_plc: string | null; ph_discharge: string | null; discharge_temp_c: string | null; meters: HistoricalMeter[]; dqo: HistoricalDqo | null };
@@ -72,6 +73,7 @@ export default function WaterRegisterPage() {
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [initializing, setInitializing] = useState(false);
+  const [refreshingLatest, setRefreshingLatest] = useState(false);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -79,15 +81,23 @@ export default function WaterRegisterPage() {
   const [historyTo, setHistoryTo] = useState("");
   const [history, setHistory] = useState<HistoricalData | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const isManager = user?.role === "ADMIN" || user?.role === "SUPERVISOR";
-  const canManageWater = isManager || user?.can_manage_water_register === true;
+  const [importingDate, setImportingDate] = useState("");
+  const waterAccess: WaterRegisterAccess = user?.role === "ADMIN"
+    ? "EDIT"
+    : user?.water_register_access === "VIEW" || user?.water_register_access === "EDIT"
+      ? user.water_register_access
+      : user?.water_register_access === "NONE"
+        ? "NONE"
+        : user?.can_manage_water_register || user?.role === "SUPERVISOR" ? "EDIT" : "NONE";
+  const canViewWater = waterAccess !== "NONE";
+  const canManageWater = waterAccess === "EDIT";
   const hasBaselines = (data?.baselines.length ?? 0) === (data?.meters.length ?? -1) && !!data?.meters.length;
 
   useEffect(() => {
-    if (!loading && user && !canManageWater) {
+    if (!loading && user && !canViewWater) {
       router.replace("/dashboard");
     }
-  }, [loading, user, canManageWater, router]);
+  }, [loading, user, canViewWater, router]);
 
   const load = useCallback(async () => {
     const result = await api.get<WaterData>("/api/water-register");
@@ -117,11 +127,19 @@ export default function WaterRegisterPage() {
     const prior = (data?.records ?? [])
       .filter((row) => row.record_date < recordDate)
       .sort((a, b) => b.record_date.localeCompare(a.record_date));
-    for (const row of prior) {
-      const reading = row.meter_readings.find((item) => item.meter_key === meterKey);
-      if (reading) return reading.final_reading;
+    const priorReading = prior
+      .map((row) => ({ date: row.record_date, value: row.meter_readings.find((item) => item.meter_key === meterKey)?.final_reading }))
+      .find((item) => item.value !== undefined);
+    const latestValue = data?.latest_readings[meterKey];
+    const latestDate = data?.latest_reading_dates[meterKey];
+    if (latestValue && latestDate && latestDate < recordDate && (!priorReading || latestDate > priorReading.date)) {
+      return latestValue;
     }
-    return data?.latest_readings[meterKey] ?? data?.baselines.find((item) => item.meter_key === meterKey)?.final_reading ?? "—";
+    if (priorReading?.value !== undefined) return priorReading.value;
+    const baseline = data?.baselines.find((item) => item.meter_key === meterKey);
+    if (latestValue && (!latestDate || latestDate < recordDate)) return latestValue;
+    if (baseline && baseline.reading_date < recordDate) return baseline.final_reading;
+    return "—";
   }
 
   function editRecord(record: WaterRecord) {
@@ -172,6 +190,16 @@ export default function WaterRegisterPage() {
     finally { setInitializing(false); }
   }
 
+  async function refreshLatestReadings() {
+    setRefreshingLatest(true); setError(""); setMessage("");
+    try {
+      const result = await api.post<{ updated: number; inserted: number; readings: number; message: string }>("/api/water-register/refresh-latest-readings", {});
+      await load();
+      setMessage(`${result.message} ${result.updated + result.inserted} medidores actualizados.`);
+    } catch (err) { setError((err as Error).message || "No se pudieron actualizar las últimas lecturas."); }
+    finally { setRefreshingLatest(false); }
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault(); setSaving(true); setError(""); setMessage("");
     const dqoStarted = form.dqo_samples.filter((sample) => sample.time || sample.pool || sample.mg_l);
@@ -195,7 +223,30 @@ export default function WaterRegisterPage() {
       setEditingId(null); setForm(emptyForm());
       setMessage("Registro guardado. La planilla se sincroniza en segundo plano.");
       await load();
-    } catch (err) { setError((err as Error).message || "No se pudo guardar el registro."); }
+    } catch (err) {
+      const existing = data?.records.find((record) => record.record_date === form.record_date);
+      if (!editingId && err instanceof ApiError && err.status === 409 && existing) {
+        const entered = form;
+        editRecord(existing);
+        setForm((current) => ({
+          ...current,
+          discharge_flow_m3: entered.discharge_flow_m3 || current.discharge_flow_m3,
+          ph_plc: entered.ph_plc || current.ph_plc,
+          ph_discharge: entered.ph_discharge || current.ph_discharge,
+          discharge_temp_c: entered.discharge_temp_c || current.discharge_temp_c,
+          meter_final_readings: {
+            ...current.meter_final_readings,
+            ...Object.fromEntries(Object.entries(entered.meter_final_readings).filter(([, value]) => value)),
+          },
+          dqo_samples: entered.dqo_samples.some((sample) => sample.time || sample.pool || sample.mg_l)
+            ? entered.dqo_samples
+            : current.dqo_samples,
+        }));
+        setMessage("Ese día ya existía. Se cargó en modo edición; revisa los datos y guarda los cambios.");
+      } else {
+        setError((err as Error).message || "No se pudo guardar el registro.");
+      }
+    }
     finally { setSaving(false); }
   }
 
@@ -222,10 +273,25 @@ export default function WaterRegisterPage() {
     } finally { setHistoryLoading(false); }
   }
 
+  async function importHistoricalDay(recordDate: string) {
+    setImportingDate(recordDate); setError(""); setMessage("");
+    try {
+      const record = await api.post<WaterRecord>(
+        `/api/water-register/import-day?date=${encodeURIComponent(recordDate)}`,
+        {},
+      );
+      await load();
+      editRecord(record);
+      setMessage("Día importado. Puedes completar o agregar muestras DQO sin duplicar la fecha.");
+    } catch (err) {
+      setError((err as Error).message || "No se pudo importar ese día.");
+    } finally { setImportingDate(""); }
+  }
+
   if (loading || !user) return <PageLoading message={loading ? "Validando sesión…" : "Redirigiendo al inicio de sesión…"} />;
 
   return (
-      <Shell fullName={user.full_name} role={user.role} waterRegisterAccess={user.can_manage_water_register} onLogout={logout}>
+        <Shell fullName={user.full_name} role={user.role} waterRegisterAccess={waterAccess} onLogout={logout}>
       <div className="mb-6 flex items-start gap-3">
         <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-sky-100 text-sky-700"><Droplets className="h-6 w-6" /></span>
         <div><h1 className="text-2xl font-bold">Registro de agua y RILES</h1><p className="text-muted-foreground">Lecturas diarias, medidores y control de DQO.</p></div>
@@ -260,13 +326,13 @@ export default function WaterRegisterPage() {
             </section>
 
             <section>
-              <div className="mb-3"><h3 className="font-semibold">Medidores</h3><p className="text-sm text-muted-foreground">La lectura inicial se toma de la última lectura disponible; ingresa solo la final si hubo medición.</p></div>
+              <div className="mb-3 flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">Medidores</h3><p className="text-sm text-muted-foreground">La lectura inicial se toma de la última lectura disponible; ingresa solo la final si hubo medición.</p></div><Button type="button" variant="outline" size="sm" onClick={refreshLatestReadings} disabled={refreshingLatest}>{refreshingLatest ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}Actualizar últimas lecturas</Button></div>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 {(data?.meters ?? []).map((meter) => <div key={meter.key} className="rounded-lg border bg-muted/20 p-3">
                   <p className="mb-2 text-sm font-medium">{meter.label}</p>
                   <div className="grid grid-cols-2 gap-2">
                     <label className="text-xs text-muted-foreground">Inicial<Input className="mt-1 h-10 bg-muted/50 text-foreground" readOnly value={openingFor(meter.key, form.record_date)} /></label>
-                    <label className="text-xs text-muted-foreground">Final<Input className="mt-1 h-10" type="number" min="0" step="0.001" value={form.meter_final_readings[meter.key] ?? ""} onChange={(e) => setForm({ ...form, meter_final_readings: { ...form.meter_final_readings, [meter.key]: e.target.value } })} /></label>
+                    <label className="text-xs text-muted-foreground">Final<Input className="mt-1 h-10" type="number" min="0" max="9999999999999.999" step="0.001" value={form.meter_final_readings[meter.key] ?? ""} onChange={(e) => setForm({ ...form, meter_final_readings: { ...form.meter_final_readings, [meter.key]: e.target.value } })} /></label>
                   </div>
                 </div>)}
               </div>
@@ -296,7 +362,7 @@ export default function WaterRegisterPage() {
       )}
 
       <Card className="mb-6 p-4 sm:p-6">
-        <div className="mb-4"><h2 className="text-lg font-semibold">Consultar histórico de la planilla</h2><p className="text-sm text-muted-foreground">Consulta uno o varios días directamente desde Google Sheets. No importa ni modifica registros.</p></div>
+        <div className="mb-4"><h2 className="text-lg font-semibold">Consultar histórico de la planilla</h2><p className="text-sm text-muted-foreground">Consulta uno o varios días directamente desde Google Sheets. Si un día ya fue llenado manualmente, puedes importarlo una sola vez para editarlo y agregar muestras DQO desde la app.</p></div>
         <form onSubmit={consultHistory} className="flex flex-wrap items-end gap-3">
           <label className="text-sm">Desde<input className="mt-1 h-11 rounded-md border bg-background px-3" type="date" value={historyFrom} onChange={(e) => setHistoryFrom(e.target.value)} required /></label>
           <label className="text-sm">Hasta<input className="mt-1 h-11 rounded-md border bg-background px-3" type="date" value={historyTo} onChange={(e) => setHistoryTo(e.target.value)} required /></label>
@@ -304,14 +370,20 @@ export default function WaterRegisterPage() {
         </form>
         {history && <div className="mt-5 space-y-3">
           <p className="text-sm font-medium">{history.rows.length ? `${history.rows.length} fila(s) encontradas` : "No hay datos registrados en ese rango."}</p>
-          {history.rows.map((row) => <div key={row.sheet_row} className="rounded-lg border bg-muted/20 p-3 text-sm">
-            <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-semibold">{fmtDate(row.record_date)}</span><span className="text-xs text-muted-foreground">Fila {row.sheet_row}</span></div>
-            <p className="mt-1 text-muted-foreground">Caudal: {numberText(row.discharge_flow_m3)} m³ · pH PLC: {numberText(row.ph_plc)} · pH descarga: {numberText(row.ph_discharge)} · Temp.: {numberText(row.discharge_temp_c)} °C</p>
-            {row.meters.length > 0 && <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{row.meters.map((meter) => <div key={`${row.sheet_row}-${meter.meter_key}`} className="rounded-md bg-background px-3 py-2"><p className="font-medium">{meter.label}</p><p className="text-muted-foreground">{numberText(meter.initial_reading)} → {numberText(meter.final_reading)}</p><p className="font-medium text-sky-700">Volumen: {numberText(meter.volume_m3)} m³</p></div>)}</div>}
-            {row.dqo && <p className="mt-3 text-muted-foreground">DQO: {fmtDate(row.dqo.date)} · {row.dqo.time || "sin hora"} · Piscina {row.dqo.pool || "—"} · {numberText(row.dqo.mg_l)} mg/L</p>}
-          </div>)}
+          {history.rows.map((row, index) => {
+            const importedRecord = data?.records.find((record) => record.record_date === row.record_date);
+            const alreadyImported = Boolean(importedRecord);
+            return <div key={row.sheet_row} className="rounded-lg border bg-muted/20 p-3 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-semibold">{fmtDate(row.record_date)}</span><div className="flex items-center gap-2"><span className="text-xs text-muted-foreground">Fila {row.sheet_row}</span>{canManageWater && history.rows.findIndex((candidate) => candidate.record_date === row.record_date) === index && <Button type="button" variant="outline" size="sm" onClick={() => alreadyImported && importedRecord ? editRecord(importedRecord) : importHistoricalDay(row.record_date)} disabled={importingDate === row.record_date}>{importingDate === row.record_date ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : alreadyImported ? <Save className="mr-1 h-3.5 w-3.5" /> : <Download className="mr-1 h-3.5 w-3.5" />}{importingDate === row.record_date ? "Importando..." : alreadyImported ? "Editar día" : "Importar día"}</Button>}</div></div>
+              <p className="mt-1 text-muted-foreground">Caudal: {numberText(row.discharge_flow_m3)} m³ · pH PLC: {numberText(row.ph_plc)} · pH descarga: {numberText(row.ph_discharge)} · Temp.: {numberText(row.discharge_temp_c)} °C</p>
+              {row.meters.length > 0 && <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{row.meters.map((meter) => <div key={`${row.sheet_row}-${meter.meter_key}`} className="rounded-md bg-background px-3 py-2"><p className="font-medium">{meter.label}</p><p className="text-muted-foreground">{numberText(meter.initial_reading)} → {numberText(meter.final_reading)}</p><p className="font-medium text-sky-700">Volumen: {numberText(meter.volume_m3)} m³</p></div>)}</div>}
+              {row.dqo && <p className="mt-3 text-muted-foreground">DQO: {fmtDate(row.dqo.date)} · {row.dqo.time || "sin hora"} · Piscina {row.dqo.pool || "—"} · {numberText(row.dqo.mg_l)} mg/L</p>}
+            </div>;
+          })}
         </div>}
       </Card>
+
+      {!canManageWater && <Card className="mb-5 p-4 text-sm text-muted-foreground">Tienes acceso de solo consulta. No puedes registrar ni editar datos.</Card>}
 
       <section>
         <h2 className="mb-3 text-lg font-semibold">Registros recientes</h2>

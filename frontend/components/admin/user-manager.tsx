@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, Loader2, Pencil, Plus, UserPlus, Users, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import type { AreaNode, User } from "@/lib/types";
+import type { AreaNode, User, WaterRegisterAccess } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -19,6 +19,21 @@ const ROLE_OPTIONS = [
 ];
 
 const PAGE_SIZE = 25;
+
+const WATER_ACCESS_OPTIONS = [
+  { value: "NONE", label: "Sin acceso" },
+  { value: "VIEW", label: "Solo consulta" },
+  { value: "EDIT", label: "Registrar y editar" },
+];
+
+function waterAccessOf(user: User): WaterRegisterAccess {
+  if (user.water_register_access === "NONE") return "NONE";
+  if (user.water_register_access === "VIEW" || user.water_register_access === "EDIT") {
+    return user.water_register_access;
+  }
+  if (user.can_manage_water_register || user.role === "SUPERVISOR") return "EDIT";
+  return "NONE";
+}
 
 function roleLabel(role: string): string {
   return ROLE_OPTIONS.find((r) => r.value === role)?.label || role;
@@ -36,7 +51,7 @@ export function UserManager() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("WORKER");
-  const [canManageWaterRegister, setCanManageWaterRegister] = useState(false);
+  const [waterRegisterAccess, setWaterRegisterAccess] = useState<WaterRegisterAccess>("NONE");
   const [areaId, setAreaId] = useState("");
   const [areaIds, setAreaIds] = useState<string[]>([]);
   const [areas, setAreas] = useState<AreaNode[]>([]);
@@ -46,7 +61,7 @@ export function UserManager() {
   const [editFullName, setEditFullName] = useState("");
   const [editEmail, setEditEmail] = useState("");
   const [editRole, setEditRole] = useState("WORKER");
-  const [editCanManageWaterRegister, setEditCanManageWaterRegister] = useState(false);
+  const [editWaterRegisterAccess, setEditWaterRegisterAccess] = useState<WaterRegisterAccess>("NONE");
   const [editAreaId, setEditAreaId] = useState("");
   const [editAreaIds, setEditAreaIds] = useState<string[]>([]);
   const [editPassword, setEditPassword] = useState("");
@@ -92,7 +107,7 @@ export function UserManager() {
         email,
         password,
         role,
-        can_manage_water_register: canManageWaterRegister,
+        water_register_access: waterRegisterAccess,
         area_id: role === "SUPERVISOR" && areaId ? Number(areaId) : null,
         area_ids: role === "SUPERVISOR" ? Array.from(new Set([areaId, ...areaIds].filter(Boolean))).map(Number) : [],
       });
@@ -101,7 +116,7 @@ export function UserManager() {
       setEmail("");
       setPassword("");
       setRole("WORKER");
-      setCanManageWaterRegister(false);
+      setWaterRegisterAccess("NONE");
       setAreaId("");
       setAreaIds([]);
       api.invalidateCache("/api/users/workers");
@@ -128,7 +143,7 @@ export function UserManager() {
     setEditFullName(user.full_name);
     setEditEmail(user.email);
     setEditRole(user.role);
-    setEditCanManageWaterRegister(user.can_manage_water_register === true);
+    setEditWaterRegisterAccess(waterAccessOf(user));
     setEditAreaId(user.area_id ? String(user.area_id) : "");
     setEditAreaIds((user.area_ids?.length ? user.area_ids : user.area_id ? [user.area_id] : []).map(String));
     setEditPassword("");
@@ -164,7 +179,7 @@ export function UserManager() {
         full_name: editFullName,
         email: editEmail,
         role: editRole,
-        can_manage_water_register: editCanManageWaterRegister,
+        water_register_access: editWaterRegisterAccess,
         area_id: editRole === "SUPERVISOR" && editAreaId ? Number(editAreaId) : null,
         area_ids: editRole === "SUPERVISOR" ? Array.from(new Set([editAreaId, ...editAreaIds].filter(Boolean))).map(Number) : [],
       };
@@ -266,19 +281,13 @@ export function UserManager() {
             </div>
             </>
           )}
-          <label className="flex items-start gap-2 rounded-md border border-cyan-200 bg-cyan-50 p-3 text-sm">
-            <input
-              type="checkbox"
-              className="mt-0.5"
-              checked={canManageWaterRegister}
-              onChange={(e) => setCanManageWaterRegister(e.target.checked)}
-              disabled={saving}
-            />
-            <span>
-              <span className="block font-medium text-cyan-950">Encargado de Registro de agua</span>
-              <span className="block text-xs text-cyan-800">Habilita el mÃ³dulo y permite registrar o editar sus datos.</span>
-            </span>
-          </label>
+          <Select
+            label="Permiso de Registro de agua"
+            options={WATER_ACCESS_OPTIONS}
+            value={waterRegisterAccess}
+            onChange={(e) => setWaterRegisterAccess(e.target.value as WaterRegisterAccess)}
+            disabled={saving}
+          />
           <Button type="submit" size="lg" className="w-full" disabled={saving || (role === "SUPERVISOR" && !areaId)}>
             {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
             Crear usuario
@@ -370,19 +379,13 @@ export function UserManager() {
             </div>
             </>
           )}
-          <label className="flex items-start gap-2 rounded-md border border-cyan-200 bg-cyan-50 p-3 text-sm">
-            <input
-              type="checkbox"
-              className="mt-0.5"
-              checked={editCanManageWaterRegister}
-              onChange={(e) => setEditCanManageWaterRegister(e.target.checked)}
-              disabled={editSaving}
-            />
-            <span>
-              <span className="block font-medium text-cyan-950">Encargado de Registro de agua</span>
-              <span className="block text-xs text-cyan-800">Habilita el mÃ³dulo y permite registrar o editar sus datos.</span>
-            </span>
-          </label>
+          <Select
+            label="Permiso de Registro de agua"
+            options={WATER_ACCESS_OPTIONS}
+            value={editWaterRegisterAccess}
+            onChange={(e) => setEditWaterRegisterAccess(e.target.value as WaterRegisterAccess)}
+            disabled={editSaving}
+          />
           <div className="space-y-1.5">
             <label className="text-sm font-medium block">
               Restablecer contraseña{" "}

@@ -1,7 +1,7 @@
 from datetime import datetime
 from pydantic import BaseModel, EmailStr, field_validator
 
-from app.models.user import UserRole
+from app.models.user import UserRole, WaterRegisterPermission
 
 
 class UserBase(BaseModel):
@@ -12,6 +12,7 @@ class UserBase(BaseModel):
     area_ids: list[int] = []
     is_active: bool = True
     can_manage_water_register: bool = False
+    water_register_access: WaterRegisterPermission = WaterRegisterPermission.NONE
 
 
 class UserCreate(UserBase):
@@ -26,6 +27,7 @@ class UserUpdate(BaseModel):
     area_ids: list[int] | None = None
     is_active: bool | None = None
     can_manage_water_register: bool | None = None
+    water_register_access: WaterRegisterPermission | None = None
     password: str | None = None
 
     @field_validator("password")

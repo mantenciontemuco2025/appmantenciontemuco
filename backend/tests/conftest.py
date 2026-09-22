@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from app.db.base import Base
 from app.main import app as fastapi_app
 from app.core.security import hash_password
-from app.models.user import User, UserRole
+from app.models.user import User, UserRole, WaterRegisterPermission
 from app.models.area import Area
 from app.models.equipment import Equipment
 
@@ -88,6 +88,7 @@ async def seed_data(db_session_factory):
             email="supervisor@test.com",
             password_hash=hash_password("pass123"),
             role=UserRole.SUPERVISOR,
+            water_register_access=WaterRegisterPermission.EDIT.value,
         )
         worker = User(
             full_name="Ortiz",

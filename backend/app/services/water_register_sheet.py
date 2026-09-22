@@ -359,18 +359,27 @@ def write_daily_record(record: dict, *, allow_existing: bool = False) -> dict:
             "values": [values],
         })
 
-    add_cell_range("A", "E", [
-        _date_serial(record_date),
-        record.get("discharge_flow_m3"),
-        record.get("ph_plc"),
-        record.get("ph_discharge"),
-        record.get("discharge_temp_c"),
-    ])
+    # A missing app value must not erase a manual value already in Sheets.
+    # Explicit zeroes are still written because zero is a valid reading.
+    add_cell_range("A", "A", [_date_serial(record_date)])
+    for column, field in (
+        ("B", "discharge_flow_m3"),
+        ("C", "ph_plc"),
+        ("D", "ph_discharge"),
+        ("E", "discharge_temp_c"),
+    ):
+        value = record.get(field)
+        if value is not None and value != "":
+            add_cell_range(column, column, [value])
     readings = record.get("readings", {})
     for meter in WATER_METERS:
         reading = readings.get(meter.key)
-        pair = [reading["initial_reading"], reading["final_reading"]] if reading else ["", ""]
-        add_cell_range(meter.initial_column, meter.final_column, pair)
+        if reading:
+            add_cell_range(
+                meter.initial_column,
+                meter.final_column,
+                [reading["initial_reading"], reading["final_reading"]],
+            )
     # Read only the DQO columns so we can clear removed samples and allocate
     # extra samples without ever inspecting or writing the meter formulas.
     dqo_rows_to_clear = set(record.get("dqo_rows_to_clear", []))
@@ -426,11 +435,12 @@ def write_daily_record(record: dict, *, allow_existing: bool = False) -> dict:
         })
 
     for sample, sample_row in zip(samples, dqo_rows):
+        sample_time = _time_fraction(sample["time"]) if sample.get("time") else ""
         updates.append({
             "range": f"'{sheet}'!AD{sample_row}:AG{sample_row}",
             "values": [[
                 _date_serial(sample["date"]),
-                _time_fraction(sample["time"]),
+                sample_time,
                 sample["pool"],
                 sample["mg_l"],
             ]],

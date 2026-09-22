@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -15,7 +15,7 @@ from app.api.dependencies import get_current_user, require_roles
 from app.core.config import settings
 from app.core.water_register import WATER_METERS, WATER_METER_BY_KEY
 from app.db.session import async_session, get_db
-from app.models.user import User, UserRole
+from app.models.user import User, UserRole, WaterRegisterPermission
 from app.models.water_register import (
     WaterDqoSample,
     WaterMeterReading,
@@ -39,15 +39,43 @@ router = APIRouter(prefix="/api/water-register", tags=["water-register"])
 admin_only = require_roles(UserRole.ADMIN)
 
 
-async def water_register_access(current_user: User = Depends(get_current_user)) -> User:
-    """Allow the normal maintenance managers and explicitly assigned users."""
-    if current_user.role in (UserRole.ADMIN, UserRole.SUPERVISOR):
-        return current_user
+def _effective_permission(current_user: User) -> str:
+    permission = getattr(current_user, "water_register_access", None)
+    if permission in {
+        WaterRegisterPermission.VIEW.value,
+        WaterRegisterPermission.EDIT.value,
+    }:
+        return permission
+    # Compatibility for tokens/objects created before the permission column.
     if getattr(current_user, "can_manage_water_register", False):
+        return WaterRegisterPermission.EDIT.value
+    return WaterRegisterPermission.NONE.value
+
+
+async def water_register_view_access(current_user: User = Depends(get_current_user)) -> User:
+    """Allow administrators and users assigned at least read access."""
+    if current_user.role == UserRole.ADMIN:
+        return current_user
+    if _effective_permission(current_user) in {
+        WaterRegisterPermission.VIEW.value,
+        WaterRegisterPermission.EDIT.value,
+    }:
         return current_user
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
         detail="No tiene habilitado el mÃ³dulo de registro de agua.",
+    )
+
+
+async def water_register_edit_access(current_user: User = Depends(get_current_user)) -> User:
+    """Allow administrators and users assigned edit access."""
+    if current_user.role == UserRole.ADMIN:
+        return current_user
+    if _effective_permission(current_user) == WaterRegisterPermission.EDIT.value:
+        return current_user
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Tiene acceso de consulta, pero no permiso para editar el registro de agua.",
     )
 
 
@@ -106,7 +134,7 @@ async def _loaded_record(db: AsyncSession, record_id: int) -> WaterRegisterRecor
 
 async def _opening_reading(db: AsyncSession, meter_key: str, record_date) -> Decimal:
     prior = await db.execute(
-        select(WaterMeterReading.final_reading)
+        select(WaterRegisterRecord.record_date, WaterMeterReading.final_reading)
         .join(WaterRegisterRecord, WaterRegisterRecord.id == WaterMeterReading.record_id)
         .where(
             WaterMeterReading.meter_key == meter_key,
@@ -115,10 +143,12 @@ async def _opening_reading(db: AsyncSession, meter_key: str, record_date) -> Dec
         .order_by(WaterRegisterRecord.record_date.desc())
         .limit(1)
     )
-    value = prior.scalar_one_or_none()
-    if value is not None:
-        return Decimal(value)
+    prior_row = prior.one_or_none()
     baseline = await db.get(WaterRegisterBaseline, meter_key)
+    if prior_row is not None and (
+        baseline is None or prior_row[0] >= baseline.reading_date
+    ):
+        return Decimal(prior_row[1])
     if baseline is None:
         raise HTTPException(
             status_code=409,
@@ -130,6 +160,49 @@ async def _opening_reading(db: AsyncSession, meter_key: str, record_date) -> Dec
             detail=f"La fecha debe ser posterior a la lectura inicial ({baseline.reading_date:%d-%m-%Y}).",
         )
     return Decimal(baseline.final_reading)
+
+
+async def _refresh_meter_baselines(current_user: User, db: AsyncSession) -> dict:
+    """Refresh only the cached latest readings; never creates daily records."""
+    try:
+        readings = await asyncio.to_thread(read_latest_meter_baselines)
+    except Exception as exc:
+        logger.exception("No se pudieron actualizar las últimas lecturas del registro de agua")
+        raise HTTPException(status_code=502, detail=f"No se pudo leer la plantilla: {exc}") from exc
+
+    now = datetime.now(timezone.utc)
+    updated = 0
+    inserted = 0
+    for item in readings:
+        existing = await db.get(WaterRegisterBaseline, item["meter_key"])
+        if existing is None:
+            db.add(WaterRegisterBaseline(
+                **item,
+                initialized_by_user_id=current_user.id,
+                initialized_at=now,
+            ))
+            inserted += 1
+            continue
+        if item["reading_date"] >= existing.reading_date:
+            changed = (
+                existing.final_reading != item["final_reading"]
+                or existing.reading_date != item["reading_date"]
+                or existing.source_row != item["source_row"]
+            )
+            existing.final_reading = item["final_reading"]
+            existing.reading_date = item["reading_date"]
+            existing.source_row = item["source_row"]
+            existing.initialized_by_user_id = current_user.id
+            existing.initialized_at = now
+            if changed:
+                updated += 1
+    await db.commit()
+    return {
+        "updated": updated,
+        "inserted": inserted,
+        "readings": len(readings),
+        "message": "Últimas lecturas actualizadas desde la plantilla.",
+    }
 
 
 async def _recalculate_later_openings(db: AsyncSession, record_date) -> list[int]:
@@ -164,6 +237,7 @@ async def _upsert_record(
     db: AsyncSession,
     record: WaterRegisterRecord | None,
 ) -> WaterRegisterRecord:
+    is_new = record is None
     unknown = set(payload.meter_final_readings) - set(WATER_METER_BY_KEY)
     if unknown:
         raise HTTPException(status_code=422, detail=f"Medidor desconocido: {', '.join(sorted(unknown))}")
@@ -182,10 +256,16 @@ async def _upsert_record(
     elif record.record_date != payload.record_date:
         raise HTTPException(status_code=400, detail="No se puede cambiar la fecha del registro existente.")
 
-    record.discharge_flow_m3 = payload.discharge_flow_m3
-    record.ph_plc = payload.ph_plc
-    record.ph_discharge = payload.ph_discharge
-    record.discharge_temp_c = payload.discharge_temp_c
+    # On an adopted/manual day, blank app fields mean "leave the Sheet value
+    # alone". New records still accept the normal null defaults.
+    if is_new or payload.discharge_flow_m3 is not None:
+        record.discharge_flow_m3 = payload.discharge_flow_m3
+    if is_new or payload.ph_plc is not None:
+        record.ph_plc = payload.ph_plc
+    if is_new or payload.ph_discharge is not None:
+        record.ph_discharge = payload.ph_discharge
+    if is_new or payload.discharge_temp_c is not None:
+        record.discharge_temp_c = payload.discharge_temp_c
 
     existing_result = await db.execute(
         select(WaterDqoSample)
@@ -233,24 +313,26 @@ async def _upsert_record(
     record.sync_error = None
     record.sync_next_attempt_at = None
 
-    old = await db.execute(
-        select(WaterMeterReading).where(WaterMeterReading.record_id == record.id)
-    )
-    old_rows = old.scalars().all()
-    for reading in old_rows:
-        await db.delete(reading)
-    await db.flush()
-
     for meter_key, final_reading in payload.meter_final_readings.items():
         if final_reading is None:
             continue
         opening = await _opening_reading(db, meter_key, payload.record_date)
-        db.add(WaterMeterReading(
-            record_id=record.id,
-            meter_key=meter_key,
-            initial_reading=opening,
-            final_reading=final_reading,
-        ))
+        existing_reading = await db.scalar(
+            select(WaterMeterReading).where(
+                WaterMeterReading.record_id == record.id,
+                WaterMeterReading.meter_key == meter_key,
+            )
+        )
+        if existing_reading is None:
+            db.add(WaterMeterReading(
+                record_id=record.id,
+                meter_key=meter_key,
+                initial_reading=opening,
+                final_reading=final_reading,
+            ))
+        else:
+            existing_reading.initial_reading = opening
+            existing_reading.final_reading = final_reading
     await db.flush()
     await db.refresh(record)
     return record
@@ -260,7 +342,7 @@ async def _upsert_record(
 async def historical_water_register(
     from_date: date = Query(..., alias="from"),
     to_date: date = Query(..., alias="to"),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(water_register_view_access),
 ):
     del current_user
     if from_date > to_date:
@@ -275,9 +357,108 @@ async def historical_water_register(
     return {"from_date": from_date, "to_date": to_date, "rows": rows}
 
 
+@router.post("/import-day", response_model=WaterRegisterRecordResponse, status_code=status.HTTP_201_CREATED)
+async def import_historical_water_day(
+    record_date: date = Query(..., alias="date"),
+    current_user: User = Depends(water_register_edit_access),
+    db: AsyncSession = Depends(get_db),
+):
+    """Adopt one manually completed Sheet day into the application.
+
+    This is separate from the one-time meter-baseline import. It creates the
+    app record without rewriting the Sheet row, preserving manual values and
+    all DQO samples found for that date.
+    """
+    existing = await db.scalar(
+        select(WaterRegisterRecord).where(WaterRegisterRecord.record_date == record_date)
+    )
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Ese día ya está importado en la aplicación; puedes editarlo.",
+        )
+    try:
+        rows = await asyncio.to_thread(read_historical_range, record_date, record_date)
+    except Exception as exc:
+        logger.exception("No se pudo leer el día histórico del registro de agua")
+        raise HTTPException(
+            status_code=502,
+            detail=f"No se pudo leer la fecha desde la planilla: {exc}",
+        ) from exc
+    if not rows:
+        raise HTTPException(status_code=404, detail="No se encontraron datos para esa fecha en la planilla.")
+
+    primary = rows[0]
+
+    def first_value(field: str):
+        for row in rows:
+            value = row.get(field)
+            if value is not None:
+                return value
+        return None
+
+    record = WaterRegisterRecord(
+        record_date=record_date,
+        discharge_flow_m3=first_value("discharge_flow_m3"),
+        ph_plc=first_value("ph_plc"),
+        ph_discharge=first_value("ph_discharge"),
+        discharge_temp_c=first_value("discharge_temp_c"),
+        created_by_user_id=current_user.id,
+        updated_by_user_id=current_user.id,
+        sync_status="SYNCED",
+        sync_version=1,
+        synced_version=1,
+        sheet_row=primary["sheet_row"],
+        sheet_synced_at=datetime.now(timezone.utc),
+        dqo_rows_to_clear=[],
+    )
+    db.add(record)
+    await db.flush()
+
+    merged_meters: dict[str, dict] = {}
+    dqo_items: list[dict] = []
+    for row in rows:
+        for meter in row.get("meters", []):
+            if (
+                meter.get("initial_reading") is not None
+                and meter.get("final_reading") is not None
+                and meter["meter_key"] not in merged_meters
+            ):
+                merged_meters[meter["meter_key"]] = meter
+        dqo = row.get("dqo")
+        if dqo and dqo.get("mg_l") is not None:
+            dqo_items.append(dqo | {"sheet_row": row["sheet_row"]})
+
+    for meter_key, reading in merged_meters.items():
+        db.add(WaterMeterReading(
+            record_id=record.id,
+            meter_key=meter_key,
+            initial_reading=reading["initial_reading"],
+            final_reading=reading["final_reading"],
+        ))
+    for position, sample in enumerate(dqo_items):
+        db.add(WaterDqoSample(
+            record_id=record.id,
+            sample_date=sample.get("date") or record_date,
+            sample_time=sample.get("time"),
+            pool=sample.get("pool"),
+            mg_l=sample["mg_l"],
+            position=position,
+            sheet_row=sample["sheet_row"],
+        ))
+    if dqo_items:
+        first_dqo = dqo_items[0]
+        record.dqo_date = first_dqo.get("date") or record_date
+        record.dqo_time = first_dqo.get("time")
+        record.dqo_pool = first_dqo.get("pool")
+        record.dqo_mg_l = first_dqo["mg_l"]
+    await db.commit()
+    return await _loaded_record(db, record.id)
+
+
 @router.get("", response_model=WaterRegisterResponse)
 async def list_water_register(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(water_register_view_access),
     db: AsyncSession = Depends(get_db),
 ):
     records_result = await db.execute(
@@ -293,16 +474,27 @@ async def list_water_register(
         select(WaterRegisterBaseline).order_by(WaterRegisterBaseline.meter_key)
     )
     latest_result = await db.execute(
-        select(WaterMeterReading.meter_key, WaterMeterReading.final_reading)
+        select(
+            WaterMeterReading.meter_key,
+            WaterMeterReading.final_reading,
+            WaterRegisterRecord.record_date,
+        )
         .join(WaterRegisterRecord, WaterRegisterRecord.id == WaterMeterReading.record_id)
         .order_by(WaterMeterReading.meter_key, WaterRegisterRecord.record_date.desc())
     )
     latest_readings = {}
-    for meter_key, final_reading in latest_result.all():
+    latest_reading_dates = {}
+    for meter_key, final_reading, reading_date in latest_result.all():
         latest_readings.setdefault(meter_key, str(final_reading))
+        latest_reading_dates.setdefault(meter_key, reading_date)
     baseline_rows = baselines_result.scalars().all()
     for baseline in baseline_rows:
-        latest_readings.setdefault(baseline.meter_key, str(baseline.final_reading))
+        if (
+            baseline.meter_key not in latest_reading_dates
+            or baseline.reading_date > latest_reading_dates[baseline.meter_key]
+        ):
+            latest_readings[baseline.meter_key] = str(baseline.final_reading)
+            latest_reading_dates[baseline.meter_key] = baseline.reading_date
     return {
         "records": records_result.scalars().all(),
         "baselines": [
@@ -316,6 +508,7 @@ async def list_water_register(
         ],
         "meters": [{"key": meter.key, "label": meter.label} for meter in WATER_METERS],
         "latest_readings": latest_readings,
+        "latest_reading_dates": latest_reading_dates,
     }
 
 
@@ -324,24 +517,21 @@ async def initialize_from_sheet(
     current_user: User = Depends(admin_only),
     db: AsyncSession = Depends(get_db),
 ):
-    try:
-        baselines = await asyncio.to_thread(read_latest_meter_baselines)
-    except Exception as exc:
-        logger.exception("No se pudieron importar las lecturas iniciales del registro de agua")
-        raise HTTPException(status_code=502, detail=f"No se pudo leer la plantilla: {exc}") from exc
+    result = await _refresh_meter_baselines(current_user, db)
+    return {
+        "initialized": result["inserted"],
+        "baselines": result["readings"],
+        "message": "Lecturas iniciales revisadas.",
+    }
 
-    inserted = 0
-    for item in baselines:
-        existing = await db.get(WaterRegisterBaseline, item["meter_key"])
-        if existing is None:
-            db.add(WaterRegisterBaseline(
-                **item,
-                initialized_by_user_id=current_user.id,
-                initialized_at=datetime.now(timezone.utc),
-            ))
-            inserted += 1
-    await db.commit()
-    return {"initialized": inserted, "baselines": len(baselines), "message": "Lecturas iniciales revisadas."}
+
+@router.post("/refresh-latest-readings")
+async def refresh_latest_readings(
+    current_user: User = Depends(water_register_edit_access),
+    db: AsyncSession = Depends(get_db),
+):
+    """Refresh cached latest meter values without importing or changing a day."""
+    return await _refresh_meter_baselines(current_user, db)
 
 
 async def _save_payload(
@@ -367,6 +557,14 @@ async def _save_payload(
             status_code=409,
             detail="Ya existe un registro para ese día.",
         ) from exc
+    except DBAPIError as exc:
+        await db.rollback()
+        if "numeric field overflow" in str(exc).lower():
+            raise HTTPException(
+                status_code=422,
+                detail="Una lectura de medidor excede el máximo permitido. Revisa el valor ingresado.",
+            ) from exc
+        raise
     result = await _loaded_record(db, record_id)
     return result
 
@@ -374,7 +572,7 @@ async def _save_payload(
 @router.post("", response_model=WaterRegisterRecordResponse, status_code=status.HTTP_201_CREATED)
 async def create_water_record(
     payload: WaterRegisterInput,
-    current_user: User = Depends(water_register_access),
+    current_user: User = Depends(water_register_edit_access),
     db: AsyncSession = Depends(get_db),
 ):
     return await _save_payload(payload, current_user, db, None)
@@ -384,7 +582,7 @@ async def create_water_record(
 async def update_water_record(
     record_date: date,
     payload: WaterRegisterInput,
-    current_user: User = Depends(water_register_access),
+    current_user: User = Depends(water_register_edit_access),
     db: AsyncSession = Depends(get_db),
 ):
     if record_date != payload.record_date:
@@ -401,7 +599,7 @@ async def update_water_record(
 @router.post("/{record_id}/retry-sync")
 async def retry_water_sync(
     record_id: int,
-    current_user: User = Depends(water_register_access),
+    current_user: User = Depends(water_register_edit_access),
     db: AsyncSession = Depends(get_db),
 ):
     record = await _loaded_record(db, record_id)

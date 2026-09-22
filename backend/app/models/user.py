@@ -13,6 +13,12 @@ class UserRole(str, enum.Enum):
     WORKER = "WORKER"
 
 
+class WaterRegisterPermission(str, enum.Enum):
+    NONE = "NONE"
+    VIEW = "VIEW"
+    EDIT = "EDIT"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -31,6 +37,12 @@ class User(Base):
     # el acceso por su rol.
     can_manage_water_register: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False
+    )
+    # Permiso explÃ­cito del mÃ³dulo de agua. Se conserva el booleano anterior
+    # para compatibilidad con clientes antiguos; este nivel es la fuente nueva.
+    water_register_access: Mapped[str] = mapped_column(
+        String(10), default=WaterRegisterPermission.NONE.value,
+        server_default=WaterRegisterPermission.NONE.value, nullable=False
     )
     # URL de Drive de la firma manuscrita del usuario (cargada una vez, en su
     # perfil). Se usa para pegarla como imagen en el documento de la OT y para

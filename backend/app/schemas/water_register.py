@@ -1,7 +1,7 @@
 from datetime import date, time
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class WaterDqoInput(BaseModel):
@@ -21,6 +21,28 @@ class WaterRegisterInput(BaseModel):
     meter_final_readings: dict[str, Decimal | None] = Field(default_factory=dict)
     dqo: WaterDqoInput | None = None
     dqo_samples: list[WaterDqoInput] = Field(default_factory=list, max_length=100)
+
+    @field_validator("meter_final_readings")
+    @classmethod
+    def validate_meter_readings(cls, values):
+        # The database column is NUMERIC(16, 3): at most 13 integer digits
+        # and 3 decimal places. Validate here so the user receives a useful
+        # 422 message instead of a PostgreSQL 500 numeric overflow.
+        for meter_key, value in values.items():
+            if value is None:
+                continue
+            if value < 0:
+                raise ValueError(f"La lectura final de '{meter_key}' no puede ser negativa.")
+            if value >= Decimal("10000000000000"):
+                raise ValueError(
+                    f"La lectura final de '{meter_key}' es demasiado grande. "
+                    "Debe ser menor que 9.999.999.999.999,999."
+                )
+            if abs(value.as_tuple().exponent) > 3:
+                raise ValueError(
+                    f"La lectura final de '{meter_key}' puede tener como máximo 3 decimales."
+                )
+        return values
 
     @model_validator(mode="before")
     @classmethod
@@ -89,6 +111,7 @@ class WaterRegisterResponse(BaseModel):
     baselines: list[dict]
     meters: list[dict]
     latest_readings: dict[str, str]
+    latest_reading_dates: dict[str, date]
 
 
 class WaterHistoricalMeterResponse(BaseModel):

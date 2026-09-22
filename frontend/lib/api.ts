@@ -326,7 +326,11 @@ export async function apiFetch<T>(
     try {
       const data = await res.json();
       detail = data.detail || detail;
-      if (Array.isArray(data.detail)) detail = data.detail.map((d: { msg?: string }) => d.msg).join(", ");
+      if (Array.isArray(data.detail)) {
+        detail = data.detail
+          .map((d: { msg?: string }) => (d.msg || "Error de validación").replace(/^Value error,\s*/i, ""))
+          .join(", ");
+      }
     } catch {
       // Ignore parse errors.
     }

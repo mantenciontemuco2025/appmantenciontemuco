@@ -9,7 +9,7 @@ from starlette.concurrency import run_in_threadpool
 from app.api.dependencies import get_current_user, require_roles
 from app.core.security import hash_password, verify_password
 from app.db.session import get_db
-from app.models.user import User, UserRole
+from app.models.user import User, UserRole, WaterRegisterPermission
 from app.models.area import Area
 from app.models.audit_log import AuditLog
 from app.models.work_order import WorkOrder
@@ -96,6 +96,17 @@ async def _signature_is_referenced(db: AsyncSession, signature_url: str | None) 
         .limit(1)
     )
     return result.scalar_one_or_none() is not None
+
+
+def _effective_water_permission(
+    *,
+    requested: WaterRegisterPermission,
+    legacy_enabled: bool,
+) -> WaterRegisterPermission:
+    """Map old boolean clients to the new three-level permission."""
+    if requested == WaterRegisterPermission.NONE and legacy_enabled:
+        return WaterRegisterPermission.EDIT
+    return requested
 
 
 @router.get("/signature-image/{file_id}", include_in_schema=False)
@@ -218,7 +229,16 @@ async def create_user(
         role=payload.role,
         area_id=assigned_area_ids[0] if assigned_area_ids else None,
         is_active=payload.is_active,
-        can_manage_water_register=payload.can_manage_water_register,
+        can_manage_water_register=(
+            _effective_water_permission(
+                requested=payload.water_register_access,
+                legacy_enabled=payload.can_manage_water_register,
+            ) == WaterRegisterPermission.EDIT
+        ),
+        water_register_access=_effective_water_permission(
+            requested=payload.water_register_access,
+            legacy_enabled=payload.can_manage_water_register,
+        ).value,
     )
     user.supervised_areas = assigned_areas
     db.add(user)
@@ -236,6 +256,7 @@ async def create_user(
             "role": user.role.value,
             "area_ids": assigned_area_ids,
             "can_manage_water_register": user.can_manage_water_register,
+            "water_register_access": user.water_register_access,
         },
     )
     await db.refresh(user)
@@ -289,6 +310,7 @@ async def update_user(
         "role": user.role.value,
         "is_active": user.is_active,
         "can_manage_water_register": user.can_manage_water_register,
+        "water_register_access": user.water_register_access,
         "signature": user.signature,
         "area_id": user.area_id,
         "area_ids": user.area_ids,
@@ -358,7 +380,15 @@ async def update_user(
     user.supervised_areas = [area_by_id[area_id] for area_id in next_area_ids]
     if payload.is_active is not None:
         user.is_active = payload.is_active
-    if payload.can_manage_water_register is not None:
+    if payload.water_register_access is not None:
+        user.water_register_access = payload.water_register_access.value
+        user.can_manage_water_register = payload.water_register_access == WaterRegisterPermission.EDIT
+    elif payload.can_manage_water_register is not None:
+        user.water_register_access = (
+            WaterRegisterPermission.EDIT.value
+            if payload.can_manage_water_register
+            else WaterRegisterPermission.NONE.value
+        )
         user.can_manage_water_register = payload.can_manage_water_register
     if payload.password is not None:
         user.password_hash = hash_password(payload.password)
@@ -375,6 +405,7 @@ async def update_user(
             "role": user.role.value,
             "is_active": user.is_active,
             "can_manage_water_register": user.can_manage_water_register,
+            "water_register_access": user.water_register_access,
             "signature": user.signature,
             "area_id": user.area_id,
             "area_ids": next_area_ids,

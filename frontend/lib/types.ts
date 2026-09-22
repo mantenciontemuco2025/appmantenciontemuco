@@ -1,4 +1,5 @@
 export type UserRole = "ADMIN" | "SUPERVISOR" | "WORKER";
+export type WaterRegisterAccess = "NONE" | "VIEW" | "EDIT";
 
 export type MaintenanceType = "PREVENTIVE" | "CORRECTIVE" | "PREDICTIVE" | "PROYECTO" | "MONTAJE" | "URGENTE";
 export type SyncStatus = "PENDING" | "SYNCED" | "FAILED";
@@ -20,6 +21,7 @@ export interface User {
   area_names: string[];
   is_active: boolean;
   can_manage_water_register: boolean;
+  water_register_access: WaterRegisterAccess;
   signature: string | null;
 }
 

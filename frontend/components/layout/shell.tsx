@@ -6,6 +6,7 @@ import { Wrench, LayoutDashboard, ClipboardList, ClipboardCheck, Users, LogOut, 
 import { cn } from "@/lib/utils";
 import { NotificationBell } from "@/components/notifications/bell";
 import { getAuthUser } from "@/lib/auth";
+import type { WaterRegisterAccess } from "@/lib/types";
 
 interface NavItem {
   href: string;
@@ -35,7 +36,7 @@ export function Shell({
   children: React.ReactNode;
   fullName: string;
   role: string;
-  waterRegisterAccess?: boolean;
+  waterRegisterAccess?: WaterRegisterAccess;
   onLogout: () => void;
 }) {
   const pathname = usePathname();
@@ -43,11 +44,14 @@ export function Shell({
   // usuario autenticado antes de renderizar Shell. ADMIN y SUPERVISOR siguen
   // entrando por rol; el permiso adicional habilita a un trabajador asignado.
   const storedUser = getAuthUser();
+  const storedAccess = storedUser?.water_register_access;
   const canAccessWater =
     role === "ADMIN" ||
-    role === "SUPERVISOR" ||
-    waterRegisterAccess === true ||
-    storedUser?.can_manage_water_register === true;
+    waterRegisterAccess === "VIEW" ||
+    waterRegisterAccess === "EDIT" ||
+    storedAccess === "VIEW" ||
+    storedAccess === "EDIT" ||
+    (!storedAccess && (role === "SUPERVISOR" || storedUser?.can_manage_water_register === true));
 
   function isActive(item: NavItem): boolean {
     // Los enlaces con sub-rutas (detalles, creación) cuentan como activos en su

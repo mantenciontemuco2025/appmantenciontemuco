@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { ApiError, apiFetch } from "./api";
-import type { UserRole } from "./types";
+import type { UserRole, WaterRegisterAccess } from "./types";
 import {
   clearAuthStorage,
   getStoredToken as getTokenFromStorage,
@@ -25,6 +25,7 @@ export interface AuthUser {
   area_names: string[];
   is_active: boolean;
   can_manage_water_register: boolean;
+  water_register_access: WaterRegisterAccess;
   signature: string | null;
   created_at: string;
   updated_at: string;
