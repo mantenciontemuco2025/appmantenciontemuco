@@ -312,6 +312,88 @@ def read_historical_range(start_date: date, end_date: date) -> list[dict]:
     return rows
 
 
+def export_historical_range(start_date: date, end_date: date) -> bytes:
+    """Export a formatted copy of the water sheet containing only the range."""
+    rows = read_historical_range(start_date, end_date)
+    if not rows:
+        raise LookupError("No se encontraron registros para el rango seleccionado.")
+
+    from app.services.google_drive import _build_drive_write_service, _build_sheets_write_service
+
+    sheets_read, spreadsheet_id = _build_water_service(write=False)
+    _validate_template(sheets_read, spreadsheet_id)
+    drive = _build_drive_write_service()
+    sheets_write = _build_sheets_write_service()
+    temporary_id: str | None = None
+    try:
+        copy = drive.files().copy(
+            fileId=spreadsheet_id,
+            body={"name": f"Exportacion registro agua {start_date:%Y-%m-%d} a {end_date:%Y-%m-%d}"},
+            fields="id",
+        ).execute()
+        temporary_id = copy["id"]
+        temporary_sheet_id = _validate_template(sheets_read, temporary_id)
+
+        metadata = sheets_read.spreadsheets().get(
+            spreadsheetId=temporary_id,
+            fields="sheets(properties(sheetId,title))",
+        ).execute()
+        other_sheet_ids = [
+            int(sheet["properties"]["sheetId"])
+            for sheet in metadata.get("sheets", [])
+            if int(sheet["properties"]["sheetId"]) != temporary_sheet_id
+        ]
+
+        selected_rows = {row["sheet_row"] for row in rows}
+        requests = [
+            {"deleteSheet": {"sheetId": other_sheet_id}}
+            for other_sheet_id in other_sheet_ids
+        ]
+        row_delete_requests = []
+        range_start: int | None = None
+        for row_number in range(WATER_REGISTER_DATA_START_ROW, 1201):
+            if row_number in selected_rows:
+                if range_start is not None:
+                    row_delete_requests.append((range_start, row_number - 1))
+                    range_start = None
+            elif range_start is None:
+                range_start = row_number
+        if range_start is not None:
+            row_delete_requests.append((range_start, 1200))
+
+        # Delete from bottom to top so original row numbers remain valid.
+        requests.extend(
+            {
+                "deleteDimension": {
+                    "range": {
+                        "sheetId": temporary_sheet_id,
+                        "dimension": "ROWS",
+                        "startIndex": start - 1,
+                        "endIndex": end,
+                    }
+                }
+            }
+            for start, end in reversed(row_delete_requests)
+        )
+        if requests:
+            sheets_write.spreadsheets().batchUpdate(
+                spreadsheetId=temporary_id,
+                body={"requests": requests},
+            ).execute()
+
+        return drive.files().export(
+            fileId=temporary_id,
+            mimeType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ).execute()
+    finally:
+        if temporary_id:
+            try:
+                drive.files().delete(fileId=temporary_id).execute()
+            except Exception:
+                # The download already succeeded; leave cleanup for Drive if it transiently fails.
+                pass
+
+
 def _has_legacy_data(service, spreadsheet_id: str, row_number: int) -> bool:
     sheet = settings.GOOGLE_WATER_REGISTER_SHEET_NAME
     response = service.spreadsheets().values().get(

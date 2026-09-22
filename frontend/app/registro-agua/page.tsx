@@ -2,7 +2,7 @@
 
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertCircle, Check, Clock3, Download, Droplets, Loader2, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
+import { AlertCircle, BarChart3, Check, Clock3, Download, Droplets, Loader2, Plus, RefreshCw, Save, Trash2 } from "lucide-react";
 import { Shell } from "@/components/layout/shell";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -60,6 +60,132 @@ const emptyDqoSample = (): DqoSample => ({ date: today(), time: "", pool: "", mg
 const fmtDate = (date: string) => date ? new Date(`${date}T12:00:00`).toLocaleDateString("es-CL") : "—";
 const numberText = (value: string | number | null | undefined) => value === null || value === undefined || value === "" ? "—" : Number(value).toLocaleString("es-CL", { maximumFractionDigits: 3 });
 
+type ChartSeries = { key: string; label: string; color: string; values: (number | null)[] };
+type WaterChartData = { labels: string[]; series: ChartSeries[] };
+
+function numericValue(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function firstNumber(rows: HistoricalRow[], field: keyof Pick<HistoricalRow, "discharge_flow_m3" | "ph_plc" | "ph_discharge" | "discharge_temp_c">) {
+  for (const row of rows) {
+    const value = numericValue(row[field]);
+    if (value !== null) return value;
+  }
+  return null;
+}
+
+function average(values: (number | null)[]) {
+  const valid = values.filter((value): value is number => value !== null);
+  return valid.length ? valid.reduce((total, value) => total + value, 0) / valid.length : null;
+}
+
+function buildWaterChartData(rows: HistoricalRow[]): WaterChartData {
+  const dates = Array.from(new Set(rows.map((row) => row.record_date))).sort();
+  const rowsByDate = new Map(dates.map((date) => [date, rows.filter((row) => row.record_date === date)]));
+  const valuesByDate = (reader: (dateRows: HistoricalRow[]) => number | null) =>
+    dates.map((date) => reader(rowsByDate.get(date) ?? []));
+
+  const meterMap = new Map<string, string>();
+  for (const row of rows) {
+    for (const meter of row.meters) meterMap.set(meter.meter_key, meter.label);
+  }
+
+  const series: ChartSeries[] = [
+    { key: "flow", label: "Caudal descarga (m³)", color: "#0284c7", values: valuesByDate((dateRows) => firstNumber(dateRows, "discharge_flow_m3")) },
+    { key: "ph-plc", label: "pH PLC", color: "#7c3aed", values: valuesByDate((dateRows) => firstNumber(dateRows, "ph_plc")) },
+    { key: "ph-discharge", label: "pH descarga", color: "#db2777", values: valuesByDate((dateRows) => firstNumber(dateRows, "ph_discharge")) },
+    { key: "temperature", label: "Temperatura descarga (°C)", color: "#ea580c", values: valuesByDate((dateRows) => firstNumber(dateRows, "discharge_temp_c")) },
+    ...Array.from(meterMap.entries()).map(([meterKey, label], index) => ({
+      key: `meter-${meterKey}`,
+      label: `Volumen ${label} (m³)`,
+      color: ["#059669", "#0891b2", "#65a30d", "#ca8a04", "#9333ea", "#e11d48"][index % 6],
+      values: valuesByDate((dateRows) => {
+        for (const row of dateRows) {
+          const value = numericValue(row.meters.find((meter) => meter.meter_key === meterKey)?.volume_m3);
+          if (value !== null) return value;
+        }
+        return null;
+      }),
+    })),
+    { key: "dqo", label: "DQO (mg/L)", color: "#475569", values: valuesByDate((dateRows) => average(dateRows.map((row) => numericValue(row.dqo?.mg_l)))) },
+  ];
+
+  return { labels: dates.map(fmtDate), series };
+}
+
+function WaterLineChart({ title, labels, series }: { title: string; labels: string[]; series: ChartSeries[] }) {
+  const visibleSeries = series.filter((item) => item.values.some((value) => value !== null));
+  if (!visibleSeries.length || !labels.length) return null;
+
+  const allValues = visibleSeries.flatMap((item) => item.values).filter((value): value is number => value !== null);
+  let min = Math.min(...allValues);
+  let max = Math.max(...allValues);
+  if (min === max) {
+    const padding = Math.max(Math.abs(min) * 0.1, 1);
+    min -= padding;
+    max += padding;
+  } else {
+    const padding = (max - min) * 0.1;
+    min -= padding;
+    max += padding;
+  }
+
+  const width = 900;
+  const height = 260;
+  const left = 48;
+  const right = 18;
+  const top = 18;
+  const bottom = 42;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+  const x = (index: number) => labels.length === 1 ? left + plotWidth / 2 : left + (index / (labels.length - 1)) * plotWidth;
+  const y = (value: number) => top + ((max - value) / (max - min)) * plotHeight;
+  const labelStep = Math.max(1, Math.ceil(labels.length / 6));
+  const yLabels = Array.from({ length: 5 }, (_, index) => max - ((max - min) * index) / 4);
+
+  function pathSegments(values: (number | null)[]) {
+    const paths: string[] = [];
+    let current: string[] = [];
+    values.forEach((value, index) => {
+      if (value === null) {
+        if (current.length) paths.push(current.join(" "));
+        current = [];
+        return;
+      }
+      current.push(`${current.length ? "L" : "M"} ${x(index).toFixed(2)} ${y(value).toFixed(2)}`);
+    });
+    if (current.length) paths.push(current.join(" "));
+    return paths;
+  }
+
+  return (
+    <div className="rounded-lg border bg-muted/10 p-3 sm:p-4">
+      <h4 className="mb-2 text-sm font-semibold">{title}</h4>
+      <svg className="h-auto w-full" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title}>
+        {yLabels.map((value, index) => <g key={`y-${index}`}>
+          <line x1={left} x2={width - right} y1={y(value)} y2={y(value)} stroke="#e2e8f0" strokeWidth="1" />
+          <text x={left - 8} y={y(value) + 4} textAnchor="end" fontSize="11" fill="#64748b">{value.toLocaleString("es-CL", { maximumFractionDigits: 1 })}</text>
+        </g>)}
+        <line x1={left} x2={left} y1={top} y2={height - bottom} stroke="#cbd5e1" />
+        <line x1={left} x2={width - right} y1={height - bottom} y2={height - bottom} stroke="#cbd5e1" />
+        {visibleSeries.map((item) => <g key={item.key}>
+          {pathSegments(item.values).map((path, index) => <path key={`${item.key}-path-${index}`} d={path} fill="none" stroke={item.color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />)}
+          {item.values.map((value, index) => value === null ? null : <circle key={`${item.key}-${index}`} cx={x(index)} cy={y(value)} r="3.5" fill={item.color}>
+            <title>{`${item.label}: ${value.toLocaleString("es-CL", { maximumFractionDigits: 3 })} · ${labels[index]}`}</title>
+          </circle>)}
+        </g>)}
+        {labels.map((label, index) => index % labelStep === 0 || index === labels.length - 1 ? <text key={`x-${index}`} x={x(index)} y={height - 14} textAnchor="middle" fontSize="11" fill="#64748b">{label}</text> : null)}
+      </svg>
+      <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        {visibleSeries.map((item) => <span key={`legend-${item.key}`}><span className="mr-1 inline-block h-2 w-2 rounded-full" style={{ backgroundColor: item.color }} />{item.label}</span>)}
+      </div>
+    </div>
+  );
+}
+
 function syncLabel(status: string) {
   if (status === "SYNCED") return { text: "Sincronizado", tone: "text-emerald-700 bg-emerald-50" };
   if (status === "SYNCING" || status === "PENDING") return { text: status === "SYNCING" ? "Enviando a Sheets…" : "Pendiente de sincronizar", tone: "text-amber-700 bg-amber-50" };
@@ -81,6 +207,7 @@ export default function WaterRegisterPage() {
   const [historyTo, setHistoryTo] = useState("");
   const [history, setHistory] = useState<HistoricalData | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyExporting, setHistoryExporting] = useState(false);
   const [importingDate, setImportingDate] = useState("");
   const waterAccess: WaterRegisterAccess = user?.role === "ADMIN"
     ? "EDIT"
@@ -273,6 +400,28 @@ export default function WaterRegisterPage() {
     } finally { setHistoryLoading(false); }
   }
 
+  async function downloadHistory() {
+    if (!historyFrom || !historyTo) {
+      setError("Selecciona las fechas desde y hasta para descargar el rango.");
+      return;
+    }
+    setHistoryExporting(true); setError(""); setMessage("");
+    try {
+      const params = new URLSearchParams({ from: historyFrom, to: historyTo });
+      const blob = await api.getBlob(`/api/water-register/history/export?${params.toString()}`);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `registro_agua_${historyFrom.replaceAll("-", "")}_${historyTo.replaceAll("-", "")}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setMessage("Descarga generada con las fechas seleccionadas.");
+    } catch (err) { setError((err as Error).message || "No se pudo descargar el rango seleccionado."); }
+    finally { setHistoryExporting(false); }
+  }
+
   async function importHistoricalDay(recordDate: string) {
     setImportingDate(recordDate); setError(""); setMessage("");
     try {
@@ -287,6 +436,8 @@ export default function WaterRegisterPage() {
       setError((err as Error).message || "No se pudo importar ese día.");
     } finally { setImportingDate(""); }
   }
+
+  const chartData = history ? buildWaterChartData(history.rows) : null;
 
   if (loading || !user) return <PageLoading message={loading ? "Validando sesión…" : "Redirigiendo al inicio de sesión…"} />;
 
@@ -366,10 +517,24 @@ export default function WaterRegisterPage() {
         <form onSubmit={consultHistory} className="flex flex-wrap items-end gap-3">
           <label className="text-sm">Desde<input className="mt-1 h-11 rounded-md border bg-background px-3" type="date" value={historyFrom} onChange={(e) => setHistoryFrom(e.target.value)} required /></label>
           <label className="text-sm">Hasta<input className="mt-1 h-11 rounded-md border bg-background px-3" type="date" value={historyTo} onChange={(e) => setHistoryTo(e.target.value)} required /></label>
-          <Button type="submit" disabled={historyLoading}>{historyLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}{historyLoading ? "Consultando..." : "Consultar"}</Button>
+          <Button type="submit" disabled={historyLoading}>{historyLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <BarChart3 className="mr-2 h-4 w-4" />}{historyLoading ? "Consultando..." : "Consultar y graficar"}</Button>
+          <Button type="button" variant="outline" onClick={downloadHistory} disabled={historyExporting}>{historyExporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}{historyExporting ? "Generando..." : "Descargar Excel"}</Button>
         </form>
         {history && <div className="mt-5 space-y-3">
           <p className="text-sm font-medium">{history.rows.length ? `${history.rows.length} fila(s) encontradas` : "No hay datos registrados en ese rango."}</p>
+          {chartData && chartData.series.some((item) => item.values.some((value) => value !== null)) && <section className="mb-5 rounded-xl border bg-sky-50/30 p-3 sm:p-5">
+            <div className="mb-4 flex items-start gap-3">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sky-100 text-sky-700"><BarChart3 className="h-5 w-5" /></span>
+              <div><h3 className="font-semibold">Gráficos del rango seleccionado</h3><p className="text-sm text-muted-foreground">Cada punto representa un día con datos. Los días sin una medición quedan sin punto.</p></div>
+            </div>
+            <div className="grid gap-4 lg:grid-cols-2">
+              <WaterLineChart title="Caudal de descarga" labels={chartData.labels} series={chartData.series.filter((item) => item.key === "flow")} />
+              <WaterLineChart title="pH" labels={chartData.labels} series={chartData.series.filter((item) => item.key === "ph-plc" || item.key === "ph-discharge")} />
+              <WaterLineChart title="Temperatura de descarga" labels={chartData.labels} series={chartData.series.filter((item) => item.key === "temperature")} />
+              <WaterLineChart title="Volumen diario por medidor" labels={chartData.labels} series={chartData.series.filter((item) => item.key.startsWith("meter-"))} />
+              <WaterLineChart title="DQO promedio por día" labels={chartData.labels} series={chartData.series.filter((item) => item.key === "dqo")} />
+            </div>
+          </section>}
           {history.rows.map((row, index) => {
             const importedRecord = data?.records.find((record) => record.record_date === row.record_date);
             const alreadyImported = Boolean(importedRecord);

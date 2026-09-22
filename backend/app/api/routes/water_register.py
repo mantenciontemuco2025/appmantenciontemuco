@@ -4,8 +4,9 @@ import asyncio
 import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +32,7 @@ from app.schemas.water_register import (
 from app.services.water_register_sheet import (
     read_historical_range,
     read_latest_meter_baselines,
+    export_historical_range,
     write_daily_record,
 )
 
@@ -355,6 +357,33 @@ async def historical_water_register(
         logger.exception("No se pudo consultar el histórico del registro de agua")
         raise HTTPException(status_code=502, detail=f"No se pudo consultar la planilla: {exc}") from exc
     return {"from_date": from_date, "to_date": to_date, "rows": rows}
+
+
+@router.get("/history/export")
+async def export_historical_water_register(
+    from_date: date = Query(..., alias="from"),
+    to_date: date = Query(..., alias="to"),
+    current_user: User = Depends(water_register_view_access),
+):
+    del current_user
+    if from_date > to_date:
+        raise HTTPException(status_code=422, detail="La fecha desde no puede ser posterior a la fecha hasta.")
+    if (to_date - from_date).days > 366:
+        raise HTTPException(status_code=422, detail="El rango máximo de descarga es de 366 días.")
+    try:
+        content = await asyncio.to_thread(export_historical_range, from_date, to_date)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("No se pudo exportar el histórico del registro de agua")
+        raise HTTPException(status_code=502, detail=f"No se pudo generar la descarga: {exc}") from exc
+
+    filename = quote(f"registro_agua_{from_date:%Y%m%d}_{to_date:%Y%m%d}.xlsx")
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/import-day", response_model=WaterRegisterRecordResponse, status_code=status.HTTP_201_CREATED)

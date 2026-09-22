@@ -336,3 +336,21 @@ async def test_refreshed_sheet_reading_wins_when_date_matches_app_record(
     assert refreshed.status_code == 200, refreshed.text
     listing = await client.get("/api/water-register", headers=admin)
     assert listing.json()["latest_readings"]["pozo_norte"] == "783258.000"
+
+
+async def test_user_can_download_selected_water_history_range(client, seed_data, monkeypatch):
+    from app.api.routes import water_register
+
+    monkeypatch.setattr(
+        water_register,
+        "export_historical_range",
+        lambda start_date, end_date: b"fake-xlsx-content",
+    )
+    admin = auth_headers(await get_token(client, "admin@test.com"))
+    response = await client.get(
+        "/api/water-register/history/export?from=2026-09-01&to=2026-09-21",
+        headers=admin,
+    )
+    assert response.status_code == 200, response.text
+    assert response.content == b"fake-xlsx-content"
+    assert "registro_agua_20260901_20260921.xlsx" in response.headers["content-disposition"]
