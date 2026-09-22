@@ -304,3 +304,35 @@ async def test_edit_user_can_refresh_latest_readings_without_creating_daily_reco
     assert listing.json()["latest_reading_dates"][WATER_METERS[0].key] == "2026-09-22"
     async with db_session_factory() as db:
         assert await db.scalar(select(WaterRegisterRecord.id)) is None
+
+
+async def test_refreshed_sheet_reading_wins_when_date_matches_app_record(
+    client, seed_data, db_session_factory, monkeypatch
+):
+    from app.api.routes import water_register
+
+    await _seed_baselines(db_session_factory, seed_data["admin"].id)
+    admin = auth_headers(await get_token(client, "admin@test.com"))
+    created = await client.post(
+        "/api/water-register",
+        json={"record_date": "2026-09-21", "meter_final_readings": {"pozo_norte": "780384"}},
+        headers=admin,
+    )
+    assert created.status_code == 201, created.text
+    monkeypatch.setattr(
+        water_register,
+        "read_latest_meter_baselines",
+        lambda: [
+            {
+                "meter_key": meter.key,
+                "final_reading": Decimal("783258") if meter.key == "pozo_norte" else Decimal("1200.500"),
+                "reading_date": date(2026, 9, 21),
+                "source_row": 389,
+            }
+            for meter in WATER_METERS
+        ],
+    )
+    refreshed = await client.post("/api/water-register/refresh-latest-readings", headers=admin)
+    assert refreshed.status_code == 200, refreshed.text
+    listing = await client.get("/api/water-register", headers=admin)
+    assert listing.json()["latest_readings"]["pozo_norte"] == "783258.000"

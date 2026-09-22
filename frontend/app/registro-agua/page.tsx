@@ -132,7 +132,7 @@ export default function WaterRegisterPage() {
       .find((item) => item.value !== undefined);
     const latestValue = data?.latest_readings[meterKey];
     const latestDate = data?.latest_reading_dates[meterKey];
-    if (latestValue && latestDate && latestDate < recordDate && (!priorReading || latestDate > priorReading.date)) {
+    if (latestValue && latestDate && latestDate < recordDate && (!priorReading || latestDate >= priorReading.date)) {
       return latestValue;
     }
     if (priorReading?.value !== undefined) return priorReading.value;

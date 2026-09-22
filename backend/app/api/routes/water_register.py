@@ -146,7 +146,7 @@ async def _opening_reading(db: AsyncSession, meter_key: str, record_date) -> Dec
     prior_row = prior.one_or_none()
     baseline = await db.get(WaterRegisterBaseline, meter_key)
     if prior_row is not None and (
-        baseline is None or prior_row[0] >= baseline.reading_date
+        baseline is None or prior_row[0] > baseline.reading_date
     ):
         return Decimal(prior_row[1])
     if baseline is None:
@@ -491,7 +491,7 @@ async def list_water_register(
     for baseline in baseline_rows:
         if (
             baseline.meter_key not in latest_reading_dates
-            or baseline.reading_date > latest_reading_dates[baseline.meter_key]
+            or baseline.reading_date >= latest_reading_dates[baseline.meter_key]
         ):
             latest_readings[baseline.meter_key] = str(baseline.final_reading)
             latest_reading_dates[baseline.meter_key] = baseline.reading_date
