@@ -218,6 +218,12 @@ class WorkOrderResponse(BaseModel):
     approved_signature: str | None = None
     status: str
     submitted_for_review: bool = False
+    requires_supervisor_validation: bool = False
+    supervisor_review_status: str = "NOT_REQUIRED"
+    supervisor_validator_user_id: int | None = None
+    supervisor_validator_name: str | None = None
+    supervisor_reviewed_at: datetime | None = None
+    supervisor_review_notes: str | None = None
 
     # ── Workflow fields ──────────────────────────────────────────────────
     responsible_user_id: int | None = None
@@ -308,6 +314,9 @@ class WorkOrderListResponse(BaseModel):
     loto_status: str
     status: str
     submitted_for_review: bool = False
+    requires_supervisor_validation: bool = False
+    supervisor_review_status: str = "NOT_REQUIRED"
+    supervisor_validator_user_id: int | None = None
     execution_date: date | None
     request_date: date | None = None
     ot_sheet_sync_status: str

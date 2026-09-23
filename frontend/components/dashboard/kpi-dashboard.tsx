@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  Activity,
   BarChart3,
   CalendarRange,
   CheckCircle2,
@@ -84,14 +83,23 @@ function KpiCard({
 
 function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
   const summary = data.summary;
-  const target = summary.compliance_target_percent;
-  const compliance = summary.compliance_percent ?? 0;
   // The dashboard can stay open while an API process is being upgraded. Treat
   // fields added by newer API versions as optional during that short window.
   const externalHours = summary.external_hours ?? 0;
   const externalOts = summary.external_ots ?? 0;
   const externalWorkRows = data.by_external_work ?? [];
-  const progress = Math.min(100, Math.round((compliance / Math.max(target, 1)) * 100));
+  const draftOts = Math.max(
+    0,
+    summary.total_ots - summary.completed_ots - summary.pending_ots - summary.in_progress_ots - summary.cancelled_ots,
+  );
+  const statusRows = [
+    { key: "completed", label: "Finalizadas", count: summary.completed_ots, color: "bg-emerald-600", dot: "bg-emerald-600" },
+    { key: "in-progress", label: "En proceso", count: summary.in_progress_ots, color: "bg-blue-700", dot: "bg-blue-700" },
+    { key: "pending", label: "Pendientes", count: summary.pending_ots, color: "bg-orange-600", dot: "bg-orange-600" },
+    { key: "draft", label: "Borrador", count: draftOts, color: "bg-slate-400", dot: "bg-slate-400" },
+    { key: "cancelled", label: "Canceladas", count: summary.cancelled_ots, color: "bg-background border border-slate-400", dot: "bg-background border border-slate-400" },
+  ];
+  const statusTotal = Math.max(1, summary.total_ots);
 
   return (
     <>
@@ -126,22 +134,25 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
         />
       </div>
 
-      <div className="mt-4 rounded-2xl border bg-muted/20 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-          <div>
-            <span className="font-semibold">Cumplimiento contra meta</span>
-            <span className="ml-2 text-muted-foreground">Meta: {target}%</span>
-          </div>
-          <span className={compliance >= target ? "font-semibold text-emerald-600" : "font-semibold text-amber-600"}>
-            {summary.compliance_percent === null ? "Sin OTs planificadas" : `${compliance}% actual`}
-          </span>
+      <div className="mt-5 rounded-2xl border p-4 sm:p-5">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <h3 className="font-semibold">Estado de las {summary.total_ots} OTs</h3>
+          <p className="text-sm text-muted-foreground">Distribución del período seleccionado</p>
         </div>
-        <div className="mt-2 h-2.5 overflow-hidden rounded-full bg-muted">
-          <div className={`h-full rounded-full ${compliance >= target ? "bg-emerald-500" : "bg-amber-500"}`} style={{ width: `${progress}%` }} />
+        <div className="flex h-10 overflow-hidden rounded-lg bg-muted/50">
+          {statusRows.map((row) => row.count > 0 ? (
+            <div
+              key={row.key}
+              className={`${row.color} border-r border-card last:border-r-0`}
+              style={{ width: `${(row.count / statusTotal) * 100}%` }}
+              title={`${row.label}: ${row.count}`}
+              aria-label={`${row.label}: ${row.count}`}
+            />
+          ) : null)}
         </div>
-        <p className="mt-2 text-xs text-muted-foreground">
-          El porcentaje usa solo OTs planificadas: {summary.executed_planned_ots} ejecutadas de {summary.planned_ots}.
-        </p>
+        <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground">
+          {statusRows.map((row) => <span key={`legend-${row.key}`} className="inline-flex items-center gap-2"><span className={`h-3 w-3 rounded-sm ${row.dot}`} />{row.label} <strong className="text-foreground">{row.count}</strong></span>)}
+        </div>
       </div>
 
       <div className="mt-5 overflow-hidden rounded-2xl border">
@@ -314,9 +325,8 @@ export function KpiDashboard() {
           <div className="flex min-h-48 items-center justify-center text-muted-foreground"><RefreshCw className="mr-2 h-5 w-5 animate-spin" /> Cargando indicadores...</div>
         ) : summary ? (
           <>
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
               <KpiCard label="OTs totales" value={String(summary.total_ots)} helper={`${formatHours(summary.average_hours_per_ot)} promedio por OT`} icon={<ListChecks className="h-5 w-5 text-blue-700" />} tone="bg-blue-100" />
-              <KpiCard label="Cumplimiento" value={summary.compliance_percent === null ? "—" : `${summary.compliance_percent}%`} helper={`${summary.executed_planned_ots}/${summary.planned_ots} planificadas ejecutadas`} icon={<Activity className="h-5 w-5 text-emerald-700" />} tone="bg-emerald-100" />
               <KpiCard label="Horas acumuladas" value={formatHours(summary.total_hours)} helper="Horas registradas por OT" icon={<Clock3 className="h-5 w-5 text-violet-700" />} tone="bg-violet-100" />
               <KpiCard label="Finalizadas" value={String(summary.completed_ots)} helper="Completadas o aprobadas" icon={<CheckCircle2 className="h-5 w-5 text-green-700" />} tone="bg-green-100" />
               <KpiCard label="Pendientes" value={String(summary.pending_ots)} helper="Esperando ejecución" icon={<CalendarRange className="h-5 w-5 text-amber-700" />} tone="bg-amber-100" />

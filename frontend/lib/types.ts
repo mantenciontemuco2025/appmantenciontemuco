@@ -223,6 +223,7 @@ export interface MaintenanceDraft {
 export type LotoStatus = "YES" | "NO" | "NOT_APPLICABLE";
 export type WorkOrderStatus = "DRAFT" | "PENDING" | "IN_PROGRESS" | "COMPLETED" | "APPROVED" | "CANCELLED";
 export type WorkTimeMode = "RANGE" | "MANUAL";
+export type SupervisorReviewStatus = "NOT_REQUIRED" | "PENDING" | "CLAIMED" | "APPROVED" | "RETURNED";
 
 export interface WorkOrderRecord {
   id: number;
@@ -252,6 +253,12 @@ export interface WorkOrderRecord {
   approved_signature: string | null;
   status: WorkOrderStatus;
   submitted_for_review: boolean;
+  requires_supervisor_validation: boolean;
+  supervisor_review_status: SupervisorReviewStatus;
+  supervisor_validator_user_id: number | null;
+  supervisor_validator_name: string | null;
+  supervisor_reviewed_at: string | null;
+  supervisor_review_notes: string | null;
   // ── Workflow fields ──
   responsible_user_id: number | null;
   responsible_user_name: string | null;
@@ -324,6 +331,9 @@ export interface WorkOrderListItem {
   loto_status: LotoStatus;
   status: WorkOrderStatus;
   submitted_for_review: boolean;
+  requires_supervisor_validation: boolean;
+  supervisor_review_status: SupervisorReviewStatus;
+  supervisor_validator_user_id: number | null;
   execution_date: string | null;
   request_date: string | null;
   ot_sheet_sync_status: SyncStatus;
@@ -376,6 +386,9 @@ export type NotificationType =
   | "OT_COMPLETADA"
   | "OT_APROBADA"
   | "OT_DEVUELTA"
+  | "OT_VALIDACION_SUPERVISOR"
+  | "OT_VALIDADA_SUPERVISOR"
+  | "OT_DEVUELTA_SUPERVISOR"
   | "OT_REASIGNADA";
 
 export interface AppNotification {

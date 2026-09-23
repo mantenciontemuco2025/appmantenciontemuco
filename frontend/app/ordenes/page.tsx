@@ -17,6 +17,7 @@ import { SyncBadge } from "@/components/maintenance/sync-badge";
 import { cn, formatDateOnly } from "@/lib/utils";
 
 type TabKey = "ALL" | "DRAFT" | "PENDING" | "IN_PROGRESS" | "COMPLETED" | "APPROVED" | "CANCELLED" | "OVERDUE";
+type ViewKey = "ALL" | "CREATED_BY_ME" | "PENDING_REVIEW" | "SUPERVISOR_VALIDATION";
 
 const TABS: { key: TabKey; label: string }[] = [
   { key: "ALL", label: "Todas" },
@@ -40,6 +41,7 @@ export default function OrdenesPage() {
   const [hasMore, setHasMore] = useState(true);
   const [actionId, setActionId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("ALL");
+  const [activeView, setActiveView] = useState<ViewKey>("ALL");
   const [searchOT, setSearchOT] = useState("");
   const [searchResponsible, setSearchResponsible] = useState("");
   const [counter, setCounter] = useState<WorkOrderCounter | null>(null);
@@ -67,7 +69,7 @@ export default function OrdenesPage() {
       .then(setCounter)
       .catch(() => setCounter(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user]);
+  }, [user, activeView]);
 
   // Carga el panel de Vencidas cuando se activa la pestaña (una vez por visita).
   useEffect(() => {
@@ -107,8 +109,12 @@ export default function OrdenesPage() {
     try {
       // Ventana acotada — nunca una lista infinita. "Cargar más" agrega el
       // siguiente tramo vía offset hasta llegar al final.
+      const filters = new URLSearchParams({ limit: String(PAGE_SIZE), offset: "0" });
+      if (activeView === "CREATED_BY_ME") filters.set("created_by_me", "true");
+      if (activeView === "PENDING_REVIEW") filters.set("pending_review", "true");
+      if (activeView === "SUPERVISOR_VALIDATION") filters.set("supervisor_validation_pending", "true");
       const page = await api.get<WorkOrderListItem[]>(
-        `/api/work-orders?limit=${PAGE_SIZE}&offset=0`
+        `/api/work-orders?${filters.toString()}`
       );
       setOrders(page);
       setHasMore(page.length === PAGE_SIZE);
@@ -125,8 +131,12 @@ export default function OrdenesPage() {
   async function loadMore() {
     setLoadingMore(true);
     try {
+      const filters = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(orders.length) });
+      if (activeView === "CREATED_BY_ME") filters.set("created_by_me", "true");
+      if (activeView === "PENDING_REVIEW") filters.set("pending_review", "true");
+      if (activeView === "SUPERVISOR_VALIDATION") filters.set("supervisor_validation_pending", "true");
       const page = await api.get<WorkOrderListItem[]>(
-        `/api/work-orders?limit=${PAGE_SIZE}&offset=${orders.length}`
+        `/api/work-orders?${filters.toString()}`
       );
       setOrders((prev) => [...prev, ...page]);
       setHasMore(page.length === PAGE_SIZE);
@@ -244,6 +254,53 @@ export default function OrdenesPage() {
           </Link>
         </div>
       </div>
+
+      {(user.role === "SUPERVISOR" || user.role === "ADMIN") && (
+        <div className="mb-3 flex flex-wrap gap-2 rounded-lg border bg-muted/20 p-2">
+          <button
+            onClick={() => { setActiveView("ALL"); setActiveTab("ALL"); }}
+            className={cn(
+              "rounded-md px-3 py-2 text-sm font-medium transition-colors",
+              activeView === "ALL" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+            )}
+          >
+            Todas las OTs
+          </button>
+          {user.role === "SUPERVISOR" && (
+            <button
+              onClick={() => { setActiveView("CREATED_BY_ME"); setActiveTab("ALL"); }}
+              className={cn(
+                "rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                activeView === "CREATED_BY_ME" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+              )}
+            >
+              Emitidas por mí
+            </button>
+          )}
+          {user.role === "ADMIN" && (
+            <button
+              onClick={() => { setActiveView("PENDING_REVIEW"); setActiveTab("ALL"); }}
+              className={cn(
+                "rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                activeView === "PENDING_REVIEW" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+              )}
+            >
+              Pendientes de revisión
+            </button>
+          )}
+          {user.role === "SUPERVISOR" && (
+            <button
+              onClick={() => { setActiveView("SUPERVISOR_VALIDATION"); setActiveTab("ALL"); }}
+              className={cn(
+                "rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                activeView === "SUPERVISOR_VALIDATION" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"
+              )}
+            >
+              Validaciones pendientes
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="mb-3 flex gap-1 overflow-x-auto border-b">
@@ -398,6 +455,13 @@ export default function OrdenesPage() {
                             Pendiente de revisión
                           </span>
                         )}
+                        {o.requires_supervisor_validation &&
+                          o.status === "COMPLETED" &&
+                          o.supervisor_review_status !== "APPROVED" && (
+                            <span className="inline-flex items-center rounded-full bg-violet-100 text-violet-800 px-2.5 py-0.5 text-xs font-medium">
+                              Pendiente validación supervisor
+                            </span>
+                          )}
                         {o.is_planned && (
                           <span className="inline-flex items-center rounded-full bg-purple-100 text-purple-700 px-2.5 py-0.5 text-xs font-medium">
                             Planificada

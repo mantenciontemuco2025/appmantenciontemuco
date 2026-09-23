@@ -35,6 +35,7 @@ function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
 }
 
 type ConfirmAction = "issue" | "return" | "approve" | "cancel" | "reopen" | "reassign" | "external" | "internal";
+type SupervisorReviewAction = "CLAIM" | "APPROVE" | "RETURN";
 
 interface AlertState {
   variant: "success" | "error";
@@ -52,6 +53,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
   const [notice, setNotice] = useState<AlertState | null>(null);
   const [showConfirm, setShowConfirm] = useState<ConfirmAction | null>(null);
   const [returnReason, setReturnReason] = useState("");
+  const [supervisorReviewNotes, setSupervisorReviewNotes] = useState("");
   const [cancelReason, setCancelReason] = useState("");
   const [reopenReason, setReopenReason] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -242,6 +244,34 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
     }
   }
 
+  async function handleSupervisorReview(action: SupervisorReviewAction) {
+    if (action === "RETURN" && !supervisorReviewNotes.trim()) {
+      toast("error", "Indica el motivo de la devolución al trabajador.");
+      return;
+    }
+    setActionLoading(true);
+    try {
+      const updated = await api.post<WorkOrderRecord>(
+        `/api/work-orders/${id}/supervisor-validation`,
+        { action, notes: supervisorReviewNotes.trim() || null },
+      );
+      setWo(updated);
+      setSupervisorReviewNotes("");
+      toast(
+        "success",
+        action === "CLAIM"
+          ? "Revisión tomada. Ahora puedes validar o devolver la OT."
+          : action === "APPROVE"
+            ? "OT validada por el supervisor. El administrador ya puede aprobarla."
+            : "OT devuelta al trabajador para corrección.",
+      );
+    } catch (err) {
+      toast("error", err instanceof Error ? err.message : "No se pudo actualizar la revisión");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
   async function handleCancel() {
     if (!cancelReason.trim()) {
       toast("error", "El motivo de cancelación es obligatorio");
@@ -423,6 +453,19 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
               )}
             </div>
           )}
+          {wo.requires_supervisor_validation && wo.status === "COMPLETED" && (
+            <div className="mb-4 rounded-lg border border-violet-200 bg-violet-50 p-3 text-sm text-violet-900">
+              <strong>Validación del supervisor:</strong>{" "}
+              {wo.supervisor_review_status === "APPROVED"
+                ? `Validada por ${wo.supervisor_validator_name || "un supervisor"}. El administrador puede aprobar la OT.`
+                : wo.supervisor_review_status === "CLAIMED"
+                  ? `Revisión tomada por ${wo.supervisor_validator_name || "otro supervisor"}.`
+                  : "Pendiente de revisión por un supervisor del área."}
+              {wo.supervisor_review_notes && (
+                <p className="mt-1">Observación: {wo.supervisor_review_notes}</p>
+              )}
+            </div>
+          )}
           {wo.status === "APPROVED" && (
             <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
               <CheckCircle className="inline h-4 w-4 mr-1" />
@@ -517,6 +560,57 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
               <InfoRow label="Creado el" value={wo.created_at ? new Date(wo.created_at).toLocaleString("es-CL") : null} />
             </CardContent>
           </Card>
+
+          {user.role === "SUPERVISOR" &&
+            wo.requires_supervisor_validation &&
+            wo.status === "COMPLETED" &&
+            (wo.supervisor_review_status === "PENDING" ||
+              (wo.supervisor_review_status === "CLAIMED" &&
+                wo.supervisor_validator_user_id === user.id)) && (
+              <Card className="mb-4 border-violet-200">
+                <CardContent className="p-4">
+                  <h3 className="text-sm font-semibold text-violet-900">Revisión del supervisor</h3>
+                  {wo.supervisor_review_status === "PENDING" && (
+                    <>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        Esta OT fue creada por un supervisor y requiere validación del área antes de la aprobación administrativa.
+                      </p>
+                      <Button
+                        className="mt-3"
+                        disabled={actionLoading}
+                        onClick={() => handleSupervisorReview("CLAIM")}
+                      >
+                        {actionLoading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Eye className="mr-1 h-4 w-4" />}
+                        Tomar revisión
+                      </Button>
+                    </>
+                  )}
+                  {wo.supervisor_review_status === "CLAIMED" &&
+                    wo.supervisor_validator_user_id === user.id && (
+                    <>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        Revisa el trabajo y deja una observación si corresponde.
+                      </p>
+                      <textarea
+                        className="mt-3 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                        rows={3}
+                        value={supervisorReviewNotes}
+                        onChange={(event) => setSupervisorReviewNotes(event.target.value)}
+                        placeholder="Observación de la revisión (obligatoria si devuelves)"
+                      />
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button disabled={actionLoading} onClick={() => handleSupervisorReview("APPROVE")}>
+                          <CheckCircle className="mr-1 h-4 w-4" /> Validar trabajo
+                        </Button>
+                        <Button variant="outline" disabled={actionLoading} onClick={() => handleSupervisorReview("RETURN")}>
+                          <RotateCcw className="mr-1 h-4 w-4" /> Devolver al trabajador
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            )}
 
           <WorkOrderEvidencePanel
             woId={wo.id}
@@ -644,17 +738,25 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
               <Button variant="outline" className="flex-1" onClick={() => setShowConfirm("return")}>
                 <RotateCcw className="mr-1 h-4 w-4" /> Devolver
               </Button>
-              <Button className="flex-1" onClick={() => setShowConfirm("approve")}>
-                <CheckCircle className="mr-1 h-4 w-4" /> Aprobar
-              </Button>
+              {(!wo.requires_supervisor_validation || wo.supervisor_review_status === "APPROVED") ? (
+                <Button className="flex-1" onClick={() => setShowConfirm("approve")}>
+                  <CheckCircle className="mr-1 h-4 w-4" /> Aprobar
+                </Button>
+              ) : (
+                <div className="flex flex-1 items-center justify-center rounded-md border border-violet-200 bg-violet-50 px-3 text-center text-xs text-violet-800">
+                  Esperando validación del supervisor del área
+                </div>
+              )}
             </div>
           )}
 
-          {!showConfirm && (wo.status === "PENDING" || wo.status === "IN_PROGRESS") && (
+          {!showConfirm &&
+            user.role === "ADMIN" &&
+            (wo.status === "PENDING" || wo.status === "IN_PROGRESS") && (
             <Button variant="destructive" className="w-full" onClick={() => setShowConfirm("cancel")}>
               <XCircle className="mr-1 h-4 w-4" /> Cancelar OT
             </Button>
-          )}
+            )}
 
           {/* Reasignar — solo managers, en estados activos (no terminales) */}
           {!showConfirm &&

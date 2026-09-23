@@ -29,6 +29,16 @@ class WorkOrderStatus(str, enum.Enum):
     CANCELLED = "CANCELLED"
 
 
+class SupervisorReviewStatus(str, enum.Enum):
+    """Internal review required for work orders created by supervisors."""
+
+    NOT_REQUIRED = "NOT_REQUIRED"
+    PENDING = "PENDING"
+    CLAIMED = "CLAIMED"
+    APPROVED = "APPROVED"
+    RETURNED = "RETURNED"
+
+
 class LotoStatus(str, enum.Enum):
     YES = "YES"
     NO = "NO"
@@ -91,6 +101,27 @@ class WorkOrder(Base):
 
     # Supervisor submissions wait for administrative review and assignment.
     submitted_for_review: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    # OTs created by a supervisor require a second, internal validation by a
+    # supervisor from the same area after the worker finishes. This workflow
+    # is deliberately separate from ``status`` so existing Google templates,
+    # KPI filters and Drive lifecycle values remain unchanged.
+    requires_supervisor_validation: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    supervisor_review_status: Mapped[str] = mapped_column(
+        String(20),
+        default=SupervisorReviewStatus.NOT_REQUIRED.value,
+        server_default=SupervisorReviewStatus.NOT_REQUIRED.value,
+        nullable=False,
+    )
+    supervisor_validator_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    supervisor_reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    supervisor_review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # ── Responsible ──────────────────────────────────────────────────────
     responsible_user_id: Mapped[int | None] = mapped_column(
@@ -212,6 +243,9 @@ class WorkOrder(Base):
     )
     approved_by_user = relationship(
         "User", foreign_keys=[approved_by_user_id], lazy="selectin"
+    )
+    supervisor_validator = relationship(
+        "User", foreign_keys=[supervisor_validator_user_id], lazy="selectin"
     )
 
     participants = relationship(

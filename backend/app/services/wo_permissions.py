@@ -95,11 +95,26 @@ def can_approve(wo: WorkOrder, user: User) -> bool:
     return user.role == UserRole.ADMIN
 
 
+def can_review_supervisor(wo: WorkOrder, user: User) -> bool:
+    """A supervisor from the OT area may review a supervisor-created OT."""
+    if user.role != UserRole.SUPERVISOR or not wo.requires_supervisor_validation:
+        return False
+    if wo.status != WorkOrderStatus.COMPLETED.value:
+        return False
+    area_ids = getattr(user, "area_ids", None)
+    if area_ids is None:
+        legacy_area_id = getattr(user, "area_id", None)
+        area_ids = [legacy_area_id] if legacy_area_id is not None else []
+    # Review is intentionally strict: a supervisor must have an explicit
+    # area assignment to validate work from that area.
+    return bool(area_ids) and wo.area_id in area_ids
+
+
 def can_cancel(wo: WorkOrder, user: User) -> bool:
-    """Cancel OT. ADMIN and SUPERVISOR, but not on already-closed orders."""
+    """Cancel OT. Only ADMIN can cancel, and not already-closed orders."""
     if wo.status in (WorkOrderStatus.APPROVED, WorkOrderStatus.CANCELLED):
         return False
-    return user.role in (UserRole.ADMIN, UserRole.SUPERVISOR) and _is_in_supervisor_area(wo, user)
+    return user.role == UserRole.ADMIN
 
 
 def can_view(wo: WorkOrder, user: User) -> bool:

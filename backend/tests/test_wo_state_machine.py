@@ -139,7 +139,7 @@ class TestPermissionMatrix:
 
     def test_can_cancel(self):
         assert perms.can_cancel(_wo("PENDING"), _user(UserRole.ADMIN)) is True
-        assert perms.can_cancel(_wo("PENDING"), _user(UserRole.SUPERVISOR)) is True
+        assert perms.can_cancel(_wo("PENDING"), _user(UserRole.SUPERVISOR)) is False
         assert perms.can_cancel(_wo("PENDING"), _user(UserRole.WORKER)) is False
         # Cannot cancel terminal
         assert perms.can_cancel(_wo("APPROVED"), _user(UserRole.ADMIN)) is False

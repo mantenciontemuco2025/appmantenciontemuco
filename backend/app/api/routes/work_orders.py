@@ -35,7 +35,7 @@ from app.db.session import get_db, async_session
 from app.models.user import User, UserRole
 from app.models.area import Area
 from app.models.equipment import Equipment
-from app.models.work_order import WorkOrder, WorkOrderStatus
+from app.models.work_order import WorkOrder, WorkOrderStatus, SupervisorReviewStatus
 from app.models.work_order_evidence import WorkOrderEvidence
 from app.models.work_order_participants import work_order_participants
 from app.models.worker_column import WorkerColumn
@@ -204,6 +204,11 @@ class ApprovePayload(BaseModel):
     approved_signature: str | None = None
 
 
+class SupervisorReviewPayload(BaseModel):
+    action: Literal["CLAIM", "APPROVE", "RETURN"]
+    notes: str | None = None
+
+
 class CancelPayload(BaseModel):
     cancellation_reason: str
 
@@ -365,6 +370,14 @@ def _work_order_to_response(wo: WorkOrder) -> dict:
         "approved_signature": wo.approved_signature,
         "status": wo.status,
         "submitted_for_review": wo.submitted_for_review,
+        "requires_supervisor_validation": wo.requires_supervisor_validation,
+        "supervisor_review_status": wo.supervisor_review_status,
+        "supervisor_validator_user_id": wo.supervisor_validator_user_id,
+        "supervisor_validator_name": (
+            wo.supervisor_validator.full_name if wo.supervisor_validator else None
+        ),
+        "supervisor_reviewed_at": wo.supervisor_reviewed_at,
+        "supervisor_review_notes": wo.supervisor_review_notes,
         # ── Workflow fields ──
         "responsible_user_id": wo.responsible_user_id,
         "responsible_user_name": wo.responsible_user.full_name if wo.responsible_user else None,
@@ -433,6 +446,7 @@ def _base_query():
         selectinload(WorkOrder.started_by_user),
         selectinload(WorkOrder.completed_by_user),
         selectinload(WorkOrder.approved_by_user),
+        selectinload(WorkOrder.supervisor_validator),
     )
 
 
@@ -453,6 +467,7 @@ def _list_query():
         noload(WorkOrder.started_by_user),
         noload(WorkOrder.completed_by_user),
         noload(WorkOrder.approved_by_user),
+        noload(WorkOrder.supervisor_validator),
     )
 
 
@@ -814,6 +829,8 @@ async def create_work_order(
         participant_names=participant_names_str,
         status=initial_status,
         submitted_for_review=is_supervisor_submission,
+        requires_supervisor_validation=is_supervisor,
+        supervisor_review_status=SupervisorReviewStatus.NOT_REQUIRED.value,
         created_by_user_id=current_user.id,
         responsible_user_id=(
             None if is_supervisor or is_external_work else payload.responsible_user_id
@@ -1426,6 +1443,9 @@ async def list_work_orders(
     status_filter: str | None = Query(default=None, alias="status"),
     area_id: int | None = Query(default=None),
     overdue: bool = Query(default=False),
+    created_by_me: bool = Query(default=False),
+    pending_review: bool = Query(default=False),
+    supervisor_validation_pending: bool = Query(default=False),
     limit: int | None = Query(default=None, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
@@ -1439,6 +1459,39 @@ async def list_work_orders(
             query = query.where(WorkOrder.id == -1)
         else:
             query = query.where(WorkOrder.area_id.in_(current_user.area_ids))
+
+    if created_by_me:
+        # Tracking view for supervisors: include submitted review drafts, but
+        # exclude drafts that have not yet been sent to admin.
+        query = query.where(
+            WorkOrder.created_by_user_id == current_user.id,
+            or_(
+                WorkOrder.status != WorkOrderStatus.DRAFT.value,
+                WorkOrder.submitted_for_review.is_(True),
+            ),
+        )
+
+    if pending_review:
+        if current_user.role != UserRole.ADMIN:
+            raise HTTPException(
+                status_code=403,
+                detail="Solo el administrador puede consultar las OTs pendientes de revisión",
+            )
+        query = query.where(WorkOrder.submitted_for_review.is_(True))
+
+    if supervisor_validation_pending:
+        if current_user.role != UserRole.SUPERVISOR:
+            raise HTTPException(
+                status_code=403,
+                detail="Solo los supervisores pueden consultar sus validaciones pendientes",
+            )
+        query = query.where(
+            WorkOrder.requires_supervisor_validation.is_(True),
+            WorkOrder.status == WorkOrderStatus.COMPLETED.value,
+            WorkOrder.supervisor_review_status.in_(
+                (SupervisorReviewStatus.PENDING.value, SupervisorReviewStatus.CLAIMED.value)
+            ),
+        )
 
     if overdue:
         # Panel de OTs vencidas: con fecha límite pasada y aún abiertas.
@@ -1483,6 +1536,9 @@ async def list_work_orders(
             monthly_sheet_sync_status=wo.monthly_sheet_sync_status,
             created_at=wo.created_at,
             submitted_for_review=wo.submitted_for_review,
+            requires_supervisor_validation=wo.requires_supervisor_validation,
+            supervisor_review_status=wo.supervisor_review_status,
+            supervisor_validator_user_id=wo.supervisor_validator_user_id,
             responsible_user_id=wo.responsible_user_id,
             responsible_user_name=wo.responsible_user.full_name if wo.responsible_user else None,
             is_external_work=wo.is_external_work,
@@ -1550,6 +1606,9 @@ async def my_work_orders(
             monthly_sheet_sync_status=wo.monthly_sheet_sync_status,
             created_at=wo.created_at,
             submitted_for_review=wo.submitted_for_review,
+            requires_supervisor_validation=wo.requires_supervisor_validation,
+            supervisor_review_status=wo.supervisor_review_status,
+            supervisor_validator_user_id=wo.supervisor_validator_user_id,
             responsible_user_id=wo.responsible_user_id,
             responsible_user_name=wo.responsible_user.full_name if wo.responsible_user else None,
             is_external_work=wo.is_external_work,
@@ -3048,6 +3107,11 @@ async def complete_work_order(
     wo.work_end_time = effective_end
     wo.worked_duration_minutes = reported_minutes
     wo.actual_duration_minutes = float(reported_minutes)
+    if wo.requires_supervisor_validation:
+        wo.supervisor_review_status = SupervisorReviewStatus.PENDING.value
+        wo.supervisor_validator_user_id = None
+        wo.supervisor_reviewed_at = None
+        wo.supervisor_review_notes = None
     # Use the worker's declared duration in the existing "Tiempo estimado"
     # cell of the OT document, irrespective of whether it was entered as a
     # manual duration or calculated from a start/end range.
@@ -3073,6 +3137,10 @@ async def complete_work_order(
     await notification_service.notify_work_order_completed(
         db, wo, link=f"/ordenes/{wo.id}", exclude_user_id=current_user.id
     )
+    if wo.requires_supervisor_validation:
+        await notification_service.notify_supervisor_validation_pending(
+            db, wo, link=f"/ordenes/{wo.id}", exclude_user_id=current_user.id
+        )
 
     should_sync = bool(wo.google_ot_file_id)
     bg_factory = None
@@ -3099,6 +3167,124 @@ async def complete_work_order(
 # ───────────────────────────────────────────────────────────────────────────
 # Return Work (COMPLETED → IN_PROGRESS) — admin sends back to worker
 # ───────────────────────────────────────────────────────────────────────────
+@router.post("/{wo_id}/supervisor-validation", response_model=WorkOrderResponse)
+async def review_supervisor_work_order(
+    wo_id: int,
+    payload: SupervisorReviewPayload,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Claim, approve or return a completed OT created by a supervisor.
+
+    The status remains COMPLETED while it waits for this internal review, so
+    existing Drive/KPI behavior is preserved. RETURN sends it to IN_PROGRESS.
+    """
+    result = await db.execute(
+        _base_query().where(WorkOrder.id == wo_id).with_for_update()
+    )
+    wo = result.scalar_one_or_none()
+    if wo is None:
+        raise HTTPException(status_code=404, detail="Orden de trabajo no encontrada")
+    if not perms.can_review_supervisor(wo, current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo un supervisor asignado al área puede revisar esta OT.",
+        )
+
+    action = payload.action
+    notes = (payload.notes or "").strip() or None
+    if action == "CLAIM":
+        if wo.supervisor_review_status == SupervisorReviewStatus.APPROVED.value:
+            raise HTTPException(status_code=409, detail="La OT ya fue validada.")
+        if wo.supervisor_review_status == SupervisorReviewStatus.CLAIMED.value:
+            if wo.supervisor_validator_user_id == current_user.id:
+                wo.supervisor_validator = current_user
+                return _work_order_to_response(wo)
+            raise HTTPException(status_code=409, detail="Otro supervisor ya tomó la revisión de esta OT.")
+        if wo.supervisor_review_status != SupervisorReviewStatus.PENDING.value:
+            raise HTTPException(status_code=409, detail="Esta OT no está pendiente de validación de supervisor.")
+        wo.supervisor_review_status = SupervisorReviewStatus.CLAIMED.value
+        wo.supervisor_validator_user_id = current_user.id
+        wo.supervisor_validator = current_user
+        wo.supervisor_reviewed_at = None
+        wo.supervisor_review_notes = None
+        await create_audit_log(
+            db, user_id=current_user.id, action="CLAIM_SUPERVISOR_REVIEW",
+            entity_type="WorkOrder", entity_id=wo.id,
+            previous_data={"supervisor_review_status": SupervisorReviewStatus.PENDING.value},
+            new_data={"supervisor_review_status": SupervisorReviewStatus.CLAIMED.value,
+                      "supervisor_validator_user_id": current_user.id},
+        )
+        await db.commit()
+        result2 = await db.execute(_base_query().where(WorkOrder.id == wo.id))
+        return _work_order_to_response(result2.scalar_one())
+
+    if wo.supervisor_review_status != SupervisorReviewStatus.CLAIMED.value:
+        raise HTTPException(status_code=409, detail="Primero debes tomar la revisión de esta OT.")
+    if wo.supervisor_validator_user_id != current_user.id:
+        raise HTTPException(status_code=409, detail="La revisión de esta OT está tomada por otro supervisor.")
+    if action == "RETURN" and not notes:
+        raise HTTPException(status_code=422, detail="Indica el motivo por el que devuelves la OT al trabajador.")
+
+    previous_review_status = wo.supervisor_review_status
+    now = datetime.now(timezone.utc)
+    wo.supervisor_reviewed_at = now
+    wo.supervisor_review_notes = notes
+    if action == "APPROVE":
+        wo.supervisor_review_status = SupervisorReviewStatus.APPROVED.value
+        await create_audit_log(
+            db, user_id=current_user.id, action="APPROVE_SUPERVISOR_REVIEW",
+            entity_type="WorkOrder", entity_id=wo.id,
+            previous_data={"supervisor_review_status": previous_review_status},
+            new_data={"supervisor_review_status": wo.supervisor_review_status,
+                      "supervisor_review_notes": notes},
+        )
+        await notification_service.notify_supervisor_reviewed(
+            db, wo, approved=True, reviewer_name=current_user.full_name,
+            notes=notes, link=f"/ordenes/{wo.id}"
+        )
+        await db.commit()
+        result2 = await db.execute(_base_query().where(WorkOrder.id == wo.id))
+        return _work_order_to_response(result2.scalar_one())
+
+    validate_transition(wo.status, WorkOrderStatus.IN_PROGRESS.value)
+    wo.status = WorkOrderStatus.IN_PROGRESS.value
+    wo.supervisor_review_status = SupervisorReviewStatus.RETURNED.value
+    wo.returned_at = now
+    wo.returned_by_user_id = current_user.id
+    wo.return_reason = notes
+    wo.completed_at = None
+    wo.completed_by_user_id = None
+    wo.work_time_mode = None
+    wo.work_start_time = None
+    wo.work_end_time = None
+    wo.worked_duration_minutes = None
+    wo.actual_duration_minutes = None
+    wo.completion_notes = None
+    await create_audit_log(
+        db, user_id=current_user.id, action="RETURN_SUPERVISOR_REVIEW",
+        entity_type="WorkOrder", entity_id=wo.id,
+        previous_data={"status": WorkOrderStatus.COMPLETED.value,
+                       "supervisor_review_status": previous_review_status},
+        new_data={"status": wo.status,
+                  "supervisor_review_status": wo.supervisor_review_status,
+                  "return_reason": notes},
+    )
+    await notification_service.notify_supervisor_reviewed(
+        db, wo, approved=False, reviewer_name=current_user.full_name,
+        notes=notes, link=f"/mis-ordenes/{wo.id}"
+    )
+    if wo.google_ot_file_id:
+        _mark_external_sync_pending(wo)
+        await enqueue_external_sync(
+            db, wo.id, job_type="LIFECYCLE", actor_user_id=current_user.id
+        )
+    await db.commit()
+    result2 = await db.execute(_base_query().where(WorkOrder.id == wo.id))
+    return _work_order_to_response(result2.scalar_one())
+
+
 @router.post("/{wo_id}/return", response_model=WorkOrderResponse)
 async def return_work_order(
     wo_id: int,
@@ -3198,6 +3384,15 @@ async def approve_work_order(
 
     if not perms.can_approve(wo, current_user):
         raise HTTPException(status_code=403, detail="Solo un administrador puede aprobar una OT")
+
+    if (
+        wo.requires_supervisor_validation
+        and wo.supervisor_review_status != SupervisorReviewStatus.APPROVED.value
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Esta OT debe ser validada primero por un supervisor del área.",
+        )
 
     try:
         validate_transition(wo.status, WorkOrderStatus.APPROVED.value)
