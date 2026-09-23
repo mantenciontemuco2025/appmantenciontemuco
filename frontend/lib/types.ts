@@ -228,6 +228,15 @@ export type SupervisorReviewStatus = "NOT_REQUIRED" | "PENDING" | "CLAIMED" | "A
 export interface WorkOrderRecord {
   id: number;
   ot_number: string;
+  is_hallazgo_report: boolean;
+  hallazgo_folio: string | null;
+  hallazgo_kind: "COMPLETED" | "REQUIRES_ATTENTION" | null;
+  hallazgo_priority: "NORMAL" | "URGENT" | "EMERGENCY" | null;
+  hallazgo_status: "PENDING_REVIEW" | "RETURNED" | "REJECTED" | "CONVERTED" | null;
+  hallazgo_review_notes: string | null;
+  hallazgo_reviewed_at: string | null;
+  hallazgo_reviewed_by_user_id: number | null;
+  hallazgo_reviewed_by_name: string | null;
   title: string;
   description: string | null;
   area_id: number;
@@ -317,11 +326,18 @@ export interface WorkOrderCounter {
   per_year: Record<number, number>;
   per_month: Record<number, number>; // 0 = enero ... 11 = diciembre (año actual)
   next_ot_number: string;
+  status_counts: Record<string, number>;
+  overdue_count: number;
 }
 
 export interface WorkOrderListItem {
   id: number;
   ot_number: string;
+  is_hallazgo_report?: boolean;
+  hallazgo_folio?: string | null;
+  hallazgo_kind?: "COMPLETED" | "REQUIRES_ATTENTION" | null;
+  hallazgo_priority?: "NORMAL" | "URGENT" | "EMERGENCY" | null;
+  hallazgo_status?: "PENDING_REVIEW" | "RETURNED" | "REJECTED" | "CONVERTED" | null;
   title: string;
   area_name: string | null;
   plant_area?: string | null;

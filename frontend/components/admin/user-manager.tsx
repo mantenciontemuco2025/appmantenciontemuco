@@ -282,7 +282,7 @@ export function UserManager() {
             </>
           )}
           <Select
-            label="Permiso de Registro de agua"
+            label="Permiso de Planta de RILES"
             options={WATER_ACCESS_OPTIONS}
             value={waterRegisterAccess}
             onChange={(e) => setWaterRegisterAccess(e.target.value as WaterRegisterAccess)}
@@ -380,7 +380,7 @@ export function UserManager() {
             </>
           )}
           <Select
-            label="Permiso de Registro de agua"
+            label="Permiso de Planta de RILES"
             options={WATER_ACCESS_OPTIONS}
             value={editWaterRegisterAccess}
             onChange={(e) => setEditWaterRegisterAccess(e.target.value as WaterRegisterAccess)}

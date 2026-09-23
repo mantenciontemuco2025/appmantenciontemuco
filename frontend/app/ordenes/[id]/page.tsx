@@ -23,6 +23,8 @@ import { PageLoading } from "@/components/ui/page-loading";
 import { LOTO_CONTROL_LABELS } from "@/lib/loto";
 import { WORK_ORDER_AREAS } from "@/lib/work-order-areas";
 import { WorkOrderEvidencePanel } from "@/components/maintenance/work-order-evidence";
+import { HallazgoReviewPanel } from "@/components/orders/hallazgo-review-panel";
+import { HallazgoEditPanel } from "@/components/orders/hallazgo-edit-panel";
 
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
   if (!value) return null;
@@ -480,7 +482,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
               {wo.cancellation_reason && <> Motivo: {wo.cancellation_reason}</>}
             </div>
           )}
-          {wo.submitted_for_review && user.role === "ADMIN" && (
+          {wo.submitted_for_review && user.role === "ADMIN" && !wo.is_hallazgo_report && (
             <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
               {wo.is_external_work
                 ? `Solicitud de trabajo externo enviada por el supervisor. Al aceptarla, quedarás a cargo de coordinar, verificar y cerrar la OT de ${wo.external_executor_name || "la persona externa"}.`
@@ -495,7 +497,14 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
             </div>
           )}
 
-          {wo.submitted_for_review && user.role === "ADMIN" && !wo.is_external_work && (
+          {wo.is_hallazgo_report && wo.submitted_for_review && user.role === "ADMIN" && (
+            <HallazgoReviewPanel wo={wo} onUpdated={(updated) => { setWo(updated); setNotice({ variant: "success", message: "Hallazgo actualizado correctamente." }); }} />
+          )}
+          {wo.is_hallazgo_report && wo.hallazgo_status === "RETURNED" && wo.created_by_user_id === user.id && (
+            <HallazgoEditPanel wo={wo} onUpdated={(updated) => { setWo(updated); setNotice({ variant: "success", message: "Hallazgo reenviado al administrador." }); }} />
+          )}
+
+          {wo.submitted_for_review && user.role === "ADMIN" && !wo.is_external_work && !wo.is_hallazgo_report && (
             <div className="mb-4 rounded-lg border border-cyan-200 bg-cyan-50 p-3 text-sm text-cyan-900">
               <p>Si este trabajo lo realizará un contratista, puedes convertir esta solicitud antes de emitirla.</p>
               <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => setShowConfirm("external")}>Convertir a trabajo externo</Button>
@@ -539,7 +548,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                   ) : null
                 }
               />
-              <InfoRow label="Tiempo estimado" value={wo.estimated_time ? `${wo.estimated_time} minutos` : null} />
+              <InfoRow label="Tiempo estimado" value={wo.estimated_time} />
               <InfoRow
                 label={wo.is_external_work ? "Persona externa" : "Responsable"}
                 value={wo.is_external_work
@@ -617,6 +626,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
             stage={wo.status === "IN_PROGRESS" ? "WORK" : "ISSUE"}
             currentUserId={user.id}
             canUpload={
+              (wo.is_hallazgo_report && wo.submitted_for_review && wo.created_by_user_id === user.id) ||
               (user.role === "ADMIN" || user.role === "SUPERVISOR") &&
               (wo.status === "DRAFT" || wo.status === "PENDING" || wo.status === "IN_PROGRESS")
             }
@@ -708,7 +718,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
           </Card>
 
           {/* ── Action Buttons ─────────────────────────────────────────── */}
-          {!showConfirm && wo.status === "DRAFT" && (
+          {!showConfirm && wo.status === "DRAFT" && !wo.is_hallazgo_report && (
             <div className="flex gap-2">
               <Link href={`/ordenes/nuevo?edit=${wo.id}`} className="flex-1">
                 <Button variant="outline" className="w-full">

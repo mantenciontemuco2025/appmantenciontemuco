@@ -122,6 +122,8 @@ def can_view(wo: WorkOrder, user: User) -> bool:
     responsible or a participant."""
     if user.role == UserRole.ADMIN:
         return True
+    if getattr(wo, "is_hallazgo_report", False) and wo.hallazgo_status != "CONVERTED":
+        return user.role == UserRole.WORKER and wo.created_by_user_id == user.id
     if user.role == UserRole.SUPERVISOR and _is_in_supervisor_area(wo, user):
         return True
     if wo.responsible_user_id == user.id:

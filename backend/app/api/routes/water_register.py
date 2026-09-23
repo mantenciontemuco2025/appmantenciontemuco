@@ -65,7 +65,7 @@ async def water_register_view_access(current_user: User = Depends(get_current_us
         return current_user
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="No tiene habilitado el mÃ³dulo de registro de agua.",
+        detail="No tiene habilitado el mÃ³dulo de Planta de RILES.",
     )
 
 
@@ -77,7 +77,7 @@ async def water_register_edit_access(current_user: User = Depends(get_current_us
         return current_user
     raise HTTPException(
         status_code=status.HTTP_403_FORBIDDEN,
-        detail="Tiene acceso de consulta, pero no permiso para editar el registro de agua.",
+        detail="Tiene acceso de consulta, pero no permiso para editar Planta de RILES.",
     )
 
 

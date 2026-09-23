@@ -46,7 +46,6 @@ async def test_admin_and_supervisor_can_write_but_worker_without_access_is_block
     unreadable = await client.get("/api/water-register", headers=worker)
     assert unreadable.status_code == 403
 
-
 async def test_admin_can_assign_water_register_to_worker(
     client, seed_data, db_session_factory
 ):

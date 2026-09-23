@@ -115,7 +115,10 @@ export function NotificationBell() {
       {open && (
         <div className="absolute right-0 top-full mt-1 w-80 max-w-[85vw] rounded-lg border bg-card text-card-foreground shadow-lg z-50">
           <div className="flex items-center justify-between border-b px-3 py-2">
-            <span className="text-sm font-semibold">Notificaciones</span>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-semibold">Notificaciones</span>
+              {unread > 0 && <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-800">{unread} sin leer</span>}
+            </div>
             {hasAny && (
               <button
                 onClick={markAllRead}
@@ -137,12 +140,17 @@ export function NotificationBell() {
                     <button
                       onClick={() => openNotification(n)}
                       className={cn(
-                        "flex w-full flex-col gap-0.5 px-3 py-2.5 text-left hover:bg-muted transition-colors",
-                        !n.is_read && "bg-muted/40"
+                        "flex w-full flex-col gap-0.5 border-l-4 px-3 py-2.5 text-left transition-colors hover:bg-muted",
+                        n.is_read
+                          ? "border-l-transparent bg-card text-muted-foreground"
+                          : "border-l-blue-500 bg-blue-50/80 text-foreground"
                       )}
                     >
-                      <span className="text-sm leading-snug">{n.message}</span>
-                      <span className="text-xs text-muted-foreground">{timeAgo(n.created_at)}</span>
+                      <span className="flex items-start gap-2 text-sm leading-snug">
+                        {!n.is_read && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-blue-600" aria-label="No leída" />}
+                        <span className={cn(!n.is_read && "font-semibold")}>{n.message}</span>
+                      </span>
+                      <span className="text-xs text-muted-foreground">{n.is_read ? "Leída · " : "No leída · "}{timeAgo(n.created_at)}</span>
                     </button>
                   </li>
                 ))}

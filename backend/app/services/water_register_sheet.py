@@ -113,7 +113,7 @@ def _worksheet_id(service, spreadsheet_id: str) -> int:
         if properties.get("title") == settings.GOOGLE_WATER_REGISTER_SHEET_NAME:
             return int(properties["sheetId"])
     raise RuntimeError(
-        f"No existe la pestaña '{settings.GOOGLE_WATER_REGISTER_SHEET_NAME}' en el registro de agua."
+        f"No existe la pestaña '{settings.GOOGLE_WATER_REGISTER_SHEET_NAME}' en Planta de RILES."
     )
 
 

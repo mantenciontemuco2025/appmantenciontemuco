@@ -116,6 +116,103 @@ class WorkOrderCreate(BaseModel):
         return self
 
 
+class HallazgoCreate(BaseModel):
+    """Reporte provisional creado antes de emitir una OT oficial."""
+
+    title: str
+    description: str
+    area_id: int
+    plant_area: str
+    equipment_id: int | None = None
+    maintenance_type: str = "CORRECTIVE"
+    report_kind: Literal["COMPLETED", "REQUIRES_ATTENTION"] = "COMPLETED"
+    priority: Literal["NORMAL", "URGENT", "EMERGENCY"] = "NORMAL"
+    report_date: date
+    work_time_mode: Literal["RANGE", "MANUAL"] | None = None
+    work_start_time: time | None = None
+    work_end_time: time | None = None
+    worked_duration_minutes: int | None = None
+    folio: str | None = None
+    voucher_number: str | None = None
+    loto_controls: list[str] | None = None
+    resources_required: str | None = None
+    participant_user_ids: list[int] = []
+    risks: str | None = None
+    observations: str | None = None
+
+    @field_validator("title", "description")
+    @classmethod
+    def required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Este campo es obligatorio")
+        return value
+
+    @field_validator("maintenance_type")
+    @classmethod
+    def valid_hallazgo_type(cls, value: str) -> str:
+        value = value.upper().strip()
+        valid = {"PREVENTIVE", "CORRECTIVE", "PREDICTIVE", "PROYECTO", "MONTAJE", "URGENTE"}
+        if value not in valid:
+            raise ValueError("Tipo de mantenimiento inválido")
+        return value
+
+    @field_validator("plant_area")
+    @classmethod
+    def valid_hallazgo_area(cls, value: str) -> str:
+        value = value.strip().upper()
+        if value not in WORK_ORDER_AREAS:
+            raise ValueError(f"Área no válida. Use: {', '.join(WORK_ORDER_AREAS)}")
+        return value
+
+    @model_validator(mode="after")
+    def validate_time(self):
+        if self.report_kind == "COMPLETED":
+            if self.work_time_mode == "RANGE":
+                if self.work_start_time is None or self.work_end_time is None:
+                    raise ValueError("Indica la hora de inicio y término")
+                if self.work_end_time <= self.work_start_time:
+                    raise ValueError("La hora de término debe ser posterior a la de inicio")
+            elif self.work_time_mode == "MANUAL":
+                if not self.worked_duration_minutes or self.worked_duration_minutes <= 0:
+                    raise ValueError("Indica una duración manual mayor que cero")
+            else:
+                raise ValueError("Indica el tiempo trabajado")
+        return self
+
+
+class HallazgoReviewPayload(BaseModel):
+    action: Literal["ACCEPT", "RETURN", "REJECT"]
+    notes: str | None = None
+    equipment_id: int | None = None
+    responsible_user_id: int | None = None
+    participant_user_ids: list[int] = []
+    maintenance_type: str | None = None
+    estimated_time: str | None = None
+    scheduled_date: date | None = None
+    due_date: date | None = None
+    loto_controls: list[str] | None = None
+    resources_required: str | None = None
+    folio: str | None = None
+    voucher_number: str | None = None
+
+
+class HallazgoUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    report_kind: Literal["COMPLETED", "REQUIRES_ATTENTION"] | None = None
+    priority: Literal["NORMAL", "URGENT", "EMERGENCY"] | None = None
+    work_time_mode: Literal["RANGE", "MANUAL"] | None = None
+    work_start_time: time | None = None
+    work_end_time: time | None = None
+    worked_duration_minutes: int | None = None
+    folio: str | None = None
+    voucher_number: str | None = None
+    risks: str | None = None
+    observations: str | None = None
+    resubmit: bool = False
+
+
 class WorkOrderUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
@@ -193,6 +290,15 @@ class WorkOrderUpdate(BaseModel):
 class WorkOrderResponse(BaseModel):
     id: int
     ot_number: str
+    is_hallazgo_report: bool = False
+    hallazgo_folio: str | None = None
+    hallazgo_kind: str | None = None
+    hallazgo_priority: str | None = None
+    hallazgo_status: str | None = None
+    hallazgo_review_notes: str | None = None
+    hallazgo_reviewed_at: datetime | None = None
+    hallazgo_reviewed_by_user_id: int | None = None
+    hallazgo_reviewed_by_name: str | None = None
     title: str
     description: str | None
     area_id: int
@@ -290,6 +396,8 @@ class WorkOrderCounterResponse(BaseModel):
     per_year: dict[int, int]
     per_month: dict[int, int]
     next_ot_number: str
+    status_counts: dict[str, int] = Field(default_factory=dict)
+    overdue_count: int = 0
 
 
 class WorkOrderEvidenceResponse(BaseModel):
@@ -305,6 +413,11 @@ class WorkOrderEvidenceResponse(BaseModel):
 class WorkOrderListResponse(BaseModel):
     id: int
     ot_number: str
+    is_hallazgo_report: bool = False
+    hallazgo_folio: str | None = None
+    hallazgo_kind: str | None = None
+    hallazgo_priority: str | None = None
+    hallazgo_status: str | None = None
     title: str
     area_name: str | None = None
     plant_area: str | None = None

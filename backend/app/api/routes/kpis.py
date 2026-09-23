@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import Date, cast, func, select
+from sqlalchemy import Date, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -116,7 +116,14 @@ async def get_kpis(
             selectinload(WorkOrder.participants),
             selectinload(WorkOrder.responsible_user),
         )
-        .where(report_date >= start, report_date <= end)
+        .where(
+            report_date >= start,
+            report_date <= end,
+            or_(
+                WorkOrder.is_hallazgo_report.is_(False),
+                WorkOrder.hallazgo_status == "CONVERTED",
+            ),
+        )
     )
 
     if current_user.role == UserRole.SUPERVISOR:

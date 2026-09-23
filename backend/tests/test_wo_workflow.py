@@ -985,6 +985,18 @@ async def test_counter_admin_only(client, seed_data, monkeypatch):
     assert resp.status_code == 403
 
 
+async def test_status_counts_are_available_for_supervisor_views(client, seed_data):
+    supervisor = await get_token(client, "supervisor@test.com")
+    resp = await client.get(
+        "/api/work-orders/status-counts?view=CREATED_BY_ME",
+        headers=auth_headers(supervisor),
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert isinstance(data["status_counts"], dict)
+    assert isinstance(data["overdue_count"], int)
+
+
 # ── Batch issue (multiple DRAFT → PENDING at once) ──────────────────────────
 
 async def test_batch_issue_admin_only(client, seed_data):

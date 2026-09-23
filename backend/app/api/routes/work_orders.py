@@ -43,6 +43,9 @@ from app.models.sync_job import ExternalSyncJob, SyncJobStatus
 from app.models.notification import Notification
 from app.schemas.work_order import (
     WorkOrderCreate,
+    HallazgoCreate,
+    HallazgoReviewPayload,
+    HallazgoUpdate,
     WorkOrderUpdate,
     WorkOrderResponse,
     WorkOrderListResponse,
@@ -73,7 +76,7 @@ supervisor_or_admin = require_roles(*manager_roles)
 # prevents several tabs/users from repeating the same aggregate queries while
 # keeping the displayed value fresh after normal navigation.
 _COUNTER_CACHE_TTL_SECONDS = 15.0
-_counter_cache: tuple[float, int, WorkOrderCounterResponse] | None = None
+_counter_cache: tuple[float, object, WorkOrderCounterResponse] | None = None
 _counter_cache_lock = asyncio.Lock()
 
 
@@ -261,6 +264,24 @@ async def _next_ot_number(db: AsyncSession) -> str:
     return f"{prefix}{n:04d}"
 
 
+async def _next_hallazgo_folio(db: AsyncSession) -> str:
+    """Generate a provisional folio without consuming the official OT sequence."""
+    year = datetime.now().year
+    prefix = f"HALL-{year}-"
+    result = await db.execute(
+        select(WorkOrder.hallazgo_folio)
+        .where(WorkOrder.hallazgo_folio.like(f"{prefix}%"))
+        .order_by(WorkOrder.hallazgo_folio.desc())
+        .limit(1)
+    )
+    last = result.scalar_one_or_none()
+    try:
+        number = int(last.split("-")[-1]) + 1 if last else 1
+    except (ValueError, AttributeError):
+        number = 1
+    return f"{prefix}{number:04d}"
+
+
 async def _validate_area_equipment(
     db: AsyncSession, area_id: int, equipment_id: int | None
 ) -> tuple[Area, Equipment | None]:
@@ -345,6 +366,17 @@ def _work_order_to_response(wo: WorkOrder) -> dict:
     return {
         "id": wo.id,
         "ot_number": wo.ot_number,
+        "is_hallazgo_report": wo.is_hallazgo_report,
+        "hallazgo_folio": wo.hallazgo_folio,
+        "hallazgo_kind": wo.hallazgo_kind,
+        "hallazgo_priority": wo.hallazgo_priority,
+        "hallazgo_status": wo.hallazgo_status,
+        "hallazgo_review_notes": wo.hallazgo_review_notes,
+        "hallazgo_reviewed_at": wo.hallazgo_reviewed_at,
+        "hallazgo_reviewed_by_user_id": wo.hallazgo_reviewed_by_user_id,
+        "hallazgo_reviewed_by_name": (
+            wo.hallazgo_reviewed_by.full_name if wo.hallazgo_reviewed_by else None
+        ),
         "title": wo.title,
         "description": wo.description,
         "area_id": wo.area_id,
@@ -447,6 +479,7 @@ def _base_query():
         selectinload(WorkOrder.completed_by_user),
         selectinload(WorkOrder.approved_by_user),
         selectinload(WorkOrder.supervisor_validator),
+        selectinload(WorkOrder.hallazgo_reviewed_by),
     )
 
 
@@ -468,6 +501,7 @@ def _list_query():
         noload(WorkOrder.completed_by_user),
         noload(WorkOrder.approved_by_user),
         noload(WorkOrder.supervisor_validator),
+        noload(WorkOrder.hallazgo_reviewed_by),
     )
 
 
@@ -1470,6 +1504,15 @@ async def list_work_orders(
                 WorkOrder.submitted_for_review.is_(True),
             ),
         )
+    elif not pending_review:
+        # Hallazgos tienen su propio flujo y solo aparecen en la bandeja de
+        # revisión o en la vista del usuario que los reportó.
+        query = query.where(
+            or_(
+                WorkOrder.is_hallazgo_report.is_(False),
+                WorkOrder.hallazgo_status == "CONVERTED",
+            )
+        )
 
     if pending_review:
         if current_user.role != UserRole.ADMIN:
@@ -1535,6 +1578,11 @@ async def list_work_orders(
             ot_sheet_sync_status=wo.ot_sheet_sync_status,
             monthly_sheet_sync_status=wo.monthly_sheet_sync_status,
             created_at=wo.created_at,
+            is_hallazgo_report=wo.is_hallazgo_report,
+            hallazgo_folio=wo.hallazgo_folio,
+            hallazgo_kind=wo.hallazgo_kind,
+            hallazgo_priority=wo.hallazgo_priority,
+            hallazgo_status=wo.hallazgo_status,
             submitted_for_review=wo.submitted_for_review,
             requires_supervisor_validation=wo.requires_supervisor_validation,
             supervisor_review_status=wo.supervisor_review_status,
@@ -1554,6 +1602,306 @@ async def list_work_orders(
 
 
 # ───────────────────────────────────────────────────────────────────────────
+# Provisional hallazgos — MUST be before /{wo_id}
+# ─────────────────────────────────────────────────────────────────────────────
+@router.post("/hallazgos", response_model=WorkOrderResponse, status_code=status.HTTP_201_CREATED)
+async def create_hallazgo(
+    payload: HallazgoCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Create a worker report without consuming an official OT number."""
+    if current_user.role != UserRole.WORKER:
+        raise HTTPException(status_code=403, detail="Solo los trabajadores pueden crear hallazgos")
+    area_scope_error = _supervisor_area_error(current_user, payload.area_id)
+    if area_scope_error:
+        raise HTTPException(status_code=403, detail=area_scope_error)
+
+    area, equipment = await _validate_area_equipment(db, payload.area_id, payload.equipment_id)
+    folio = await _next_hallazgo_folio(db)
+    now = datetime.now(timezone.utc)
+    participant_ids = list(dict.fromkeys([current_user.id, *payload.participant_user_ids]))
+    names_result = await db.execute(
+        select(User.id, User.full_name).where(User.id.in_(participant_ids))
+    )
+    names_map = {row[0]: row[1] for row in names_result.all()}
+    participant_names = ", ".join(
+        names_map[uid] for uid in participant_ids if uid in names_map
+    )
+    loto_controls = normalize_loto_controls(payload.loto_controls) or ["NOT_APPLICABLE"]
+
+    wo = WorkOrder(
+        ot_number=folio,
+        is_hallazgo_report=True,
+        hallazgo_folio=folio,
+        hallazgo_kind=payload.report_kind,
+        hallazgo_priority=payload.priority,
+        hallazgo_status="PENDING_REVIEW",
+        title=payload.title,
+        description=payload.description,
+        area_id=payload.area_id,
+        plant_area=payload.plant_area,
+        equipment_id=payload.equipment_id,
+        section_name=area.name,
+        maintenance_type=payload.maintenance_type,
+        loto_status=legacy_status_from_controls(loto_controls, "NOT_APPLICABLE"),
+        loto_controls=loto_controls,
+        request_date=payload.report_date,
+        execution_date=payload.report_date,
+        scheduled_date=payload.report_date,
+        risks=payload.risks,
+        observations=payload.observations,
+        resources_required=payload.resources_required,
+        requested_by=current_user.full_name,
+        participant_names=participant_names,
+        # Cuando el trabajador informa un trabajo ya realizado, queda como
+        # responsable de ejecución. En un hallazgo que requiere atención, el
+        # administrador lo asignará al aceptar y convertirlo en OT.
+        responsible_user_id=(current_user.id if payload.report_kind == "COMPLETED" else None),
+        status=WorkOrderStatus.DRAFT.value,
+        submitted_for_review=True,
+        # Solo una OT oficial aceptada participa en el KPI planificado.
+        is_planned=False,
+        created_by_user_id=current_user.id,
+        work_time_mode=payload.work_time_mode,
+        work_start_time=payload.work_start_time,
+        work_end_time=payload.work_end_time,
+        worked_duration_minutes=payload.worked_duration_minutes,
+        folio=payload.folio.strip() if payload.folio else None,
+        voucher_number=payload.voucher_number.strip() if payload.voucher_number else None,
+        completed_by_user_id=(current_user.id if payload.report_kind == "COMPLETED" else None),
+        completed_at=(now if payload.report_kind == "COMPLETED" else None),
+    )
+    db.add(wo)
+    await db.flush()
+    await db.execute(
+        work_order_participants.insert(),
+        [
+            {"work_order_id": wo.id, "user_id": user_id}
+            for user_id in participant_ids
+        ],
+    )
+    await create_audit_log(
+        db,
+        user_id=current_user.id,
+        action="CREATE_HALLAZGO",
+        entity_type="WorkOrder",
+        entity_id=wo.id,
+        new_data={"folio": folio, "kind": payload.report_kind, "priority": payload.priority},
+    )
+    await notification_service.notify_work_order_submitted_to_admin(
+        db, wo, submitted_by=current_user.full_name, link=f"/ordenes/{wo.id}"
+    )
+    await db.commit()
+
+    result = await db.execute(_base_query().where(WorkOrder.id == wo.id))
+    return _work_order_to_response(result.scalar_one())
+
+
+@router.get("/hallazgos", response_model=list[WorkOrderListResponse])
+async def list_hallazgos(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """List provisional reports for the reporter or administrative reviewers."""
+    if current_user.role not in (UserRole.ADMIN, UserRole.WORKER):
+        raise HTTPException(status_code=403, detail="Los supervisores no tienen acceso al módulo de hallazgos")
+    query = _list_query().where(WorkOrder.is_hallazgo_report.is_(True))
+    if current_user.role == UserRole.ADMIN:
+        pass
+    else:
+        query = query.where(WorkOrder.created_by_user_id == current_user.id)
+    result = await db.execute(query.order_by(WorkOrder.created_at.desc()))
+    orders = result.scalars().all()
+    return [
+        WorkOrderListResponse(
+            id=wo.id, ot_number=wo.ot_number, title=wo.title,
+            area_name=_display_area_name(wo), plant_area=wo.plant_area,
+            equipment_name=wo.equipment.name if wo.equipment else None,
+            section_name=_display_section_name(wo), maintenance_type=wo.maintenance_type,
+            loto_status=wo.loto_status, status=wo.status,
+            submitted_for_review=wo.submitted_for_review,
+            requires_supervisor_validation=wo.requires_supervisor_validation,
+            supervisor_review_status=wo.supervisor_review_status,
+            supervisor_validator_user_id=wo.supervisor_validator_user_id,
+            execution_date=wo.execution_date, request_date=wo.request_date,
+            ot_sheet_sync_status=wo.ot_sheet_sync_status,
+            monthly_sheet_sync_status=wo.monthly_sheet_sync_status,
+            created_at=wo.created_at, is_hallazgo_report=True,
+            hallazgo_folio=wo.hallazgo_folio, hallazgo_kind=wo.hallazgo_kind,
+            hallazgo_priority=wo.hallazgo_priority, hallazgo_status=wo.hallazgo_status,
+            responsible_user_id=wo.responsible_user_id,
+            responsible_user_name=wo.responsible_user.full_name if wo.responsible_user else None,
+            is_planned=wo.is_planned, scheduled_date=wo.scheduled_date, due_date=wo.due_date,
+        )
+        for wo in orders
+    ]
+
+
+@router.patch("/{wo_id}/hallazgo", response_model=WorkOrderResponse)
+async def update_hallazgo(
+    wo_id: int,
+    payload: HallazgoUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Allow the reporter to correct a returned report and resubmit it."""
+    result = await db.execute(_base_query().where(WorkOrder.id == wo_id).with_for_update())
+    wo = result.scalar_one_or_none()
+    if wo is None or not wo.is_hallazgo_report:
+        raise HTTPException(status_code=404, detail="Hallazgo no encontrado")
+    if current_user.role not in (UserRole.ADMIN, UserRole.WORKER):
+        raise HTTPException(status_code=403, detail="Los supervisores no tienen acceso al módulo de hallazgos")
+    if current_user.role != UserRole.ADMIN and wo.created_by_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Solo el reportante o el administrador puede editar este hallazgo")
+    if wo.hallazgo_status not in ("PENDING_REVIEW", "RETURNED"):
+        raise HTTPException(status_code=400, detail="Este hallazgo ya fue cerrado")
+    if current_user.role != UserRole.ADMIN and wo.hallazgo_status != "RETURNED":
+        raise HTTPException(status_code=400, detail="Solo puedes editar un hallazgo devuelto")
+
+    for field in ("title", "description", "hallazgo_priority", "work_time_mode", "work_start_time", "work_end_time", "worked_duration_minutes", "folio", "voucher_number", "risks", "observations"):
+        value = getattr(payload, field.removeprefix("hallazgo_") if field == "hallazgo_priority" else field, None)
+        if value is not None:
+            if field in ("folio", "voucher_number"):
+                value = value.strip() or None
+            setattr(wo, field, value)
+    if payload.report_kind is not None:
+        wo.hallazgo_kind = payload.report_kind
+    if payload.resubmit:
+        if not wo.title.strip() or not (wo.description or "").strip():
+            raise HTTPException(status_code=400, detail="Completa el título y la descripción antes de reenviar")
+        if wo.hallazgo_kind == "COMPLETED":
+            if wo.work_time_mode == "RANGE" and (wo.work_start_time is None or wo.work_end_time is None or wo.work_end_time <= wo.work_start_time):
+                raise HTTPException(status_code=400, detail="Revisa las horas de inicio y término")
+            if wo.work_time_mode == "MANUAL" and (not wo.worked_duration_minutes or wo.worked_duration_minutes <= 0):
+                raise HTTPException(status_code=400, detail="Revisa la duración manual")
+        wo.hallazgo_status = "PENDING_REVIEW"
+        wo.submitted_for_review = True
+        wo.hallazgo_review_notes = None
+        await notification_service.notify_work_order_submitted_to_admin(db, wo, submitted_by=current_user.full_name, link=f"/ordenes/{wo.id}")
+    await create_audit_log(db, user_id=current_user.id, action="UPDATE_HALLAZGO", entity_type="WorkOrder", entity_id=wo.id, new_data={"resubmit": payload.resubmit})
+    await db.commit()
+    # The review updates foreign keys and the participant association table.
+    # Refresh eagerly-loaded relationships so the response immediately shows
+    # the selected equipment and responsible/participant names.
+    refreshed = await db.execute(
+        _base_query()
+        .where(WorkOrder.id == wo.id)
+        .execution_options(populate_existing=True)
+    )
+    return _work_order_to_response(refreshed.scalar_one())
+
+
+@router.post("/{wo_id}/hallazgo-review", response_model=WorkOrderResponse)
+async def review_hallazgo(
+    wo_id: int,
+    payload: HallazgoReviewPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
+):
+    """Accept, return or reject a provisional report from the admin queue."""
+    result = await db.execute(_base_query().where(WorkOrder.id == wo_id).with_for_update())
+    wo = result.scalar_one_or_none()
+    if wo is None or not wo.is_hallazgo_report:
+        raise HTTPException(status_code=404, detail="Hallazgo no encontrado")
+    if wo.hallazgo_status not in ("PENDING_REVIEW", "RETURNED") or not wo.submitted_for_review:
+        raise HTTPException(status_code=400, detail="Este hallazgo ya no está pendiente de revisión")
+
+    now = datetime.now(timezone.utc)
+    wo.hallazgo_review_notes = (payload.notes or "").strip() or None
+    wo.hallazgo_reviewed_at = now
+    wo.hallazgo_reviewed_by_user_id = current_user.id
+
+    if payload.action == "RETURN":
+        wo.hallazgo_status = "RETURNED"
+        wo.submitted_for_review = False
+        await create_audit_log(db, user_id=current_user.id, action="RETURN_HALLAZGO", entity_type="WorkOrder", entity_id=wo.id, new_data={"notes": wo.hallazgo_review_notes})
+    elif payload.action == "REJECT":
+        wo.hallazgo_status = "REJECTED"
+        wo.submitted_for_review = False
+        await create_audit_log(db, user_id=current_user.id, action="REJECT_HALLAZGO", entity_type="WorkOrder", entity_id=wo.id, new_data={"notes": wo.hallazgo_review_notes})
+    else:
+        if not current_user.signature:
+            raise HTTPException(status_code=400, detail="El administrador debe tener una firma configurada para aceptar el hallazgo")
+        if payload.maintenance_type:
+            maintenance_type = payload.maintenance_type.upper().strip()
+            if maintenance_type not in {"PREVENTIVE", "CORRECTIVE", "PREDICTIVE", "PROYECTO", "MONTAJE", "URGENTE"}:
+                raise HTTPException(status_code=400, detail="Tipo de mantenimiento inválido")
+            wo.maintenance_type = maintenance_type
+        if payload.loto_controls is not None:
+            controls = normalize_loto_controls(payload.loto_controls) or ["NOT_APPLICABLE"]
+            wo.loto_controls = controls
+            wo.loto_status = legacy_status_from_controls(controls, wo.loto_status)
+        if payload.resources_required is not None:
+            wo.resources_required = payload.resources_required.strip() or None
+        if payload.folio is not None:
+            wo.folio = payload.folio.strip() or None
+        if payload.voucher_number is not None:
+            wo.voucher_number = payload.voucher_number.strip() or None
+        if "equipment_id" in payload.model_fields_set:
+            _, equipment = await _validate_area_equipment(
+                db, wo.area_id, payload.equipment_id
+            )
+            wo.equipment_id = equipment.id if equipment else None
+        if payload.scheduled_date is not None:
+            wo.scheduled_date = payload.scheduled_date
+        if payload.due_date is not None:
+            wo.due_date = payload.due_date
+        if payload.estimated_time is not None:
+            wo.estimated_time = payload.estimated_time.strip() or None
+        elif wo.hallazgo_kind == "COMPLETED":
+            # A completed hallazgo must carry its declared duration to the
+            # individual OT in Drive and to the monthly register. For RANGE,
+            # calculate the minutes before formatting the value used by both
+            # integrations; for MANUAL, keep the already stored total.
+            declared_minutes = _duration_from_work_order(wo)
+            if declared_minutes:
+                wo.worked_duration_minutes = declared_minutes
+                wo.estimated_time = _format_work_duration(declared_minutes)
+        if wo.hallazgo_kind == "REQUIRES_ATTENTION":
+            if not payload.responsible_user_id:
+                raise HTTPException(status_code=400, detail="Asigna un trabajador para convertir este hallazgo en OT")
+            responsible = await db.get(User, payload.responsible_user_id)
+            if responsible is None or responsible.role != UserRole.WORKER or not responsible.is_active:
+                raise HTTPException(status_code=400, detail="El responsable debe ser un trabajador activo")
+            wo.responsible_user_id = responsible.id
+            participant_ids = list(dict.fromkeys([responsible.id, *payload.participant_user_ids]))
+            await db.execute(delete(work_order_participants).where(work_order_participants.c.work_order_id == wo.id))
+            names_result = await db.execute(select(User.id, User.full_name).where(User.id.in_(participant_ids)))
+            names_map = {row[0]: row[1] for row in names_result.all()}
+            wo.participant_names = ", ".join(names_map[uid] for uid in participant_ids if uid in names_map)
+            for uid in participant_ids:
+                await db.execute(work_order_participants.insert().values(work_order_id=wo.id, user_id=uid))
+            wo.status = WorkOrderStatus.PENDING.value
+        else:
+            wo.status = WorkOrderStatus.APPROVED.value
+            wo.completed_by_user_id = wo.completed_by_user_id or wo.created_by_user_id
+            wo.completed_at = wo.completed_at or now
+            wo.approved_at = now
+            wo.approved_by_user_id = current_user.id
+            wo.approved_by = current_user.full_name
+            wo.approved_signature = current_user.signature
+        wo.ot_number = await _next_ot_number(db)
+        wo.hallazgo_status = "CONVERTED"
+        wo.is_planned = True
+        wo.submitted_for_review = False
+        wo.requested_signature = current_user.signature
+        wo.ot_sheet_sync_status = "PENDING"
+        wo.monthly_sheet_sync_status = "PENDING"
+        await enqueue_external_sync(db, wo.id, job_type="FULL_CREATE", actor_user_id=current_user.id)
+        await create_audit_log(db, user_id=current_user.id, action="CONVERT_HALLAZGO_TO_OT", entity_type="WorkOrder", entity_id=wo.id, new_data={"ot_number": wo.ot_number, "kind": wo.hallazgo_kind})
+        if wo.status == WorkOrderStatus.PENDING.value:
+            await notification_service.notify_work_order_assigned(db, wo, link=f"/mis-ordenes/{wo.id}", participant_user_ids=[wo.responsible_user_id] if wo.responsible_user_id else [])
+
+    await db.commit()
+    refreshed = await db.execute(
+        _base_query()
+        .where(WorkOrder.id == wo.id)
+        .execution_options(populate_existing=True)
+    )
+    return _work_order_to_response(refreshed.scalar_one())
+
+
 # My Work Orders (worker view) — MUST be before /{wo_id}
 # ───────────────────────────────────────────────────────────────────────────
 @router.get("/my", response_model=list[WorkOrderListResponse])
@@ -1605,6 +1953,11 @@ async def my_work_orders(
             ot_sheet_sync_status=wo.ot_sheet_sync_status,
             monthly_sheet_sync_status=wo.monthly_sheet_sync_status,
             created_at=wo.created_at,
+            is_hallazgo_report=wo.is_hallazgo_report,
+            hallazgo_folio=wo.hallazgo_folio,
+            hallazgo_kind=wo.hallazgo_kind,
+            hallazgo_priority=wo.hallazgo_priority,
+            hallazgo_status=wo.hallazgo_status,
             submitted_for_review=wo.submitted_for_review,
             requires_supervisor_validation=wo.requires_supervisor_validation,
             supervisor_review_status=wo.supervisor_review_status,
@@ -1626,19 +1979,25 @@ async def my_work_orders(
 # ───────────────────────────────────────────────────────────────────────────
 # Counter / next OT number (admin only)
 # ───────────────────────────────────────────────────────────────────────────
-@router.get("/counter", response_model=WorkOrderCounterResponse)
-async def get_work_order_counter(
-    current_user: User = Depends(require_roles(UserRole.ADMIN)),
-    db: AsyncSession = Depends(get_db),
-):
+async def _build_work_order_counter(
+    view: Literal["ALL", "CREATED_BY_ME", "PENDING_REVIEW", "SUPERVISOR_VALIDATION"],
+    current_user: User,
+    db: AsyncSession,
+) -> WorkOrderCounterResponse:
     """Cuantifica las OTs (totales por año y por mes del año actual) y el próximo
     N° OT que se asignará. Solo ADMIN — la planificación los necesita."""
     global _counter_cache
-    bind_key = id(db.bind)
+    scope_key = (
+        id(db.bind),
+        current_user.id,
+        current_user.role.value,
+        tuple(sorted(current_user.area_ids or [])),
+        view,
+    )
     cached = _counter_cache
     if (
         cached is not None
-        and cached[1] == bind_key
+        and cached[1] == scope_key
         and time.monotonic() - cached[0] < _COUNTER_CACHE_TTL_SECONDS
     ):
         return cached[2]
@@ -1649,13 +2008,59 @@ async def get_work_order_counter(
         cached = _counter_cache
         if (
             cached is not None
-            and cached[1] == bind_key
+            and cached[1] == scope_key
             and time.monotonic() - cached[0] < _COUNTER_CACHE_TTL_SECONDS
         ):
             return cached[2]
 
         now = datetime.now(timezone.utc)
         current_year = now.year
+
+        # Use the same visibility rules as the paginated list endpoint so the
+        # tab counters represent the complete result set, not only one page.
+        scope_conditions = []
+        if current_user.role == UserRole.SUPERVISOR:
+            if not current_user.area_ids:
+                scope_conditions.append(WorkOrder.id == -1)
+            else:
+                scope_conditions.append(WorkOrder.area_id.in_(current_user.area_ids))
+        elif current_user.role not in manager_roles:
+            scope_conditions.append(WorkOrder.created_by_user_id == current_user.id)
+
+        if view == "CREATED_BY_ME":
+            scope_conditions.extend(
+                [
+                    WorkOrder.created_by_user_id == current_user.id,
+                    or_(
+                        WorkOrder.status != WorkOrderStatus.DRAFT.value,
+                        WorkOrder.submitted_for_review.is_(True),
+                    ),
+                ]
+            )
+        elif view == "PENDING_REVIEW":
+            if current_user.role != UserRole.ADMIN:
+                raise HTTPException(status_code=403, detail="Solo el administrador puede consultar esta vista")
+            scope_conditions.append(WorkOrder.submitted_for_review.is_(True))
+        elif view == "SUPERVISOR_VALIDATION":
+            if current_user.role != UserRole.SUPERVISOR:
+                raise HTTPException(status_code=403, detail="Solo los supervisores pueden consultar esta vista")
+            scope_conditions.extend(
+                [
+                    WorkOrder.requires_supervisor_validation.is_(True),
+                    WorkOrder.status == WorkOrderStatus.COMPLETED.value,
+                    WorkOrder.supervisor_review_status.in_(
+                        (SupervisorReviewStatus.PENDING.value, SupervisorReviewStatus.CLAIMED.value)
+                    ),
+                ]
+            )
+
+        if view == "ALL":
+            scope_conditions.append(
+                or_(
+                    WorkOrder.is_hallazgo_report.is_(False),
+                    WorkOrder.hallazgo_status == "CONVERTED",
+                )
+            )
 
         # One grouped query provides yearly and current-year monthly totals.
         date_rows = await db.execute(
@@ -1664,7 +2069,7 @@ async def get_work_order_counter(
                 func.extract("month", WorkOrder.execution_date).label("month"),
                 func.count().label("total"),
             )
-            .where(WorkOrder.execution_date.isnot(None))
+            .where(WorkOrder.execution_date.isnot(None), *scope_conditions)
             .group_by("year", "month")
             .order_by("year", "month")
         )
@@ -1679,11 +2084,28 @@ async def get_work_order_counter(
             if year == current_year and row.month:
                 per_month[int(row.month) - 1] = total
 
+        status_rows = await db.execute(
+            select(WorkOrder.status, func.count(WorkOrder.id))
+            .where(*scope_conditions)
+            .group_by(WorkOrder.status)
+        )
+        status_counts = {str(status): int(total) for status, total in status_rows.all()}
+
         total_all_result = await db.execute(
-            select(func.count(WorkOrder.id)).select_from(WorkOrder)
+            select(func.count(WorkOrder.id)).select_from(WorkOrder).where(*scope_conditions)
         )
         total_all = int(total_all_result.scalar_one() or 0)
-        next_ot = await _next_ot_number(db)
+        overdue_result = await db.execute(
+            select(func.count(WorkOrder.id))
+            .where(
+                *scope_conditions,
+                WorkOrder.due_date.isnot(None),
+                WorkOrder.due_date < now.date(),
+                WorkOrder.status.in_((WorkOrderStatus.PENDING.value, WorkOrderStatus.IN_PROGRESS.value)),
+            )
+        )
+        overdue_count = int(overdue_result.scalar_one() or 0)
+        next_ot = await _next_ot_number(db) if current_user.role == UserRole.ADMIN else ""
 
         response = WorkOrderCounterResponse(
             current_year=current_year,
@@ -1691,9 +2113,30 @@ async def get_work_order_counter(
             per_year=per_year,
             per_month=per_month,
             next_ot_number=next_ot,
+            status_counts=status_counts,
+            overdue_count=overdue_count,
         )
-        _counter_cache = (time.monotonic(), bind_key, response)
+        _counter_cache = (time.monotonic(), scope_key, response)
         return response
+
+
+@router.get("/counter", response_model=WorkOrderCounterResponse)
+async def get_work_order_counter(
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
+    db: AsyncSession = Depends(get_db),
+):
+    """Administrative counter used by the planning panel."""
+    return await _build_work_order_counter("ALL", current_user, db)
+
+
+@router.get("/status-counts", response_model=WorkOrderCounterResponse)
+async def get_work_order_status_counts(
+    view: Literal["ALL", "CREATED_BY_ME", "PENDING_REVIEW", "SUPERVISOR_VALIDATION"] = Query(default="ALL"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Complete status totals for the paginated order tabs."""
+    return await _build_work_order_counter(view, current_user, db)
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -1759,8 +2202,15 @@ async def upload_work_order_evidence(
         raise HTTPException(status_code=403, detail="No tiene permiso para ver esta OT")
 
     if stage == "ISSUE":
-        if current_user.role not in manager_roles or not perms.can_issue(wo, current_user):
-            raise HTTPException(status_code=403, detail="Solo un administrador o supervisor puede adjuntar evidencia de emisión")
+        can_reporter_attach = (
+            wo.is_hallazgo_report
+            and wo.created_by_user_id == current_user.id
+            and wo.hallazgo_status in ("PENDING_REVIEW", "RETURNED")
+        )
+        if not can_reporter_attach and (
+            current_user.role not in manager_roles or not perms.can_issue(wo, current_user)
+        ):
+            raise HTTPException(status_code=403, detail="No tiene permiso para adjuntar evidencia de emisión")
         if wo.status not in (WorkOrderStatus.DRAFT.value, WorkOrderStatus.PENDING.value):
             raise HTTPException(status_code=400, detail="La evidencia de emisión se adjunta antes de iniciar el trabajo")
     else:
@@ -1881,8 +2331,15 @@ async def delete_work_order_evidence(
 
         if evidence.stage == "ISSUE":
             allowed = (
-                current_user.role in manager_roles
-                and perms.can_issue(wo, current_user)
+                (
+                    wo.is_hallazgo_report
+                    and evidence.uploaded_by_user_id == current_user.id
+                    and wo.hallazgo_status in ("PENDING_REVIEW", "RETURNED")
+                )
+                or (
+                    current_user.role in manager_roles
+                    and perms.can_issue(wo, current_user)
+                )
                 and wo.status in (
                     WorkOrderStatus.DRAFT.value,
                     WorkOrderStatus.PENDING.value,

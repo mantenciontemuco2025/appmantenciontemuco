@@ -70,8 +70,9 @@ export default function OrdenesPage() {
     setHasMore(true);
     setLoadingMore(false);
     loadFirstPage();
+    setCounter(null);
     api
-      .getCached<WorkOrderCounter>("/api/work-orders/counter", 15000)
+      .getCached<WorkOrderCounter>(`/api/work-orders/status-counts?view=${activeView}`, 15000)
       .then(setCounter)
       .catch(() => setCounter(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -235,10 +236,18 @@ export default function OrdenesPage() {
   });
 
   function tabCount(key: TabKey): number {
+    if (key === "OVERDUE") return counter?.overdue_count ?? overdue.length;
+    if (counter?.status_counts) {
+      if (key === "ALL") return counter.total_all;
+      return counter.status_counts[key] ?? 0;
+    }
     if (key === "ALL") return orders.length;
-    if (key === "OVERDUE") return overdue.length;
     return orders.filter((o) => o.status === key).length;
   }
+
+  const totalForActiveTab = activeTab === "OVERDUE"
+    ? (counter?.overdue_count ?? overdue.length)
+    : (counter?.status_counts?.[activeTab] ?? (activeTab === "ALL" ? counter?.total_all : undefined) ?? filtered.length);
 
   if (loading || !user) {
     return <PageLoading message={loading ? "Validando sesión..." : "Redirigiendo al inicio de sesión..."} />;
@@ -257,9 +266,11 @@ export default function OrdenesPage() {
               <ClipboardList className="h-4 w-4 text-primary" />
               <span className="font-semibold">{counter.total_all}</span>
               <span className="text-muted-foreground">OTs en total</span>
+              {counter.next_ot_number && (
               <span className="ml-1 rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs text-primary">
                 próximo {counter.next_ot_number}
               </span>
+              )}
             </span>
           )}
           <Link href="/ordenes/nuevo">
@@ -576,7 +587,7 @@ export default function OrdenesPage() {
           {activeTab !== "OVERDUE" && (
           <div className="mt-4 flex flex-col items-center gap-3">
             <p className="text-xs text-muted-foreground">
-              Mostrando {filtered.length} de {counter ? counter.total_all : filtered.length} OTs
+              Mostrando {filtered.length} de {totalForActiveTab} OTs
             </p>
             {hasMore && (
               <Button variant="outline" onClick={loadMore} disabled={loadingMore} className="w-full sm:w-auto">

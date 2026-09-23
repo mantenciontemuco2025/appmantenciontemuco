@@ -445,7 +445,7 @@ export default function WaterRegisterPage() {
         <Shell fullName={user.full_name} role={user.role} waterRegisterAccess={waterAccess} onLogout={logout}>
       <div className="mb-6 flex items-start gap-3">
         <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-sky-100 text-sky-700"><Droplets className="h-6 w-6" /></span>
-        <div><h1 className="text-2xl font-bold">Registro de agua y RILES</h1><p className="text-muted-foreground">Lecturas diarias, medidores y control de DQO.</p></div>
+        <div><h1 className="text-2xl font-bold">Planta de RILES</h1><p className="text-muted-foreground">Lecturas diarias, medidores y control de DQO.</p></div>
       </div>
 
       {(error || message) && <div className={`mb-4 rounded-lg border p-3 text-sm ${error ? "border-red-200 bg-red-50 text-red-800" : "border-emerald-200 bg-emerald-50 text-emerald-800"}`}>{error || message}</div>}

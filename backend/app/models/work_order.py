@@ -58,6 +58,17 @@ class WorkOrder(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     ot_number: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    # Reporte provisional: usa HALL-YYYY-NNNN hasta que el administrador lo acepte.
+    is_hallazgo_report: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    hallazgo_folio: Mapped[str | None] = mapped_column(String(30), unique=True, nullable=True)
+    hallazgo_kind: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    hallazgo_priority: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    hallazgo_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    hallazgo_review_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hallazgo_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    hallazgo_reviewed_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     title: Mapped[str] = mapped_column(String(300))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -246,6 +257,9 @@ class WorkOrder(Base):
     )
     supervisor_validator = relationship(
         "User", foreign_keys=[supervisor_validator_user_id], lazy="selectin"
+    )
+    hallazgo_reviewed_by = relationship(
+        "User", foreign_keys=[hallazgo_reviewed_by_user_id], lazy="selectin"
     )
 
     participants = relationship(
