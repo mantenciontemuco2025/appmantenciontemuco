@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Plus, Loader2, RefreshCw, Eye, Send, ClipboardList, ChevronDown, SearchX, SendHorizontal } from "lucide-react";
@@ -56,6 +56,8 @@ export default function OrdenesPage() {
   const [batchConfirming, setBatchConfirming] = useState(false);
   const [batchBusy, setBatchBusy] = useState(false);
   const [batchResult, setBatchResult] = useState<{ issued: number[]; failures: { id: number; error: string }[] } | null>(null);
+  // Evita que una respuesta antigua reemplace la vista activa.
+  const ordersRequestRef = useRef(0);
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
@@ -63,6 +65,10 @@ export default function OrdenesPage() {
 
   useEffect(() => {
     if (!user) return;
+    setOrders([]);
+    setSelected(new Set());
+    setHasMore(true);
+    setLoadingMore(false);
     loadFirstPage();
     api
       .getCached<WorkOrderCounter>("/api/work-orders/counter", 15000)
@@ -100,9 +106,11 @@ export default function OrdenesPage() {
       clearTimeout(stop);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasPendingSync]);
+  }, [activeView, hasPendingSync]);
 
   async function loadFirstPage(silent = false) {
+    const requestId = ++ordersRequestRef.current;
+    const view = activeView;
     if (!silent) setLoadingOrders(true);
     if (!silent) setError("");
     setHasMore(true);
@@ -116,34 +124,41 @@ export default function OrdenesPage() {
       const page = await api.get<WorkOrderListItem[]>(
         `/api/work-orders?${filters.toString()}`
       );
+      if (requestId !== ordersRequestRef.current || view !== activeView) return;
       setOrders(page);
       setHasMore(page.length === PAGE_SIZE);
     } catch (err) {
-      if (!silent) {
+      if (!silent && requestId === ordersRequestRef.current && view === activeView) {
         setError(err instanceof Error ? err.message : "Error al cargar las órdenes");
         setOrders([]);
       }
     } finally {
-      if (!silent) setLoadingOrders(false);
+      if (!silent && requestId === ordersRequestRef.current) setLoadingOrders(false);
     }
   }
 
   async function loadMore() {
+    const requestId = ++ordersRequestRef.current;
+    const view = activeView;
+    const offset = orders.length;
     setLoadingMore(true);
     try {
-      const filters = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(orders.length) });
+      const filters = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
       if (activeView === "CREATED_BY_ME") filters.set("created_by_me", "true");
       if (activeView === "PENDING_REVIEW") filters.set("pending_review", "true");
       if (activeView === "SUPERVISOR_VALIDATION") filters.set("supervisor_validation_pending", "true");
       const page = await api.get<WorkOrderListItem[]>(
         `/api/work-orders?${filters.toString()}`
       );
+      if (requestId !== ordersRequestRef.current || view !== activeView) return;
       setOrders((prev) => [...prev, ...page]);
       setHasMore(page.length === PAGE_SIZE);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Error al cargar más órdenes");
+      if (requestId === ordersRequestRef.current && view === activeView) {
+        setError(err instanceof Error ? err.message : "Error al cargar más órdenes");
+      }
     } finally {
-      setLoadingMore(false);
+      if (requestId === ordersRequestRef.current) setLoadingMore(false);
     }
   }
 
