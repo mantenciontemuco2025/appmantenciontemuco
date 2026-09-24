@@ -868,6 +868,7 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
               <InfoRow label="Sección" value={wo.section_name} />
               <InfoRow label="Tipo de mantenimiento" value={maintenanceTypeLabel(wo.maintenance_type)} />
               <InfoRow label="LOTO" value={wo.loto_status === "YES" ? "Sí" : wo.loto_status === "NO" ? "No" : "N/A"} />
+              <InfoRow label="Fecha programada" value={formatDateOnly(wo.scheduled_date)} />
               <InfoRow
                 label="Fecha de ejecución"
                 value={formatDateOnly(wo.execution_date)}

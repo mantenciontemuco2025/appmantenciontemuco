@@ -111,6 +111,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
   const [reassignPlantArea, setReassignPlantArea] = useState("");
   const [reassignSectionId, setReassignSectionId] = useState<number | null>(null);
   const [reassignEquipmentId, setReassignEquipmentId] = useState<number | null>(null);
+  const [reassignScheduledDate, setReassignScheduledDate] = useState("");
   const [externalExecutorName, setExternalExecutorName] = useState("");
   const [externalCompany, setExternalCompany] = useState("");
   const [adminEdit, setAdminEdit] = useState({
@@ -712,6 +713,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
     setReassignPlantArea(wo.plant_area || "");
     setReassignSectionId(wo.area_id || null);
     setReassignEquipmentId(wo.equipment_id || null);
+    setReassignScheduledDate(wo.scheduled_date || "");
     setShowConfirm("reassign");
   }
 
@@ -743,6 +745,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
           plant_area: reassignPlantArea,
           area_id: reassignSectionId,
           equipment_id: reassignEquipmentId,
+          scheduled_date: reassignScheduledDate || null,
         } : {}),
       });
       setWo(updated);
@@ -1602,6 +1605,18 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                       </select>
                     </label>
                   </div>
+                  <label className="mt-3 block text-sm">
+                    Fecha de programación <span className="text-muted-foreground">(opcional)</span>
+                    <Input
+                      type="date"
+                      className="mt-1"
+                      value={reassignScheduledDate}
+                      onChange={(event) => setReassignScheduledDate(event.target.value)}
+                    />
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      Déjala vacía si todavía no se ha definido el día de ejecución.
+                    </span>
+                  </label>
                 </div>
               )}
               <div className="mb-3">

@@ -81,6 +81,133 @@ function KpiCard({
   );
 }
 
+const PIE_COLORS = [
+  "#4f86c6", "#c84f4f", "#8064a2", "#f79646", "#7ea6d2",
+  "#d78282", "#a9c978", "#a58fbe", "#4fa7a0", "#e1b84b",
+];
+
+function DistributionPie({
+  title,
+  description,
+  rows,
+}: {
+  title: string;
+  description: string;
+  rows: { label: string; value: number }[];
+}) {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  const data = rows
+    .filter((row) => row.value > 0)
+    .sort((a, b) => b.value - a.value);
+  const total = data.reduce((sum, row) => sum + row.value, 0);
+  let cursor = 0;
+  const segments = data.map((row, index) => {
+    const start = cursor;
+    cursor += (row.value / Math.max(total, 1)) * 100;
+    return {
+      ...row,
+      color: PIE_COLORS[index % PIE_COLORS.length],
+      start,
+      end: cursor,
+      percentage: Math.round((row.value / Math.max(total, 1)) * 1000) / 10,
+    };
+  });
+
+  return (
+    <div className="rounded-2xl border bg-card p-4 shadow-sm sm:p-5">
+      <div className="mb-4 text-center">
+        <h3 className="text-xl font-semibold">{title}</h3>
+        <p className="mt-1 text-xs text-muted-foreground">{description}</p>
+      </div>
+      {!segments.length ? (
+        <div className="flex min-h-64 items-center justify-center text-sm text-muted-foreground">
+          No hay datos para este período.
+        </div>
+      ) : (
+        <div className="grid items-center gap-5 md:grid-cols-[minmax(220px,0.9fr)_1.1fr]">
+          <div className="flex justify-center">
+            <div className="relative aspect-square w-full max-w-[260px]">
+              <svg
+                viewBox="0 0 200 200"
+                className="h-full w-full overflow-visible drop-shadow-sm"
+                role="img"
+                aria-label={`${title}: ${segments.map((segment) => `${segment.label} ${segment.percentage}%`).join(", ")}`}
+                onMouseLeave={() => setHoveredIndex(null)}
+              >
+                {segments.map((segment, index) => {
+                  const startAngle = (segment.start / 100) * 360 - 90;
+                  const endAngle = (segment.end / 100) * 360 - 90;
+                  const start = {
+                    x: 100 + 86 * Math.cos((endAngle * Math.PI) / 180),
+                    y: 100 + 86 * Math.sin((endAngle * Math.PI) / 180),
+                  };
+                  const end = {
+                    x: 100 + 86 * Math.cos((startAngle * Math.PI) / 180),
+                    y: 100 + 86 * Math.sin((startAngle * Math.PI) / 180),
+                  };
+                  const largeArc = endAngle - startAngle > 180 ? 1 : 0;
+                  const path = [
+                    "M 100 100",
+                    `L ${start.x} ${start.y}`,
+                    `A 86 86 0 ${largeArc} 0 ${end.x} ${end.y}`,
+                    "Z",
+                  ].join(" ");
+                  return (
+                    <path
+                      key={segment.label}
+                      d={path}
+                      fill={segment.color}
+                      stroke="var(--card)"
+                      strokeWidth="1.5"
+                      className="cursor-pointer transition-opacity hover:opacity-80"
+                      onMouseEnter={() => setHoveredIndex(index)}
+                    />
+                  );
+                })}
+              </svg>
+              <div className="pointer-events-none absolute inset-[22%] flex flex-col items-center justify-center rounded-full bg-card text-center shadow-sm">
+                {hoveredIndex !== null ? (
+                  <>
+                    <span className="max-w-[90px] truncate text-xs font-semibold text-foreground">
+                      {segments[hoveredIndex].label}
+                    </span>
+                    <span className="mt-1 text-xl font-bold text-foreground">
+                      {segments[hoveredIndex].percentage}%
+                    </span>
+                    <span className="text-[11px] text-muted-foreground">
+                      {segments[hoveredIndex].value} OTs
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-3xl font-bold text-foreground">{total}</span>
+                    <span className="text-xs text-muted-foreground">OTs</span>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+          <div className="space-y-2">
+            {segments.map((segment, index) => (
+              <div
+                key={segment.label}
+                className="flex cursor-pointer items-center gap-2 rounded-md px-1 text-sm transition-colors hover:bg-muted/60"
+                onMouseEnter={() => setHoveredIndex(index)}
+                onMouseLeave={() => setHoveredIndex(null)}
+              >
+                <span className="h-3 w-3 shrink-0 rounded-sm" style={{ backgroundColor: segment.color }} />
+                <span className="min-w-0 flex-1 truncate" title={segment.label}>{segment.label}</span>
+                <span className="font-semibold tabular-nums">{segment.percentage}%</span>
+                <span className="w-12 text-right text-xs text-muted-foreground tabular-nums">{segment.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
   const summary = data.summary;
   // The dashboard can stay open while an API process is being upgraded. Treat
@@ -334,6 +461,19 @@ export function KpiDashboard() {
             </div>
 
             <KpiProfessionalExtras data={data} />
+
+            <div className="mt-5 grid gap-5 lg:grid-cols-2">
+              <DistributionPie
+                title="Recuento de áreas"
+                description="Distribución de las OTs del período por área"
+                rows={data.by_area.map((row) => ({ label: row.area_name, value: row.total_ots }))}
+              />
+              <DistributionPie
+                title="Asignación de trabajos"
+                description="OTs asignadas por responsable"
+                rows={data.by_worker.map((row) => ({ label: row.worker_name, value: row.assigned_ots }))}
+              />
+            </div>
 
             <div className="mt-5 grid gap-5 lg:grid-cols-2">
               <div className="rounded-2xl border p-4 sm:p-5">

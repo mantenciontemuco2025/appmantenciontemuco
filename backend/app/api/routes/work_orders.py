@@ -234,6 +234,7 @@ class ReassignPayload(BaseModel):
     plant_area: str | None = None
     area_id: int | None = None  # section catalog ID; section owns the equipment
     equipment_id: int | None = None
+    scheduled_date: _date | None = None
 
 
 class BatchIssuePayload(BaseModel):
@@ -426,7 +427,7 @@ def _work_order_to_response(wo: WorkOrder) -> dict:
         "external_oc_amount": wo.external_oc_amount,
         "coordinator_user_id": wo.coordinator_user_id,
         "is_planned": wo.is_planned,
-        "scheduled_date": wo.scheduled_date,
+        "scheduled_date": wo.scheduled_date.isoformat() if wo.scheduled_date else None,
         "due_date": wo.due_date,
         "started_at": wo.started_at,
         "started_by_user_id": wo.started_by_user_id,
@@ -2833,6 +2834,7 @@ async def reassign_work_order(
         payload.plant_area,
         payload.area_id,
         payload.equipment_id,
+        payload.scheduled_date,
     )):
         raise HTTPException(
             status_code=400,
@@ -2855,12 +2857,16 @@ async def reassign_work_order(
     if payload.plant_area is not None:
         wo.plant_area = _validate_plant_area(payload.plant_area)
 
+    if "scheduled_date" in payload.model_fields_set:
+        wo.scheduled_date = payload.scheduled_date
+
     previous = {
         "responsible_user_id": wo.responsible_user_id,
         "participants": [p.id for p in (wo.participants or [])],
         "plant_area": wo.plant_area,
         "section_id": wo.area_id,
         "equipment_id": wo.equipment_id,
+        "scheduled_date": wo.scheduled_date.isoformat() if wo.scheduled_date else None,
     }
 
     # Responsable — validate it's a real, active user once provided.
@@ -2917,6 +2923,7 @@ async def reassign_work_order(
             "plant_area": wo.plant_area,
             "section_id": wo.area_id,
             "equipment_id": wo.equipment_id,
+            "scheduled_date": wo.scheduled_date.isoformat() if wo.scheduled_date else None,
         },
     )
     await db.flush()

@@ -430,6 +430,7 @@ async def test_admin_signature_is_used_when_accepting_supervisor_submission(
             "plant_area": "PLANTA EXTRACTO",
             "area_id": seed_data["area"].id,
             "equipment_id": seed_data["equipment"].id,
+            "scheduled_date": "2026-10-15",
         },
         headers=auth_headers(admin),
     )
@@ -437,6 +438,7 @@ async def test_admin_signature_is_used_when_accepting_supervisor_submission(
     assert reassigned.json()["area_name"] == "PLANTA EXTRACTO"
     assert reassigned.json()["section_name"] == "Malta"
     assert reassigned.json()["equipment_name"] == "Filtro"
+    assert reassigned.json()["scheduled_date"] == "2026-10-15"
 
     accepted = await client.post(
         f"/api/work-orders/{wo_id}/issue", headers=auth_headers(admin)

@@ -175,10 +175,11 @@ export default function MisOrdenesPage() {
                       </div>
                     )}
                     <div className="mt-0.5 text-sm text-muted-foreground">
-                      {maintenanceTypeLabel(o.maintenance_type)} ·{" "}
-                      {o.execution_date
-                        ? formatDateOnly(o.execution_date)
-                        : "sin fecha"}
+                      {maintenanceTypeLabel(o.maintenance_type)}
+                    </div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">
+                      Fecha programada: {o.scheduled_date ? formatDateOnly(o.scheduled_date) : "sin fecha"}
+                      {o.execution_date ? ` · Ejecutada: ${formatDateOnly(o.execution_date)}` : ""}
                     </div>
                     {o.due_date && (
                       <div className={cn(
