@@ -41,8 +41,8 @@ interface InfoRowEditContextValue {
 const InfoRowEditContext = createContext<InfoRowEditContextValue | null>(null);
 
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
-  if (label === "LOTO") return null;
   const edit = useContext(InfoRowEditContext);
+  if (label === "LOTO") return null;
   const field = edit?.canEdit ? edit.fieldForLabel(label) : null;
   if (!value && !field) return null;
   if (edit?.canEdit && field) {
