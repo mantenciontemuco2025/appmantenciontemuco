@@ -1,33 +1,74 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { createContext, useContext, useEffect, useState, use } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft, Loader2, Send, RotateCcw, CheckCircle, XCircle,
-  Clock, AlertTriangle, FileText, Eye, Users, Trash2
+  Clock, AlertTriangle, FileText, Eye, Users, Trash2, Pencil, X
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { signatureImageUrl } from "@/lib/signatures";
 import { Shell } from "@/components/layout/shell";
-import type { AreaNode, WorkOrderRecord } from "@/lib/types";
+import type { AreaNode, LotoControl, WorkOrderRecord, WorkTimeMode } from "@/lib/types";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { InlineAlert } from "@/components/ui/inline-alert";
-import { StatusBadge } from "@/lib/status";
+import { MAINTENANCE_TYPES, StatusBadge } from "@/lib/status";
 import { SyncBadge, RetrySyncButton } from "@/components/maintenance/sync-badge";
 import { cn, formatDateOnly } from "@/lib/utils";
 import { PageLoading } from "@/components/ui/page-loading";
-import { LOTO_CONTROL_LABELS } from "@/lib/loto";
+import { LOTO_CONTROL_LABELS, LOTO_CONTROL_OPTIONS } from "@/lib/loto";
 import { WORK_ORDER_AREAS } from "@/lib/work-order-areas";
 import { WorkOrderEvidencePanel } from "@/components/maintenance/work-order-evidence";
 import { HallazgoReviewPanel } from "@/components/orders/hallazgo-review-panel";
 import { HallazgoEditPanel } from "@/components/orders/hallazgo-edit-panel";
 
+interface InfoRowEditContextValue {
+  canEdit: boolean;
+  editingField: string | null;
+  fieldForLabel: (label: string) => string | null;
+  renderEditor: (field: string) => React.ReactNode;
+  onEdit: (field: string) => void;
+  onSave: () => void;
+  onCancel: () => void;
+  saving: boolean;
+}
+
+const InfoRowEditContext = createContext<InfoRowEditContextValue | null>(null);
+
 function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
-  if (!value) return null;
+  if (label === "LOTO") return null;
+  const edit = useContext(InfoRowEditContext);
+  const field = edit?.canEdit ? edit.fieldForLabel(label) : null;
+  if (!value && !field) return null;
+  if (edit?.canEdit && field) {
+    const editing = edit.editingField === field;
+    return (
+      <div className="relative border-b border-border py-2 last:border-0">
+        <div className="text-xs text-muted-foreground">{label}</div>
+        {editing ? (
+          <div className="mt-1 space-y-2">
+            {edit.renderEditor(field)}
+            <div className="flex gap-2">
+              <Button type="button" size="sm" onClick={edit.onSave} disabled={edit.saving}>Guardar</Button>
+              <Button type="button" size="sm" variant="outline" onClick={edit.onCancel} disabled={edit.saving}>Cancelar</Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-medium">{value || "—"}</div>
+            <Button type="button" variant="ghost" size="sm" className="shrink-0 text-primary" onClick={() => edit.onEdit(field)} aria-label={`Editar ${label}`}>
+              <Pencil className="mr-1 h-3.5 w-3.5" /> Editar
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  }
   return (
     <div className="py-2 border-b border-border last:border-0">
       <div className="text-xs text-muted-foreground">{label}</div>
@@ -72,6 +113,33 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
   const [reassignEquipmentId, setReassignEquipmentId] = useState<number | null>(null);
   const [externalExecutorName, setExternalExecutorName] = useState("");
   const [externalCompany, setExternalCompany] = useState("");
+  const [adminEdit, setAdminEdit] = useState({
+    description: "",
+    plant_area: "",
+    area_id: null as number | null,
+    equipment_id: null as number | null,
+    section_name: "",
+    maintenance_type: "PREVENTIVE" as WorkOrderRecord["maintenance_type"],
+    loto_status: "NOT_APPLICABLE" as WorkOrderRecord["loto_status"],
+    loto_controls: [] as LotoControl[],
+    execution_date: "",
+    estimated_time: "",
+    folio: "",
+    voucher_number: "",
+    voucher_date: "",
+    material_codes: "",
+    resources_required: "",
+    risks: "",
+    observations: "",
+    work_time_mode: "RANGE" as WorkTimeMode,
+    work_start_time: "",
+    work_end_time: "",
+    manual_hours: "",
+    manual_minutes: "",
+  });
+  const [savingAdminEdit, setSavingAdminEdit] = useState(false);
+  const [showAdminEdit, setShowAdminEdit] = useState(false);
+  const [inlineEditField, setInlineEditField] = useState<string | null>(null);
 
   useEffect(() => {
     if (!loading && !user) router.push("/login");
@@ -82,6 +150,43 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
     loadOrder();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, id]);
+
+  useEffect(() => {
+    if (!wo) return;
+    setAdminEdit({
+      description: wo.description || "",
+      plant_area: wo.plant_area || "",
+      area_id: wo.area_id,
+      equipment_id: wo.equipment_id,
+      section_name: wo.section_name || "",
+      maintenance_type: wo.maintenance_type || "PREVENTIVE",
+      loto_status: wo.loto_status || "NOT_APPLICABLE",
+      loto_controls: wo.loto_controls || [],
+      execution_date: (wo.execution_date || "").slice(0, 10),
+      estimated_time: wo.estimated_time || "",
+      folio: wo.folio || "",
+      voucher_number: wo.voucher_number || "",
+      voucher_date: (wo.voucher_date || "").slice(0, 10),
+      material_codes: wo.material_codes || "",
+      resources_required: wo.resources_required || "",
+      risks: wo.risks || "",
+      observations: wo.observations || "",
+      work_time_mode:
+        wo.work_time_mode || (wo.worked_duration_minutes != null ? "MANUAL" : "RANGE"),
+      work_start_time:
+        wo.work_time_mode === "RANGE" ? (wo.work_start_time || "").slice(0, 5) : "",
+      work_end_time:
+        wo.work_time_mode === "RANGE" ? (wo.work_end_time || "").slice(0, 5) : "",
+      manual_hours:
+        wo.work_time_mode === "MANUAL" && wo.worked_duration_minutes != null
+          ? String(Math.floor(wo.worked_duration_minutes / 60))
+          : "",
+      manual_minutes:
+        wo.work_time_mode === "MANUAL" && wo.worked_duration_minutes != null
+          ? String(wo.worked_duration_minutes % 60)
+          : "",
+    });
+  }, [wo]);
 
   // Carga los trabajadores disponibles para el selector de "Reasignar".
   useEffect(() => {
@@ -111,6 +216,269 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
       if (!silent) setLoadingOrder(false);
     }
   }
+
+  async function saveAdminEdit() {
+    if (!wo || savingAdminEdit) return;
+
+    let workedDuration: number | null = null;
+    if (adminEdit.work_time_mode === "RANGE") {
+      const hasStart = Boolean(adminEdit.work_start_time);
+      const hasEnd = Boolean(adminEdit.work_end_time);
+      if (hasStart !== hasEnd) {
+        toast("error", "Para usar Desde / hasta debes indicar inicio y término.");
+        return;
+      }
+      if (hasStart && hasEnd) {
+        const [startHour, startMinute] = adminEdit.work_start_time.split(":").map(Number);
+        const [endHour, endMinute] = adminEdit.work_end_time.split(":").map(Number);
+        const start = startHour * 60 + startMinute;
+        const end = endHour * 60 + endMinute;
+        if (end <= start) {
+          toast("error", "La hora de término debe ser posterior a la hora de inicio.");
+          return;
+        }
+        workedDuration = end - start;
+      }
+    } else {
+      const hours = adminEdit.manual_hours === "" ? 0 : Number(adminEdit.manual_hours);
+      const minutes = adminEdit.manual_minutes === "" ? 0 : Number(adminEdit.manual_minutes);
+      if (!Number.isInteger(hours) || hours < 0 || !Number.isInteger(minutes) || minutes < 0 || minutes > 59) {
+        toast("error", "La duración manual debe tener horas enteras y minutos entre 0 y 59.");
+        return;
+      }
+      workedDuration = hours * 60 + minutes;
+      if (workedDuration <= 0) {
+        toast("error", "Indica una duración manual mayor que cero.");
+        return;
+      }
+    }
+
+    setSavingAdminEdit(true);
+    setError(null);
+    try {
+      const updated = await api.patch<WorkOrderRecord>(`/api/work-orders/${wo.id}`, {
+        description: adminEdit.description,
+        plant_area: adminEdit.plant_area || null,
+        area_id: adminEdit.area_id,
+        equipment_id: adminEdit.equipment_id,
+        section_name: adminEdit.section_name.trim() || null,
+        maintenance_type: adminEdit.maintenance_type,
+        loto_status: adminEdit.loto_status,
+        loto_controls: adminEdit.loto_controls,
+        execution_date: adminEdit.execution_date || null,
+        folio: adminEdit.folio || null,
+        voucher_number: adminEdit.voucher_number || null,
+        voucher_date: adminEdit.voucher_date || null,
+        material_codes: adminEdit.material_codes.trim() || null,
+        resources_required: adminEdit.resources_required || null,
+        risks: adminEdit.risks || null,
+        observations: adminEdit.observations || null,
+        work_time_mode: adminEdit.work_time_mode,
+        work_start_time: adminEdit.work_time_mode === "RANGE" ? adminEdit.work_start_time || null : null,
+        work_end_time: adminEdit.work_time_mode === "RANGE" ? adminEdit.work_end_time || null : null,
+        worked_duration_minutes: adminEdit.work_time_mode === "MANUAL" ? workedDuration : null,
+      });
+      setWo(updated);
+      setInlineEditField(null);
+      toast("success", "Cambios guardados. La OT de Drive se actualizará en segundo plano.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "No se pudieron guardar los cambios");
+    } finally {
+      setSavingAdminEdit(false);
+    }
+  }
+
+  const canInlineEdit = user?.role === "ADMIN" && wo?.status === "COMPLETED";
+  const officialDurationMinutes = wo?.worked_duration_minutes ?? (
+    wo?.actual_duration_minutes != null ? Math.round(wo.actual_duration_minutes) : null
+  );
+
+  function editableInfoRow(
+    label: string,
+    field: string,
+    value: React.ReactNode,
+    editor: React.ReactNode,
+  ) {
+    if (!canInlineEdit) return <InfoRow label={label} value={value} />;
+    const editing = inlineEditField === field;
+    return (
+      <div className="relative border-b border-border py-2 last:border-0">
+        <div className="text-xs text-muted-foreground">{label}</div>
+        {editing ? (
+          <div className="mt-1 space-y-2">
+            {editor}
+            <div className="flex gap-2">
+              <Button type="button" size="sm" onClick={() => void saveAdminEdit()} disabled={savingAdminEdit}>
+                {savingAdminEdit && <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />}
+                Guardar
+              </Button>
+              <Button type="button" size="sm" variant="outline" onClick={() => setInlineEditField(null)} disabled={savingAdminEdit}>
+                Cancelar
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm font-medium">{value || "—"}</div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="shrink-0 text-primary"
+              onClick={() => setInlineEditField(field)}
+              aria-label={`Editar ${label}`}
+            >
+              <Pencil className="mr-1 h-3.5 w-3.5" /> Editar
+            </Button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  const infoRowEditContext: InfoRowEditContextValue = {
+    canEdit: Boolean(canInlineEdit),
+    editingField: inlineEditField,
+    fieldForLabel: (label) => {
+      if (label === "Equipo") return "equipment_id";
+      if (label.includes("Controles LOTO")) return "loto_controls";
+      if (label.includes("rea")) return "plant_area";
+      if (label.includes("Secci")) return "section_name";
+      if (label.includes("Fecha de ejec")) return "execution_date";
+      if (label.includes("Fecha de vale")) return "voucher_date";
+      if (label.includes("vale")) return "voucher_number";
+      if (label.includes("digos de materiales")) return "material_codes";
+      return null;
+    },
+    renderEditor: (field) => {
+      if (field === "equipment_id") {
+        const catalogArea = sections.find((section) => section.id === adminEdit.area_id);
+        const equipmentOptions = [...(catalogArea?.equipment || [])];
+        if (wo?.equipment_id && !equipmentOptions.some((equipment) => equipment.id === wo.equipment_id)) {
+          equipmentOptions.unshift({ id: wo.equipment_id, name: wo.equipment_name || "Equipo actual" });
+        }
+        return (
+          <select
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            value={adminEdit.equipment_id ?? ""}
+            onChange={(event) => setAdminEdit((current) => ({ ...current, equipment_id: event.target.value ? Number(event.target.value) : null }))}
+          >
+            <option value="">Sin equipo especÃ­fico</option>
+            {equipmentOptions.map((equipment) => <option key={equipment.id} value={equipment.id}>{equipment.name}</option>)}
+          </select>
+        );
+      }
+      if (field === "plant_area") return (
+        <select
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          value={adminEdit.plant_area}
+          onChange={(event) => setAdminEdit((current) => ({ ...current, plant_area: event.target.value }))}
+        >
+          <option value="">Seleccionar Ã¡rea</option>
+          {WORK_ORDER_AREAS.map((area) => <option key={area} value={area}>{area}</option>)}
+        </select>
+      );
+      if (field === "loto_status") return (
+        <select
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          value={adminEdit.loto_status}
+          onChange={(event) => {
+            const status = event.target.value as WorkOrderRecord["loto_status"];
+            setAdminEdit((current) => ({
+              ...current,
+              loto_status: status,
+              loto_controls: status === "YES"
+                ? (current.loto_controls.length && !current.loto_controls.includes("NOT_APPLICABLE") ? current.loto_controls : ["LOTO_BLOQUEO"])
+                : status === "NOT_APPLICABLE" ? ["NOT_APPLICABLE"] : [],
+            }));
+          }}
+        >
+          <option value="NOT_APPLICABLE">No aplica</option>
+          <option value="YES">SÃ­</option>
+          <option value="NO">No</option>
+        </select>
+      );
+      if (field === "loto_controls") return (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {LOTO_CONTROL_OPTIONS.map((option) => (
+            <label key={option.value} className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+              <input
+                type="checkbox"
+                checked={adminEdit.loto_controls.includes(option.value)}
+                onChange={(event) => setAdminEdit((current) => {
+                  const next = event.target.checked
+                    ? [...current.loto_controls.filter((control) => control !== "NOT_APPLICABLE"), option.value]
+                    : current.loto_controls.filter((control) => control !== option.value);
+                  return { ...current, loto_controls: next, loto_status: next.length ? "YES" : "NO" };
+                })}
+              />
+              {option.label}
+            </label>
+          ))}
+          <label className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+            <input
+              type="checkbox"
+              checked={adminEdit.loto_controls.includes("NOT_APPLICABLE")}
+              onChange={(event) => setAdminEdit((current) => ({
+                ...current,
+                loto_controls: event.target.checked ? ["NOT_APPLICABLE"] : [],
+                loto_status: event.target.checked ? "NOT_APPLICABLE" : "NO",
+              }))}
+            />
+            No aplica
+          </label>
+        </div>
+      );
+      if (field === "section_name") return (
+        <div className="space-y-2">
+          <select
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            value={adminEdit.area_id ?? ""}
+            onChange={(event) => {
+              const areaId = event.target.value ? Number(event.target.value) : null;
+              const section = sections.find((item) => item.id === areaId);
+              setAdminEdit((current) => ({
+                ...current,
+                area_id: areaId,
+                section_name: section?.name || "",
+                equipment_id: null,
+              }));
+            }}
+          >
+            <option value="">Seleccionar secciÃ³n</option>
+            {sections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
+          </select>
+          <select
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            value={adminEdit.equipment_id ?? ""}
+            onChange={(event) => setAdminEdit((current) => ({ ...current, equipment_id: event.target.value ? Number(event.target.value) : null }))}
+            disabled={!adminEdit.area_id}
+          >
+            <option value="">Seleccionar equipo de la secciÃ³n</option>
+            {(sections.find((section) => section.id === adminEdit.area_id)?.equipment || []).map((equipment) => (
+              <option key={equipment.id} value={equipment.id}>{equipment.name}</option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">El equipo debe pertenecer a la secciÃ³n seleccionada.</p>
+        </div>
+      );
+      if (field === "section_name") return (
+        <select className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={adminEdit.section_name} onChange={(event) => setAdminEdit((current) => ({ ...current, section_name: event.target.value }))}>
+          <option value="">Sin sección</option>
+          {sections.map((section) => <option key={section.id} value={section.name}>{section.name}</option>)}
+        </select>
+      );
+      if (field === "execution_date") return <Input type="date" value={adminEdit.execution_date} onChange={(event) => setAdminEdit((current) => ({ ...current, execution_date: event.target.value }))} />;
+      if (field === "voucher_date") return <Input type="date" value={adminEdit.voucher_date} onChange={(event) => setAdminEdit((current) => ({ ...current, voucher_date: event.target.value }))} />;
+      if (field === "voucher_number") return <Input value={adminEdit.voucher_number} onChange={(event) => setAdminEdit((current) => ({ ...current, voucher_number: event.target.value }))} />;
+      if (field === "material_codes") return <Input value={adminEdit.material_codes} onChange={(event) => setAdminEdit((current) => ({ ...current, material_codes: event.target.value }))} placeholder="Código 1-Código 2" />;
+      return null;
+    },
+    onEdit: setInlineEditField,
+    onSave: () => void saveAdminEdit(),
+    onCancel: () => setInlineEditField(null),
+    saving: savingAdminEdit,
+  };
 
   // Poll mientras la creación asíncrona de Google esté en curso (PENDING),
   // para que el badge de sincronización pase solo a SYNCED/FAILED.
@@ -430,6 +798,18 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                   <FileText className="h-3.5 w-3.5" /> Ver en Drive
                 </a>
               )}
+              {user.role === "ADMIN" && wo.status === "COMPLETED" && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="ml-auto"
+                  onClick={() => setShowAdminEdit((current) => !current)}
+                >
+                  <Pencil className="mr-1 h-3.5 w-3.5" />
+                  {showAdminEdit ? "Cerrar edición" : "Editar OT"}
+                </Button>
+              )}
             </div>
             <h1 className="mt-1 text-xl font-bold">{wo.title}</h1>
           </div>
@@ -513,15 +893,27 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
 
           {/* Info card */}
           <Card className="mb-4">
+            <InfoRowEditContext.Provider value={infoRowEditContext}>
             <CardContent className="p-4">
               <InfoRow label="N° OT" value={wo.ot_number} />
               <InfoRow label="Equipo" value={wo.equipment_name} />
               <InfoRow label="Área" value={wo.area_name} />
               <InfoRow label="Sección" value={wo.section_name} />
-              <InfoRow label="Tipo de mantenimiento" value={wo.maintenance_type} />
+              {editableInfoRow(
+                "Tipo de mantenimiento",
+                "maintenance_type",
+                wo.maintenance_type,
+                <select
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={adminEdit.maintenance_type}
+                  onChange={(event) => setAdminEdit((current) => ({ ...current, maintenance_type: event.target.value as WorkOrderRecord["maintenance_type"] }))}
+                >
+                  {MAINTENANCE_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
+                </select>,
+              )}
               <InfoRow
                 label="Controles LOTO / AST"
-                value={(wo.loto_controls || []).map((control) => LOTO_CONTROL_LABELS[control]).join(", ")}
+                value={(wo.loto_controls || []).map((control) => LOTO_CONTROL_LABELS[control]).join(", ") || "Ninguno seleccionado"}
               />
               <InfoRow label="LOTO" value={wo.loto_status === "YES" ? "Sí" : wo.loto_status === "NO" ? "No" : "N/A"} />
               <InfoRow label="Fecha de solicitud" value={formatDateOnly(wo.request_date)} />
@@ -548,7 +940,31 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                   ) : null
                 }
               />
-              <InfoRow label="Tiempo estimado" value={wo.estimated_time} />
+              {wo.status !== "COMPLETED" && <InfoRow label="Tiempo estimado" value={wo.estimated_time} />}
+              {editableInfoRow(
+                "Tiempo trabajado",
+                "worked_time",
+                wo.work_time_mode === "RANGE"
+                  ? `${(wo.work_start_time || "").slice(0, 5)} a ${(wo.work_end_time || "").slice(0, 5)}`
+                  : wo.worked_duration_minutes != null ? `${wo.worked_duration_minutes} minutos` : null,
+                <div className="space-y-2">
+                  <select className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={adminEdit.work_time_mode} onChange={(event) => setAdminEdit((current) => ({ ...current, work_time_mode: event.target.value as WorkTimeMode, work_start_time: "", work_end_time: "", manual_hours: "", manual_minutes: "" }))}>
+                    <option value="RANGE">Desde una hora hasta otra</option>
+                    <option value="MANUAL">Duración manual</option>
+                  </select>
+                  {adminEdit.work_time_mode === "RANGE" ? (
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <Input type="time" value={adminEdit.work_start_time} onChange={(event) => setAdminEdit((current) => ({ ...current, work_start_time: event.target.value }))} />
+                      <Input type="time" value={adminEdit.work_end_time} onChange={(event) => setAdminEdit((current) => ({ ...current, work_end_time: event.target.value }))} />
+                    </div>
+                  ) : (
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      <Input type="number" min="0" step="1" placeholder="Horas" value={adminEdit.manual_hours} onChange={(event) => setAdminEdit((current) => ({ ...current, manual_hours: event.target.value }))} />
+                      <Input type="number" min="0" max="59" step="1" placeholder="Minutos" value={adminEdit.manual_minutes} onChange={(event) => setAdminEdit((current) => ({ ...current, manual_minutes: event.target.value }))} />
+                    </div>
+                  )}
+                </div>,
+              )}
               <InfoRow
                 label={wo.is_external_work ? "Persona externa" : "Responsable"}
                 value={wo.is_external_work
@@ -560,14 +976,17 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                 <InfoRow label="Participantes" value={wo.participant_names.join(", ")} />
               )}
               <InfoRow label="Solicitado por" value={wo.requested_by} />
-              <InfoRow label="Trabajo" value={wo.description || wo.title} />
-              <InfoRow label="Recursos requeridos" value={wo.resources_required} />
-              <InfoRow label="Riesgos" value={wo.risks} />
-              <InfoRow label="Observaciones" value={wo.observations} />
+              {editableInfoRow("Trabajo", "description", wo.description || wo.title, <textarea className="min-h-[70px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={adminEdit.description} onChange={(event) => setAdminEdit((current) => ({ ...current, description: event.target.value }))} />)}
+              {editableInfoRow("Recursos requeridos", "resources_required", wo.resources_required, <textarea className="min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={adminEdit.resources_required} onChange={(event) => setAdminEdit((current) => ({ ...current, resources_required: event.target.value }))} />)}
+              {editableInfoRow("Riesgos", "risks", wo.risks, <textarea className="min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={adminEdit.risks} onChange={(event) => setAdminEdit((current) => ({ ...current, risks: event.target.value }))} />)}
+              {editableInfoRow("Observaciones", "observations", wo.observations, <textarea className="min-h-[60px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={adminEdit.observations} onChange={(event) => setAdminEdit((current) => ({ ...current, observations: event.target.value }))} />)}
               <InfoRow label="N° vale" value={wo.voucher_number} />
+              <InfoRow label="Fecha de vale" value={wo.voucher_date ? formatDateOnly(wo.voucher_date) : null} />
+              <InfoRow label="Códigos de materiales" value={wo.material_codes} />
               <InfoRow label="Creado por" value={wo.created_by_name} />
               <InfoRow label="Creado el" value={wo.created_at ? new Date(wo.created_at).toLocaleString("es-CL") : null} />
             </CardContent>
+            </InfoRowEditContext.Provider>
           </Card>
 
           {user.role === "SUPERVISOR" &&
@@ -660,11 +1079,8 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                     value={`${(wo.work_start_time || "").slice(0, 5)} a ${(wo.work_end_time || "").slice(0, 5)}`}
                   />
                 )}
-                {wo.work_time_mode === "MANUAL" && wo.worked_duration_minutes != null && (
-                  <InfoRow label="Duración manual" value={`${wo.worked_duration_minutes} minutos`} />
-                )}
-                {wo.actual_duration_minutes != null && (
-                  <InfoRow label="Horas declaradas por trabajador" value={`${wo.actual_duration_minutes} minutos`} />
+                {officialDurationMinutes != null && (
+                  <InfoRow label="Duración oficial" value={`${officialDurationMinutes} minutos`} />
                 )}
                 {wo.completion_notes && <InfoRow label="Notas de finalización" value={wo.completion_notes} />}
               </CardContent>
@@ -716,6 +1132,128 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
               )}
             </CardContent>
           </Card>
+
+          {user.role === "ADMIN" && wo.status === "COMPLETED" && showAdminEdit && (
+            <Card className="mb-4 border-amber-200 bg-amber-50/40">
+              <CardContent className="space-y-4 p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="font-semibold text-amber-950">Editar datos de la OT</h3>
+                  <p className="mt-1 text-xs text-amber-900/80">
+                    Modifica solo los campos necesarios antes de aprobar. Los cambios se reflejarán en la OT de Drive.
+                  </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded-md p-1 text-amber-900/70 hover:bg-amber-100"
+                    aria-label="Cerrar edición"
+                    onClick={() => setShowAdminEdit(false)}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium">Descripción del trabajo</label>
+                  <textarea
+                    className="min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={adminEdit.description}
+                    onChange={(event) => setAdminEdit((current) => ({ ...current, description: event.target.value }))}
+                  />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="text-sm font-medium">Sección
+                    <select
+                      className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      value={adminEdit.area_id ?? ""}
+                      onChange={(event) => {
+                        const areaId = event.target.value ? Number(event.target.value) : null;
+                        const section = sections.find((item) => item.id === areaId);
+                        setAdminEdit((current) => ({
+                          ...current,
+                          area_id: areaId,
+                          section_name: section?.name || "",
+                          equipment_id: null,
+                        }));
+                      }}
+                    >
+                      <option value="">Sin sección</option>
+                      {sections.map((section) => (
+                        <option key={section.id} value={section.id}>{section.name}</option>
+                      ))}
+                    </select>
+                    <select
+                      className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      value={adminEdit.equipment_id ?? ""}
+                      onChange={(event) => setAdminEdit((current) => ({ ...current, equipment_id: event.target.value ? Number(event.target.value) : null }))}
+                      disabled={!adminEdit.area_id}
+                    >
+                      <option value="">Seleccionar equipo de la secciÃ³n</option>
+                      {(sections.find((section) => section.id === adminEdit.area_id)?.equipment || []).map((equipment) => (
+                        <option key={equipment.id} value={equipment.id}>{equipment.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-sm font-medium">Tipo de mantenimiento
+                    <select
+                      className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      value={adminEdit.maintenance_type}
+                      onChange={(event) => setAdminEdit((current) => ({ ...current, maintenance_type: event.target.value as WorkOrderRecord["maintenance_type"] }))}
+                    >
+                      {MAINTENANCE_TYPES.map((type) => (
+                        <option key={type.value} value={type.value}>{type.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-sm font-medium">Fecha ejecución<Input type="date" className="mt-1" value={adminEdit.execution_date} onChange={(event) => setAdminEdit((current) => ({ ...current, execution_date: event.target.value }))} /></label>
+                </div>
+                <div className="rounded-md border border-input bg-background/60 p-3">
+                  <p className="text-sm font-semibold">Tiempo trabajado</p>
+                  <p className="mt-1 text-xs text-muted-foreground">Elige una sola forma de registrar las horas: desde / hasta o duración manual.</p>
+                  <select
+                    className="mt-3 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={adminEdit.work_time_mode}
+                    onChange={(event) => setAdminEdit((current) => ({
+                      ...current,
+                      work_time_mode: event.target.value as WorkTimeMode,
+                      work_start_time: "",
+                      work_end_time: "",
+                      manual_hours: "",
+                      manual_minutes: "",
+                    }))}
+                  >
+                    <option value="RANGE">Desde una hora hasta otra</option>
+                    <option value="MANUAL">Duración manual</option>
+                  </select>
+                  {adminEdit.work_time_mode === "RANGE" ? (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <label className="text-sm font-medium">Hora de inicio<Input type="time" className="mt-1" value={adminEdit.work_start_time} onChange={(event) => setAdminEdit((current) => ({ ...current, work_start_time: event.target.value }))} /></label>
+                      <label className="text-sm font-medium">Hora de término<Input type="time" className="mt-1" value={adminEdit.work_end_time} onChange={(event) => setAdminEdit((current) => ({ ...current, work_end_time: event.target.value }))} /></label>
+                    </div>
+                  ) : (
+                    <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                      <label className="text-sm font-medium">Horas<Input type="number" min="0" step="1" className="mt-1" value={adminEdit.manual_hours} onChange={(event) => setAdminEdit((current) => ({ ...current, manual_hours: event.target.value }))} /></label>
+                      <label className="text-sm font-medium">Minutos<Input type="number" min="0" max="59" step="1" className="mt-1" value={adminEdit.manual_minutes} onChange={(event) => setAdminEdit((current) => ({ ...current, manual_minutes: event.target.value }))} /></label>
+                    </div>
+                  )}
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <label className="text-sm font-medium">Folio<Input className="mt-1" value={adminEdit.folio} onChange={(event) => setAdminEdit((current) => ({ ...current, folio: event.target.value }))} /></label>
+                  <label className="text-sm font-medium">N° de vale<Input className="mt-1" value={adminEdit.voucher_number} onChange={(event) => setAdminEdit((current) => ({ ...current, voucher_number: event.target.value }))} /></label>
+                  <label className="text-sm font-medium">Fecha de vale<Input type="date" className="mt-1" value={adminEdit.voucher_date} onChange={(event) => setAdminEdit((current) => ({ ...current, voucher_date: event.target.value }))} /></label>
+                </div>
+                <label className="block text-sm font-medium">Códigos de materiales<Input className="mt-1" value={adminEdit.material_codes} onChange={(event) => setAdminEdit((current) => ({ ...current, material_codes: event.target.value }))} placeholder="Código 1-Código 2-Código 3" /><span className="mt-1 block text-xs font-normal text-muted-foreground">Separa varios códigos con guion (-).</span></label>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <label className="text-sm font-medium">Recursos<textarea className="mt-1 min-h-[70px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={adminEdit.resources_required} onChange={(event) => setAdminEdit((current) => ({ ...current, resources_required: event.target.value }))} /></label>
+                  <label className="text-sm font-medium">Riesgos<textarea className="mt-1 min-h-[70px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={adminEdit.risks} onChange={(event) => setAdminEdit((current) => ({ ...current, risks: event.target.value }))} /></label>
+                  <label className="text-sm font-medium">Observaciones<textarea className="mt-1 min-h-[70px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={adminEdit.observations} onChange={(event) => setAdminEdit((current) => ({ ...current, observations: event.target.value }))} /></label>
+                </div>
+                <Button type="button" onClick={() => void saveAdminEdit()} disabled={savingAdminEdit}>
+                  {savingAdminEdit && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Guardar correcciones
+                </Button>
+              </CardContent>
+            </Card>
+          )}
 
           {/* ── Action Buttons ─────────────────────────────────────────── */}
           {!showConfirm && wo.status === "DRAFT" && !wo.is_hallazgo_report && (

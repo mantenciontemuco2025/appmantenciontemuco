@@ -33,7 +33,11 @@ def _is_in_supervisor_area(wo: WorkOrder, user: User) -> bool:
 
 
 def can_edit(wo: WorkOrder, user: User) -> bool:
-    """ADMIN/SUPERVISOR can edit DRAFT and PENDING OTs. APPROVED/CANCELLED are locked."""
+    """ADMIN/SUPERVISOR can edit every non-terminal OT, including completed OTs.
+
+    This is needed so the administrator can correct worker-entered details
+    before approving a completed OT. APPROVED and CANCELLED remain locked.
+    """
     if wo.status in (WorkOrderStatus.APPROVED, WorkOrderStatus.CANCELLED):
         return False
     return user.role in (UserRole.ADMIN, UserRole.SUPERVISOR) and _is_in_supervisor_area(wo, user)

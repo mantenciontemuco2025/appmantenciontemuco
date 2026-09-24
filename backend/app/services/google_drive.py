@@ -657,6 +657,8 @@ def populate_ot_fields(
     observations: str | None = None,
     folio: str | None = None,
     voucher_number: str | None = None,
+    voucher_date: str | None = None,
+    material_codes: str | None = None,
     requested_by: str | None = None,
     approved_by: str | None = None,
     requested_signature: str | None = None,
@@ -684,6 +686,8 @@ def populate_ot_fields(
         """Display API dates in the Chilean day-month-year format."""
         if not value:
             return ""
+        if hasattr(value, "isoformat"):
+            value = value.isoformat()
         try:
             return datetime.strptime(value[:10], "%Y-%m-%d").strftime("%d-%m-%Y")
         except ValueError:
@@ -706,6 +710,8 @@ def populate_ot_fields(
         "request_date":       _sheet_date(request_date),
         "resources_required": resources_required or "",
         "voucher_number":     voucher_number or "",
+        "voucher_date":       _sheet_date(voucher_date),
+        "material_codes":     material_codes or "",
         "folio":              folio or "",
         "risks":              risks or "",
         "observations":       observations or "",

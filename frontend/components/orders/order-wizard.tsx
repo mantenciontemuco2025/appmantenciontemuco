@@ -37,6 +37,8 @@ interface Form {
   loto_controls: string[];
   folio: string;
   voucher_number: string;
+  voucher_date: string;
+  material_codes: string;
   estimated_time: string;
   external_quote_number: string;
   external_oc_number: string;
@@ -73,6 +75,8 @@ function emptyForm(): Form {
     loto_controls: ["NOT_APPLICABLE"],
     folio: "",
     voucher_number: "",
+    voucher_date: "",
+    material_codes: "",
     estimated_time: "",
     external_quote_number: "",
     external_oc_number: "",
@@ -338,6 +342,8 @@ export function OrderWizard() {
       execution_date: isExternalWork ? (form.execution_date || null) : null,
       folio: isExternalWork ? (form.folio.trim() || null) : null,
       voucher_number: isExternalWork ? (form.voucher_number.trim() || null) : null,
+      voucher_date: isExternalWork ? (form.voucher_date || null) : null,
+      material_codes: isExternalWork ? (form.material_codes.trim() || null) : null,
       estimated_time: isExternalWork ? (form.estimated_time.trim() || null) : null,
       risks: isExternalWork ? (form.risks.trim() || null) : null,
       observations: isExternalWork ? (form.observations.trim() || null) : null,
@@ -721,6 +727,7 @@ export function OrderWizard() {
                 ["external_account_number", "N° cuenta", "Cuenta"],
                 ["external_oc_amount", "Monto OC", "Monto"],
                 ["voucher_number", "N° de vale", "Vale"],
+                ["material_codes", "Códigos de materiales", "Código 1-Código 2"],
               ].map(([key, label, placeholder]) => (
                 <div key={key}>
                   <label className="mb-1.5 block text-sm font-medium">{label}</label>
@@ -728,10 +735,15 @@ export function OrderWizard() {
                     value={form[key as keyof Form] as string}
                     maxLength={80}
                     onChange={(event) => set(key as keyof Form, event.target.value as never)}
-                    placeholder={placeholder}
-                  />
-                </div>
-              ))}
+                  placeholder={placeholder}
+                />
+                {key === "material_codes" && <p className="mt-1 text-xs text-muted-foreground">Separa varios códigos con guion (-).</p>}
+              </div>
+            ))}
+            <div>
+              <label className="mb-1.5 block text-sm font-medium">Fecha de vale</label>
+              <Input type="date" value={form.voucher_date} onChange={(event) => set("voucher_date", event.target.value)} />
+            </div>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">

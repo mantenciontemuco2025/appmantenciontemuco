@@ -254,6 +254,8 @@ export interface WorkOrderRecord {
   execution_date: string | null;
   resources_required: string | null;
   voucher_number: string | null;
+  voucher_date: string | null;
+  material_codes: string | null;
   risks: string | null;
   observations: string | null;
   requested_by: string | null;
@@ -385,6 +387,8 @@ export interface WorkOrderDraft {
   execution_date: string;
   resources_required: string;
   voucher_number: string;
+  voucher_date: string;
+  material_codes: string;
   risks: string;
   observations: string;
   requested_by: string;

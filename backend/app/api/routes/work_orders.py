@@ -394,6 +394,8 @@ def _work_order_to_response(wo: WorkOrder) -> dict:
         "execution_date": wo.execution_date,
         "resources_required": wo.resources_required,
         "voucher_number": wo.voucher_number,
+        "voucher_date": wo.voucher_date,
+        "material_codes": wo.material_codes,
         "risks": wo.risks,
         "observations": wo.observations,
         "requested_by": wo.requested_by,
@@ -847,6 +849,8 @@ async def create_work_order(
         execution_date=payload.execution_date,
         resources_required=payload.resources_required,
         voucher_number=payload.voucher_number,
+        voucher_date=payload.voucher_date,
+        material_codes=payload.material_codes,
         risks=payload.risks,
         observations=payload.observations,
         requested_by=requested_by,
@@ -1271,6 +1275,8 @@ def _payload_from_wo(wo):
         observations = wo.observations
         folio = wo.folio
         voucher_number = wo.voucher_number
+        voucher_date = wo.voucher_date
+        material_codes = wo.material_codes
         external_company = wo.external_company
         external_quote_number = wo.external_quote_number
         external_oc_number = wo.external_oc_number
@@ -1315,6 +1321,12 @@ async def _populate_individual_ot(wo: WorkOrder) -> None:
         observations=wo.observations,
         folio=wo.folio,
         voucher_number=wo.voucher_number,
+            voucher_date=(
+                getattr(wo, "voucher_date", None).isoformat()
+                if getattr(wo, "voucher_date", None)
+                else None
+            ),
+            material_codes=getattr(wo, "material_codes", None),
         is_external_work=uses_external_template,
         external_company=getattr(wo, "external_company", None),
         external_quote_number=getattr(wo, "external_quote_number", None),
@@ -1402,6 +1414,8 @@ async def _sync_ot_and_monthly(db, wo, area, equipment, payload, user_id):
             observations=payload.observations,
             folio=payload.folio,
             voucher_number=payload.voucher_number,
+            voucher_date=payload.voucher_date.isoformat() if payload.voucher_date else None,
+            material_codes=payload.material_codes,
             is_external_work=wo.google_ot_template_kind == "EXTERNAL",
             external_company=wo.external_company,
             external_quote_number=wo.external_quote_number,
@@ -1669,6 +1683,8 @@ async def create_hallazgo(
         worked_duration_minutes=payload.worked_duration_minutes,
         folio=payload.folio.strip() if payload.folio else None,
         voucher_number=payload.voucher_number.strip() if payload.voucher_number else None,
+        voucher_date=payload.voucher_date,
+        material_codes=payload.material_codes.strip() if payload.material_codes else None,
         completed_by_user_id=(current_user.id if payload.report_kind == "COMPLETED" else None),
         completed_at=(now if payload.report_kind == "COMPLETED" else None),
     )
@@ -1759,10 +1775,10 @@ async def update_hallazgo(
     if current_user.role != UserRole.ADMIN and wo.hallazgo_status != "RETURNED":
         raise HTTPException(status_code=400, detail="Solo puedes editar un hallazgo devuelto")
 
-    for field in ("title", "description", "hallazgo_priority", "work_time_mode", "work_start_time", "work_end_time", "worked_duration_minutes", "folio", "voucher_number", "risks", "observations"):
+    for field in ("title", "description", "hallazgo_priority", "work_time_mode", "work_start_time", "work_end_time", "worked_duration_minutes", "folio", "voucher_number", "material_codes", "risks", "observations"):
         value = getattr(payload, field.removeprefix("hallazgo_") if field == "hallazgo_priority" else field, None)
         if value is not None:
-            if field in ("folio", "voucher_number"):
+            if field in ("folio", "voucher_number", "material_codes"):
                 value = value.strip() or None
             setattr(wo, field, value)
     if payload.report_kind is not None:
@@ -1838,6 +1854,10 @@ async def review_hallazgo(
             wo.folio = payload.folio.strip() or None
         if payload.voucher_number is not None:
             wo.voucher_number = payload.voucher_number.strip() or None
+        if "voucher_date" in payload.model_fields_set:
+            wo.voucher_date = payload.voucher_date
+        if "material_codes" in payload.model_fields_set:
+            wo.material_codes = payload.material_codes.strip() if payload.material_codes else None
         if "equipment_id" in payload.model_fields_set:
             _, equipment = await _validate_area_equipment(
                 db, wo.area_id, payload.equipment_id
@@ -2572,7 +2592,7 @@ async def update_work_order(
         wo.equipment_id = payload.equipment_id
     if payload.plant_area is not None:
         wo.plant_area = _validate_plant_area(payload.plant_area)
-    if payload.section_name is not None and not wo.plant_area:
+    if payload.section_name is not None:
         wo.section_name = payload.section_name
     if payload.maintenance_type is not None:
         wo.maintenance_type = payload.maintenance_type.upper()
@@ -2593,6 +2613,18 @@ async def update_work_order(
         wo.work_end_time = payload.work_end_time
     if "worked_duration_minutes" in payload.model_fields_set:
         wo.worked_duration_minutes = payload.worked_duration_minutes
+    if {"work_time_mode", "work_start_time", "work_end_time", "worked_duration_minutes"} & payload.model_fields_set:
+        declared_duration = _duration_from_work_order(wo)
+        wo.estimated_time = (
+            _format_work_duration(declared_duration)
+            if declared_duration is not None
+            else None
+        )
+        # Once an OT is completed, an administrator correction becomes the
+        # official duration used by KPIs and the monthly register. The
+        # original worker value remains available in the audit history.
+        if wo.status == WorkOrderStatus.COMPLETED.value and declared_duration is not None:
+            wo.actual_duration_minutes = float(declared_duration)
     if payload.request_date is not None:
         wo.request_date = payload.request_date
     if payload.execution_date is not None:
@@ -2611,7 +2643,11 @@ async def update_work_order(
     if payload.resources_required is not None:
         wo.resources_required = payload.resources_required
     if payload.voucher_number is not None:
-        wo.voucher_number = payload.voucher_number
+        wo.voucher_number = payload.voucher_number.strip() or None
+    if "voucher_date" in payload.model_fields_set:
+        wo.voucher_date = payload.voucher_date
+    if "material_codes" in payload.model_fields_set:
+        wo.material_codes = payload.material_codes.strip() if payload.material_codes else None
     if "external_executor_name" in payload.model_fields_set:
         wo.external_executor_name = payload.external_executor_name
     if "external_company" in payload.model_fields_set:
@@ -2689,6 +2725,7 @@ async def update_work_order(
         "is_external_work", "external_executor_name", "external_company",
         "external_quote_number", "external_oc_number", "external_invoice_number",
         "external_account_number", "external_oc_amount",
+        "work_time_mode", "work_start_time", "work_end_time", "worked_duration_minutes",
     }
     changed = payload.model_dump(exclude_unset=True)
     monthly_relevant = set(changed) & _changed_monthly_fields
@@ -2701,8 +2738,9 @@ async def update_work_order(
         "title", "description", "area_id", "plant_area", "equipment_id", "section_name",
         "maintenance_type", "loto_status", "loto_controls", "estimated_time", "execution_date",
         "request_date", "resources_required", "risks", "observations",
-        "folio", "voucher_number", "requested_by",
+        "folio", "voucher_number", "voucher_date", "material_codes", "requested_by",
         "responsible_user_id", "participant_user_ids", "participant_names",
+        "work_time_mode", "work_start_time", "work_end_time", "worked_duration_minutes",
         "is_external_work", "external_executor_name", "external_company",
         "external_quote_number", "external_oc_number", "external_invoice_number",
         "external_account_number", "external_oc_amount",
@@ -2953,7 +2991,11 @@ async def fulfill_work_order(
     if payload.resources_required is not None:
         wo.resources_required = payload.resources_required
     if payload.voucher_number is not None:
-        wo.voucher_number = payload.voucher_number
+        wo.voucher_number = payload.voucher_number.strip() or None
+    if "voucher_date" in payload.model_fields_set:
+        wo.voucher_date = payload.voucher_date
+    if "material_codes" in payload.model_fields_set:
+        wo.material_codes = payload.material_codes.strip() if payload.material_codes else None
     if "external_executor_name" in payload.model_fields_set:
         wo.external_executor_name = payload.external_executor_name
     if "external_company" in payload.model_fields_set:
@@ -3035,6 +3077,7 @@ async def fulfill_work_order(
         "estimated_time", "execution_date", "participant_names", "loto_status", "loto_controls",
         "work_time_mode", "work_start_time", "work_end_time", "worked_duration_minutes",
         "risks", "observations", "resources_required", "folio", "voucher_number",
+        "voucher_date", "material_codes",
         "request_date", "external_executor_name", "external_company",
         "external_quote_number", "external_oc_number", "external_invoice_number",
         "external_account_number", "external_oc_amount",
@@ -3122,7 +3165,11 @@ async def autosave_fulfill_work_order(
     if "folio" in fields:
         wo.folio = payload.folio
     if "voucher_number" in fields:
-        wo.voucher_number = payload.voucher_number
+        wo.voucher_number = payload.voucher_number.strip() if payload.voucher_number else None
+    if "voucher_date" in fields:
+        wo.voucher_date = payload.voucher_date
+    if "material_codes" in fields:
+        wo.material_codes = payload.material_codes.strip() if payload.material_codes else None
     if "request_date" in fields:
         wo.request_date = payload.request_date
     if "external_executor_name" in fields:

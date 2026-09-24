@@ -702,6 +702,22 @@ async def test_complete_requires_in_progress(client, seed_data, monkeypatch):
     assert resp.status_code == 400
 
 
+async def test_admin_time_correction_updates_official_duration(client, seed_data, monkeypatch):
+    admin = await get_token(client, "admin@test.com")
+    wo_id = await _to_completed(client, seed_data, monkeypatch, admin)
+
+    resp = await client.patch(
+        f"/api/work-orders/{wo_id}",
+        json={"work_time_mode": "MANUAL", "worked_duration_minutes": 180},
+        headers=auth_headers(admin),
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["worked_duration_minutes"] == 180
+    assert data["actual_duration_minutes"] == 180.0
+    assert data["estimated_time"] == "3 horas"
+
+
 # ── Return ──────────────────────────────────────────────────────────────────
 
 async def test_complete_rejects_two_time_methods(client, seed_data, monkeypatch):

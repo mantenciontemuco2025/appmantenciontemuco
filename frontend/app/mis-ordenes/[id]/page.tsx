@@ -44,6 +44,8 @@ interface FulfillForm {
   observations: string;
   folio: string;
   voucher_number: string;
+  voucher_date: string;
+  material_codes: string;
   external_executor_name: string;
   external_company: string;
   external_quote_number: string;
@@ -97,6 +99,8 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
     observations: "",
     folio: "",
     voucher_number: "",
+    voucher_date: "",
+    material_codes: "",
     external_executor_name: "",
     external_company: "",
     external_quote_number: "",
@@ -179,6 +183,8 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
           observations: data.observations || "",
           folio: data.folio || "",
           voucher_number: data.voucher_number || "",
+          voucher_date: (data.voucher_date || "").slice(0, 10),
+          material_codes: data.material_codes || "",
           external_executor_name: data.external_executor_name || "",
           external_company: data.external_company || "",
           external_quote_number: data.external_quote_number || "",
@@ -316,6 +322,8 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
       observations: values.observations || null,
       folio: values.folio || null,
       voucher_number: values.voucher_number || null,
+      voucher_date: values.voucher_date || null,
+      material_codes: values.material_codes.trim() || null,
       ...(wo?.is_external_work
         ? {
             external_executor_name: values.external_executor_name.trim() || null,
@@ -815,6 +823,23 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                       onChange={(e) => updateFormField("voucher_number", e.target.value)}
                     />
                   </div>
+                  <div>
+                    <label className={labelCls}>Fecha de vale</label>
+                    <Input
+                      type="date"
+                      value={form.voucher_date}
+                      onChange={(e) => updateFormField("voucher_date", e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className={labelCls}>Códigos de materiales</label>
+                    <Input
+                      value={form.material_codes}
+                      onChange={(e) => updateFormField("material_codes", e.target.value)}
+                      placeholder="Código 1-Código 2-Código 3"
+                    />
+                    <p className="mt-1 text-xs text-muted-foreground">Separa varios códigos con guion (-).</p>
+                  </div>
                 </div>
 
                 <Button
@@ -873,6 +898,8 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
               <InfoRow label="Riesgos" value={wo.risks} />
               <InfoRow label="Observaciones" value={wo.observations} />
               <InfoRow label="N° vale" value={wo.voucher_number} />
+              <InfoRow label="Fecha de vale" value={wo.voucher_date ? formatDateOnly(wo.voucher_date) : null} />
+              <InfoRow label="Códigos de materiales" value={wo.material_codes} />
             </CardContent>
           </Card>
 

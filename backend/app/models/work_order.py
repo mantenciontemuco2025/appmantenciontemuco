@@ -98,6 +98,8 @@ class WorkOrder(Base):
     execution_date: Mapped[datetime | None] = mapped_column(Date, nullable=True, index=True)
     resources_required: Mapped[str | None] = mapped_column(Text, nullable=True)
     voucher_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    voucher_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
+    material_codes: Mapped[str | None] = mapped_column(String(500), nullable=True)
     risks: Mapped[str | None] = mapped_column(Text, nullable=True)
     observations: Mapped[str | None] = mapped_column(Text, nullable=True)
     requested_by: Mapped[str | None] = mapped_column(String(200), nullable=True)

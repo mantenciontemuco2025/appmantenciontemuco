@@ -24,6 +24,8 @@ class WorkOrderCreate(BaseModel):
     execution_date: date | None = None
     resources_required: str | None = None
     voucher_number: str | None = None
+    voucher_date: date | None = None
+    material_codes: str | None = Field(default=None, max_length=500)
     risks: str | None = None
     observations: str | None = None
     requested_by: str | None = None
@@ -134,6 +136,8 @@ class HallazgoCreate(BaseModel):
     worked_duration_minutes: int | None = None
     folio: str | None = None
     voucher_number: str | None = None
+    voucher_date: date | None = None
+    material_codes: str | None = Field(default=None, max_length=500)
     loto_controls: list[str] | None = None
     resources_required: str | None = None
     participant_user_ids: list[int] = []
@@ -195,6 +199,8 @@ class HallazgoReviewPayload(BaseModel):
     resources_required: str | None = None
     folio: str | None = None
     voucher_number: str | None = None
+    voucher_date: date | None = None
+    material_codes: str | None = Field(default=None, max_length=500)
 
 
 class HallazgoUpdate(BaseModel):
@@ -208,6 +214,8 @@ class HallazgoUpdate(BaseModel):
     worked_duration_minutes: int | None = None
     folio: str | None = None
     voucher_number: str | None = None
+    voucher_date: date | None = None
+    material_codes: str | None = Field(default=None, max_length=500)
     risks: str | None = None
     observations: str | None = None
     resubmit: bool = False
@@ -229,6 +237,8 @@ class WorkOrderUpdate(BaseModel):
     execution_date: date | None = None
     resources_required: str | None = None
     voucher_number: str | None = None
+    voucher_date: date | None = None
+    material_codes: str | None = Field(default=None, max_length=500)
     risks: str | None = None
     observations: str | None = None
     requested_by: str | None = None
@@ -316,6 +326,8 @@ class WorkOrderResponse(BaseModel):
     execution_date: date | None
     resources_required: str | None
     voucher_number: str | None
+    voucher_date: date | None
+    material_codes: str | None
     risks: str | None
     observations: str | None
     requested_by: str | None

@@ -36,6 +36,8 @@ OT_FIELD_MAP: dict[str, str] = {
     "request_date":       "C17",      # C17:D17 merged — Fecha Solicitud (label B17)
     "resources_required": "B19",      # B19:G20 merged — value block under "RECURSOS..." (B18)
     "voucher_number":     "C21",      # value next to "N° de vale:" label (B21)
+    "voucher_date":       "E21",      # value next to "Fecha Vale:" label (D21)
+    "material_codes":     "G21",      # value next to "Códigos:" label (F21)
     "risks":              "B23",      # B23:G24 merged — value block under "RIESGOS..." (B22)
     "observations":       "B27",      # B27:G28 merged — value block under "OBSERVACIONES" (B26)
     "requested_by":       "B31",      # B31:D33 — "SOLICITADO POR:..." (label+firma built by app)
@@ -65,6 +67,8 @@ EXTERNAL_OT_FIELD_MAP: dict[str, str] = {
     "external_account_number": "C20",
     "external_oc_amount":     "E20",
     "voucher_number":     "C21",
+    "voucher_date":       "E21",
+    "material_codes":     "G21",
     "risks":              "B23",
     "observations":       "B27",
     "requested_by":       "B31",
