@@ -102,6 +102,50 @@ async def test_list_work_orders(client, seed_data, monkeypatch):
     assert orders[0]["ot_number"].startswith("OT-")
 
 
+async def test_list_work_orders_searches_all_pages_and_responsible(
+    client, seed_data, monkeypatch
+):
+    """Search parameters are applied by the API, including assigned workers."""
+    monkeypatch.setattr(
+        "app.api.routes.work_orders.drive_service.create_ot_file",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("mocked")),
+    )
+    token = await get_token(client, "admin@test.com")
+    common = {
+        "plant_area": "CEBADA",
+        "area_id": seed_data["area"].id,
+        "equipment_id": seed_data["equipment"].id,
+        "maintenance_type": "CORRECTIVE",
+    }
+    first = await client.post(
+        "/api/work-orders",
+        json={**common, "title": "Bomba de transferencia", "responsible_user_id": seed_data["worker"].id},
+        headers=auth_headers(token),
+    )
+    second = await client.post(
+        "/api/work-orders",
+        json={**common, "title": "Válvula de retorno", "responsible_user_id": seed_data["worker_jara"].id},
+        headers=auth_headers(token),
+    )
+    assert first.status_code == 201
+    assert second.status_code == 201
+
+    search = await client.get(
+        "/api/work-orders?search=transferencia&limit=1",
+        headers=auth_headers(token),
+    )
+    assert search.status_code == 200
+    assert [item["title"] for item in search.json()] == ["Bomba de transferencia"]
+
+    responsible = await client.get(
+        "/api/work-orders?responsible=Jara&limit=100",
+        headers=auth_headers(token),
+    )
+    assert responsible.status_code == 200
+    assert responsible.json()
+    assert all("jara" in (item["responsible_user_name"] or "").lower() for item in responsible.json())
+
+
 async def test_admin_delete_removes_ot_and_related_records(
     client, seed_data, db_session_factory, monkeypatch
 ):

@@ -1490,6 +1490,8 @@ async def list_work_orders(
     current_user: User = Depends(get_current_user),
     status_filter: str | None = Query(default=None, alias="status"),
     area_id: int | None = Query(default=None),
+    search: str | None = Query(default=None, min_length=1, max_length=100),
+    responsible: str | None = Query(default=None, min_length=1, max_length=100),
     overdue: bool = Query(default=False),
     created_by_me: bool = Query(default=False),
     pending_review: bool = Query(default=False),
@@ -1548,6 +1550,24 @@ async def list_work_orders(
             WorkOrder.supervisor_review_status.in_(
                 (SupervisorReviewStatus.PENDING.value, SupervisorReviewStatus.CLAIMED.value)
             ),
+        )
+
+    if search and search.strip():
+        search_value = f"%{search.strip()}%"
+        query = query.where(
+            or_(
+                WorkOrder.ot_number.ilike(search_value),
+                WorkOrder.title.ilike(search_value),
+            )
+        )
+
+    if responsible and responsible.strip():
+        responsible_value = f"%{responsible.strip()}%"
+        query = query.where(
+            or_(
+                WorkOrder.responsible_user.has(User.full_name.ilike(responsible_value)),
+                WorkOrder.external_executor_name.ilike(responsible_value),
+            )
         )
 
     if overdue:

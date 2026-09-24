@@ -65,6 +65,8 @@ export default function OrdenesPage() {
 
   useEffect(() => {
     if (!user) return;
+    if (activeTab === "OVERDUE") return;
+    const timer = setTimeout(() => {
     setOrders([]);
     setSelected(new Set());
     setHasMore(true);
@@ -75,20 +77,27 @@ export default function OrdenesPage() {
       .getCached<WorkOrderCounter>(`/api/work-orders/status-counts?view=${activeView}`, 15000)
       .then(setCounter)
       .catch(() => setCounter(null));
+    }, 250);
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, activeView]);
+  }, [user, activeView, activeTab, searchOT, searchResponsible]);
 
   // Carga el panel de Vencidas cuando se activa la pestaña (una vez por visita).
   useEffect(() => {
-    if (!user || activeTab !== "OVERDUE" || loadingOverdue || overdue.length > 0) return;
-    setLoadingOverdue(true);
-    api
-      .get<WorkOrderListItem[]>("/api/work-orders?overdue=true&limit=100")
-      .then(setOverdue)
-      .catch((err) => setError(err instanceof Error ? err.message : "Error al cargar vencidas"))
-      .finally(() => setLoadingOverdue(false));
+    if (!user || activeTab !== "OVERDUE") return;
+    const timer = setTimeout(() => {
+      setLoadingOverdue(true);
+      const filters = buildListFilters(0);
+      filters.set("overdue", "true");
+      api
+        .get<WorkOrderListItem[]>(`/api/work-orders?${filters.toString()}`)
+        .then(setOverdue)
+        .catch((err) => setError(err instanceof Error ? err.message : "Error al cargar vencidas"))
+        .finally(() => setLoadingOverdue(false));
+    }, 250);
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
+  }, [user, activeTab, activeView, searchOT, searchResponsible]);
 
   // Poll mientras alguna OT visible esté en sincronización asíncrona (PENDING),
   // para que el badge pase solo a SYNCED/FAILED sin recargar manualmente.
@@ -118,10 +127,7 @@ export default function OrdenesPage() {
     try {
       // Ventana acotada — nunca una lista infinita. "Cargar más" agrega el
       // siguiente tramo vía offset hasta llegar al final.
-      const filters = new URLSearchParams({ limit: String(PAGE_SIZE), offset: "0" });
-      if (activeView === "CREATED_BY_ME") filters.set("created_by_me", "true");
-      if (activeView === "PENDING_REVIEW") filters.set("pending_review", "true");
-      if (activeView === "SUPERVISOR_VALIDATION") filters.set("supervisor_validation_pending", "true");
+      const filters = buildListFilters(0);
       const page = await api.get<WorkOrderListItem[]>(
         `/api/work-orders?${filters.toString()}`
       );
@@ -144,10 +150,7 @@ export default function OrdenesPage() {
     const offset = orders.length;
     setLoadingMore(true);
     try {
-      const filters = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
-      if (activeView === "CREATED_BY_ME") filters.set("created_by_me", "true");
-      if (activeView === "PENDING_REVIEW") filters.set("pending_review", "true");
-      if (activeView === "SUPERVISOR_VALIDATION") filters.set("supervisor_validation_pending", "true");
+      const filters = buildListFilters(offset);
       const page = await api.get<WorkOrderListItem[]>(
         `/api/work-orders?${filters.toString()}`
       );
@@ -161,6 +164,17 @@ export default function OrdenesPage() {
     } finally {
       if (requestId === ordersRequestRef.current) setLoadingMore(false);
     }
+  }
+
+  function buildListFilters(offset: number) {
+    const filters = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
+    if (activeTab !== "ALL" && activeTab !== "OVERDUE") filters.set("status", activeTab);
+    if (activeView === "CREATED_BY_ME") filters.set("created_by_me", "true");
+    if (activeView === "PENDING_REVIEW") filters.set("pending_review", "true");
+    if (activeView === "SUPERVISOR_VALIDATION") filters.set("supervisor_validation_pending", "true");
+    if (searchOT.trim()) filters.set("search", searchOT.trim());
+    if (searchResponsible.trim()) filters.set("responsible", searchResponsible.trim());
+    return filters;
   }
 
   async function syncMonthly(id: number) {
@@ -228,12 +242,8 @@ export default function OrdenesPage() {
   // Filtros en cliente sobre la ventana cargada (tabs + búsqueda).
   // La pestaña "Vencidas" usa su propia ventana consultada al servidor.
   const source = activeTab === "OVERDUE" ? overdue : orders;
-  const filtered = source.filter((o) => {
-    if (activeTab !== "ALL" && activeTab !== "OVERDUE" && o.status !== activeTab) return false;
-    if (searchOT && !o.ot_number.toLowerCase().includes(searchOT.toLowerCase()) && !o.title.toLowerCase().includes(searchOT.toLowerCase())) return false;
-    if (searchResponsible && o.responsible_user_name && !o.responsible_user_name.toLowerCase().includes(searchResponsible.toLowerCase())) return false;
-    return true;
-  });
+  const filtered = source;
+  const hasSearch = Boolean(searchOT.trim() || searchResponsible.trim());
 
   function tabCount(key: TabKey): number {
     if (key === "OVERDUE") return counter?.overdue_count ?? overdue.length;
@@ -587,7 +597,9 @@ export default function OrdenesPage() {
           {activeTab !== "OVERDUE" && (
           <div className="mt-4 flex flex-col items-center gap-3">
             <p className="text-xs text-muted-foreground">
-              Mostrando {filtered.length} de {totalForActiveTab} OTs
+              {hasSearch
+                ? `Mostrando ${filtered.length}${hasMore ? "+" : ""} resultados para la búsqueda`
+                : `Mostrando ${filtered.length} de ${totalForActiveTab} OTs`}
             </p>
             {hasMore && (
               <Button variant="outline" onClick={loadMore} disabled={loadingMore} className="w-full sm:w-auto">
