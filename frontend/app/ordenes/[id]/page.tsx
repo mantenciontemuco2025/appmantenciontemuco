@@ -26,6 +26,7 @@ import { WORK_ORDER_AREAS } from "@/lib/work-order-areas";
 import { WorkOrderEvidencePanel } from "@/components/maintenance/work-order-evidence";
 import { HallazgoReviewPanel } from "@/components/orders/hallazgo-review-panel";
 import { HallazgoEditPanel } from "@/components/orders/hallazgo-edit-panel";
+import { MaterialCodePicker } from "@/components/orders/material-code-picker";
 
 interface InfoRowEditContextValue {
   canEdit: boolean;
@@ -472,7 +473,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
       if (field === "execution_date") return <Input type="date" value={adminEdit.execution_date} onChange={(event) => setAdminEdit((current) => ({ ...current, execution_date: event.target.value }))} />;
       if (field === "voucher_date") return <Input type="date" value={adminEdit.voucher_date} onChange={(event) => setAdminEdit((current) => ({ ...current, voucher_date: event.target.value }))} />;
       if (field === "voucher_number") return <Input value={adminEdit.voucher_number} onChange={(event) => setAdminEdit((current) => ({ ...current, voucher_number: event.target.value }))} />;
-      if (field === "material_codes") return <Input value={adminEdit.material_codes} onChange={(event) => setAdminEdit((current) => ({ ...current, material_codes: event.target.value }))} placeholder="Código 1-Código 2" />;
+      if (field === "material_codes") return <MaterialCodePicker value={adminEdit.material_codes} onChange={(value) => setAdminEdit((current) => ({ ...current, material_codes: value }))} />;
       return null;
     },
     onEdit: setInlineEditField,
@@ -1244,7 +1245,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                   <label className="text-sm font-medium">N° de vale<Input className="mt-1" value={adminEdit.voucher_number} onChange={(event) => setAdminEdit((current) => ({ ...current, voucher_number: event.target.value }))} /></label>
                   <label className="text-sm font-medium">Fecha de vale<Input type="date" className="mt-1" value={adminEdit.voucher_date} onChange={(event) => setAdminEdit((current) => ({ ...current, voucher_date: event.target.value }))} /></label>
                 </div>
-                <label className="block text-sm font-medium">Códigos de materiales<Input className="mt-1" value={adminEdit.material_codes} onChange={(event) => setAdminEdit((current) => ({ ...current, material_codes: event.target.value }))} placeholder="Código 1-Código 2-Código 3" /><span className="mt-1 block text-xs font-normal text-muted-foreground">Separa varios códigos con guion (-).</span></label>
+                <MaterialCodePicker value={adminEdit.material_codes} onChange={(value) => setAdminEdit((current) => ({ ...current, material_codes: value }))} />
                 <div className="grid gap-3 sm:grid-cols-3">
                   <label className="text-sm font-medium">Recursos<textarea className="mt-1 min-h-[70px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={adminEdit.resources_required} onChange={(event) => setAdminEdit((current) => ({ ...current, resources_required: event.target.value }))} /></label>
                   <label className="text-sm font-medium">Riesgos<textarea className="mt-1 min-h-[70px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={adminEdit.risks} onChange={(event) => setAdminEdit((current) => ({ ...current, risks: event.target.value }))} /></label>

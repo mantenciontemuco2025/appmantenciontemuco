@@ -321,6 +321,14 @@ export interface WorkOrderRecord {
   updated_at: string;
 }
 
+export interface MaterialCatalogItem {
+  id: number;
+  code: string;
+  description: string;
+  family: string;
+  active: boolean;
+}
+
 // GET /api/work-orders/counter — admin counting panel
 export interface WorkOrderCounter {
   current_year: number;

@@ -8,6 +8,7 @@ import { useAuth } from "@/lib/auth";
 import type { AreaNode, WorkOrderRecord } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { VoiceDictation } from "@/components/maintenance/voice-dictation";
+import { MaterialCodePicker } from "@/components/orders/material-code-picker";
 import { WORK_ORDER_AREAS } from "@/lib/work-order-areas";
 
 type HallazgoKind = "COMPLETED" | "REQUIRES_ATTENTION";
@@ -60,7 +61,7 @@ export function HallazgoWizard() {
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const [form, setForm] = useState({
     title: "", description: "", maintenance_type: "CORRECTIVE", priority: "NORMAL",
-    report_date: today(), folio: "", voucher_number: "", start: "", end: "", duration_hours: "", duration_minutes: "", resources: "", risks: "", observations: "",
+    report_date: today(), folio: "", voucher_number: "", material_codes: "", start: "", end: "", duration_hours: "", duration_minutes: "", resources: "", risks: "", observations: "",
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -166,6 +167,7 @@ export function HallazgoWizard() {
         plant_area: plantArea, equipment_id: equipmentId || null,
         report_kind: kind, priority: form.priority, report_date: form.report_date,
         folio: form.folio.trim() || null, voucher_number: form.voucher_number.trim() || null,
+        material_codes: form.material_codes.trim() || null,
         risks: form.risks || null, observations: form.observations || null,
         ...(kind === "COMPLETED" ? {
           maintenance_type: form.maintenance_type, loto_controls: lotoControls,
@@ -226,6 +228,7 @@ export function HallazgoWizard() {
         {timeMode === "RANGE" ? <div className="grid gap-3 md:grid-cols-2"><label className="text-sm">Hora de inicio<input type="time" className="mt-1 w-full rounded-md border px-3 py-2" value={form.start} onChange={(e) => setField("start", e.target.value)} /></label><label className="text-sm">Hora de término<input type="time" className="mt-1 w-full rounded-md border px-3 py-2" value={form.end} onChange={(e) => setField("end", e.target.value)} /></label>{rangeDuration(form.start, form.end) !== null && <p className="text-sm text-muted-foreground md:col-span-2">Duración calculada: <strong>{durationLabel(rangeDuration(form.start, form.end) || 0)}</strong></p>}</div> : <div><span className="block text-sm font-medium">Duración manual</span><div className="mt-1 grid gap-3 sm:grid-cols-2"><label className="text-sm">Horas<input type="number" min="0" step="1" className="mt-1 w-full rounded-md border px-3 py-2" value={form.duration_hours} onChange={(e) => setField("duration_hours", e.target.value)} placeholder="0" /></label><label className="text-sm">Minutos<input type="number" min="0" max="59" step="1" className="mt-1 w-full rounded-md border px-3 py-2" value={form.duration_minutes} onChange={(e) => setField("duration_minutes", e.target.value)} placeholder="0 a 59" /></label></div></div>}
         <div className="rounded-lg border p-4"><span className="mb-2 block text-sm font-medium">LOTO / Bloqueo / AST</span><div className="grid gap-2 sm:grid-cols-2">{LOTO_OPTIONS.map(([value, label]) => <label key={value} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={lotoControls.includes(value)} onChange={() => toggleLoto(value)} />{lotoControls.includes(value) && <Check className="h-3 w-3 text-primary" />}{label}</label>)}</div></div>
         <div><label className="block text-sm font-medium">Recursos, repuestos o herramientas utilizados</label><textarea className="mt-1 min-h-20 w-full rounded-md border bg-background px-3 py-2" value={form.resources} onChange={(e) => setField("resources", e.target.value)} placeholder="Ej. Sello mecánico, grasa, herramientas..." /><VoiceDictation onTranscript={(text) => appendField("resources", text)} /></div>
+        <MaterialCodePicker value={form.material_codes} onChange={(value) => setField("material_codes", value)} />
         <div><span className="mb-2 block text-sm font-medium">Participantes</span><div className="grid gap-2 sm:grid-cols-2">{workers.map((worker) => <label key={worker.id} className="flex items-center gap-2 rounded-md border p-2 text-sm"><input type="checkbox" checked={participantIds.includes(worker.id)} onChange={() => toggleParticipant(worker.id)} />{worker.full_name}</label>)}</div></div>
       </>}
 

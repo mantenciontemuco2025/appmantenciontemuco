@@ -12,6 +12,7 @@ import { Select } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Card, CardContent } from "@/components/ui/card";
 import { VoiceDictation } from "@/components/maintenance/voice-dictation";
+import { MaterialCodePicker } from "@/components/orders/material-code-picker";
 import { todayDateInputValue } from "@/lib/utils";
 import { WORK_ORDER_AREAS } from "@/lib/work-order-areas";
 
@@ -730,15 +731,23 @@ export function OrderWizard() {
                 ["material_codes", "Códigos de materiales", "Código 1-Código 2"],
               ].map(([key, label, placeholder]) => (
                 <div key={key}>
-                  <label className="mb-1.5 block text-sm font-medium">{label}</label>
-                  <Input
-                    value={form[key as keyof Form] as string}
-                    maxLength={80}
-                    onChange={(event) => set(key as keyof Form, event.target.value as never)}
-                  placeholder={placeholder}
-                />
-                {key === "material_codes" && <p className="mt-1 text-xs text-muted-foreground">Separa varios códigos con guion (-).</p>}
-              </div>
+                  {key === "material_codes" ? (
+                    <MaterialCodePicker
+                      value={form.material_codes}
+                      onChange={(value) => set("material_codes", value)}
+                    />
+                  ) : (
+                    <>
+                      <label className="mb-1.5 block text-sm font-medium">{label}</label>
+                      <Input
+                        value={form[key as keyof Form] as string}
+                        maxLength={80}
+                        onChange={(event) => set(key as keyof Form, event.target.value as never)}
+                        placeholder={placeholder}
+                      />
+                    </>
+                  )}
+                </div>
             ))}
             <div>
               <label className="mb-1.5 block text-sm font-medium">Fecha de vale</label>

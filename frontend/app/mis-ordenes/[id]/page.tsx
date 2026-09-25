@@ -22,6 +22,7 @@ import { PageLoading } from "@/components/ui/page-loading";
 import { formatDurationLong, formatDateOnly, todayDateInputValue } from "@/lib/utils";
 import { LOTO_CONTROL_OPTIONS } from "@/lib/loto";
 import { WorkOrderEvidencePanel } from "@/components/maintenance/work-order-evidence";
+import { MaterialCodePicker } from "@/components/orders/material-code-picker";
 
 const inputCls =
   "w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
@@ -831,15 +832,10 @@ export default function MisOrdenDetailPage({ params }: { params: Promise<{ id: s
                       onChange={(e) => updateFormField("voucher_date", e.target.value)}
                     />
                   </div>
-                  <div>
-                    <label className={labelCls}>Códigos de materiales</label>
-                    <Input
-                      value={form.material_codes}
-                      onChange={(e) => updateFormField("material_codes", e.target.value)}
-                      placeholder="Código 1-Código 2-Código 3"
-                    />
-                    <p className="mt-1 text-xs text-muted-foreground">Separa varios códigos con guion (-).</p>
-                  </div>
+                  <MaterialCodePicker
+                    value={form.material_codes}
+                    onChange={(value) => updateFormField("material_codes", value)}
+                  />
                 </div>
 
                 <Button

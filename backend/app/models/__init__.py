@@ -12,6 +12,7 @@ from app.models.push_subscription import PushSubscription
 from app.models.supervisor_area import supervisor_areas
 from app.models.worker_column import WorkerColumn
 from app.models.work_order_evidence import WorkOrderEvidence
+from app.models.material_catalog import MaterialCatalog
 from app.models.water_register import (
     WaterDqoSample,
     WaterRegisterBaseline,
@@ -36,6 +37,7 @@ __all__ = [
     "supervisor_areas",
     "WorkerColumn",
     "WorkOrderEvidence",
+    "MaterialCatalog",
     "WaterRegisterBaseline",
     "WaterRegisterRecord",
     "WaterMeterReading",

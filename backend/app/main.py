@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.api.routes import auth, users, catalogs, maintenance, audit, admin, work_orders, notifications, push_subscriptions, kpis, water_register
+from app.api.routes import auth, users, catalogs, maintenance, audit, admin, materials, work_orders, notifications, push_subscriptions, kpis, water_register
 from app.services import email_service, push_service
 
 
@@ -45,6 +45,8 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(catalogs.router)
+app.include_router(materials.router)
+app.include_router(materials.admin_router)
 app.include_router(maintenance.router)
 app.include_router(work_orders.router)
 app.include_router(notifications.router)
