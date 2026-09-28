@@ -369,6 +369,7 @@ export interface WorkOrderListItem {
   is_historical?: boolean;
   original_ot_number?: string | null;
   classification_pending?: boolean;
+  classification_status?: "WITHOUT_AREA" | "WITHOUT_SECTION" | "WITHOUT_EQUIPMENT" | "COMPLETE";
   is_hallazgo_report?: boolean;
   hallazgo_folio?: string | null;
   hallazgo_kind?: "COMPLETED" | "REQUIRES_ATTENTION" | null;

@@ -312,6 +312,17 @@ def _display_section_name(wo: WorkOrder) -> str | None:
     return wo.section_name
 
 
+def _classification_status(wo: WorkOrder) -> str:
+    """Return the first missing catalog level for a historical OT."""
+    if not wo.plant_area:
+        return "WITHOUT_AREA"
+    if wo.area_id is None:
+        return "WITHOUT_SECTION"
+    if wo.equipment_id is None:
+        return "WITHOUT_EQUIPMENT"
+    return "COMPLETE"
+
+
 def _validate_plant_area(value: str | None) -> str:
     normalized = (value or "").strip().upper()
     if not normalized:
@@ -413,7 +424,8 @@ def _work_order_to_response(wo: WorkOrder) -> dict:
         "ot_number": wo.ot_number,
         "is_historical": wo.is_historical,
         "original_ot_number": wo.original_ot_number,
-        "classification_pending": bool(wo.is_historical and wo.area_id is None),
+        "classification_pending": bool(wo.is_historical and _classification_status(wo) != "COMPLETE"),
+        "classification_status": _classification_status(wo) if wo.is_historical else "COMPLETE",
         "is_hallazgo_report": wo.is_hallazgo_report,
         "hallazgo_folio": wo.hallazgo_folio,
         "hallazgo_kind": wo.hallazgo_kind,
@@ -1030,15 +1042,59 @@ async def import_historical_work_orders(
 
 @router.get("/historical/pending-classification", response_model=list[WorkOrderListResponse])
 async def list_historical_pending_classification(
+    search: str | None = Query(default=None, min_length=1),
+    date_from: _date | None = Query(default=None),
+    date_to: _date | None = Query(default=None),
+    responsible_user_id: int | None = Query(default=None, ge=1),
+    classification_status: Literal[
+        "PENDING", "WITHOUT_AREA", "WITHOUT_SECTION", "WITHOUT_EQUIPMENT", "COMPLETE", "ALL"
+    ] = Query(default="PENDING"),
+    sort_direction: Literal["asc", "desc"] = Query(default="asc"),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_roles(UserRole.ADMIN)),
 ):
-    """List imported historical OTs that still need area/section/equipment."""
-    result = await db.execute(
-        _list_query()
-        .where(WorkOrder.is_historical.is_(True), WorkOrder.area_id.is_(None))
-        .order_by(WorkOrder.execution_date.asc(), WorkOrder.id.asc())
-    )
+    """List historical OTs with database-side filters for classification."""
+    query = _list_query().where(WorkOrder.is_historical.is_(True))
+
+    if search and search.strip():
+        pattern = f"%{search.strip()}%"
+        query = query.where(or_(
+            WorkOrder.ot_number.ilike(pattern),
+            WorkOrder.original_ot_number.ilike(pattern),
+            WorkOrder.title.ilike(pattern),
+            WorkOrder.description.ilike(pattern),
+            WorkOrder.equipment.has(Equipment.name.ilike(pattern)),
+            WorkOrder.responsible_user.has(User.full_name.ilike(pattern)),
+        ))
+    if date_from is not None:
+        query = query.where(WorkOrder.execution_date >= date_from)
+    if date_to is not None:
+        query = query.where(WorkOrder.execution_date <= date_to)
+    if responsible_user_id is not None:
+        query = query.where(WorkOrder.responsible_user_id == responsible_user_id)
+
+    status_filters = {
+        "WITHOUT_AREA": WorkOrder.plant_area.is_(None),
+        "WITHOUT_SECTION": WorkOrder.area_id.is_(None),
+        "WITHOUT_EQUIPMENT": WorkOrder.equipment_id.is_(None),
+        "COMPLETE": (
+            WorkOrder.plant_area.is_not(None)
+            & WorkOrder.area_id.is_not(None)
+            & WorkOrder.equipment_id.is_not(None)
+        ),
+    }
+    if classification_status == "PENDING":
+        query = query.where(or_(
+            WorkOrder.plant_area.is_(None),
+            WorkOrder.area_id.is_(None),
+            WorkOrder.equipment_id.is_(None),
+        ))
+    elif classification_status in status_filters:
+        query = query.where(status_filters[classification_status])
+
+    date_order = WorkOrder.execution_date.asc() if sort_direction == "asc" else WorkOrder.execution_date.desc()
+    id_order = WorkOrder.id.asc() if sort_direction == "asc" else WorkOrder.id.desc()
+    result = await db.execute(query.order_by(date_order.nulls_last(), id_order))
     orders = result.scalars().all()
     return [
         WorkOrderListResponse(
@@ -1046,12 +1102,13 @@ async def list_historical_pending_classification(
             ot_number=wo.ot_number,
             is_historical=wo.is_historical,
             original_ot_number=wo.original_ot_number,
-            classification_pending=True,
+            classification_pending=_classification_status(wo) != "COMPLETE",
+            classification_status=_classification_status(wo),
             title=wo.title,
-            area_name=None,
-            plant_area=None,
-            equipment_name=None,
-            section_name=None,
+            area_name=_display_area_name(wo),
+            plant_area=wo.plant_area,
+            equipment_name=wo.equipment.name if wo.equipment else None,
+            section_name=_display_section_name(wo),
             maintenance_type=wo.maintenance_type,
             loto_status=wo.loto_status,
             status=wo.status,

@@ -151,6 +151,17 @@ async def test_admin_imports_unclassified_historical_rows_and_lists_pending(
     assert pending.json()[0]["area_name"] is None
     assert pending.json()[0]["responsible_user_name"] == "Wilson Ortiz"
 
+    filtered = await client.get(
+        "/api/work-orders/historical/pending-classification"
+        "?search=Bomba&date_from=2025-06-01&date_to=2025-06-30"
+        "&responsible_user_id=" + str(pending.json()[0]["responsible_user_id"])
+        + "&classification_status=WITHOUT_AREA&sort_direction=desc",
+        headers=auth_headers(admin_token),
+    )
+    assert filtered.status_code == 200, filtered.text
+    assert len(filtered.json()) == 1
+    assert filtered.json()[0]["classification_status"] == "WITHOUT_AREA"
+
     duplicate = await client.post(
         "/api/work-orders/historical/import",
         json={

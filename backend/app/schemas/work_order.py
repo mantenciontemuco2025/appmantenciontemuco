@@ -524,6 +524,7 @@ class WorkOrderListResponse(BaseModel):
     is_historical: bool = False
     original_ot_number: str | None = None
     classification_pending: bool = False
+    classification_status: str = "COMPLETE"
     is_hallazgo_report: bool = False
     hallazgo_folio: str | None = None
     hallazgo_kind: str | None = None
