@@ -1,5 +1,6 @@
 from app.models.user import User
 from app.models.area import Area
+from app.models.plant_area import PlantArea, plant_area_sections
 from app.models.equipment import Equipment
 from app.models.maintenance import MaintenanceRecord, maintenance_participants
 from app.models.work_order import WorkOrder
@@ -23,6 +24,8 @@ from app.models.water_register import (
 __all__ = [
     "User",
     "Area",
+    "PlantArea",
+    "plant_area_sections",
     "Equipment",
     "MaintenanceRecord",
     "maintenance_participants",

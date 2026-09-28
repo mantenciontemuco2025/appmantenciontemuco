@@ -21,3 +21,12 @@ class Area(Base):
     )
 
     equipment = relationship("Equipment", back_populates="area", lazy="selectin")
+    # ``Area`` is the legacy section catalog. Keep its IDs stable and add a
+    # many-to-many link so a section can legitimately exist in more than one
+    # plant area without breaking existing OTs or supervisor assignments.
+    plant_areas = relationship(
+        "PlantArea",
+        secondary="plant_area_sections",
+        back_populates="sections",
+        lazy="selectin",
+    )

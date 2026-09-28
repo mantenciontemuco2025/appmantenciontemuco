@@ -58,6 +58,12 @@ class WorkOrder(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     ot_number: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    is_historical: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False, index=True
+    )
+    original_ot_number: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, index=True
+    )
     # Reporte provisional: usa HALL-YYYY-NNNN hasta que el administrador lo acepte.
     is_hallazgo_report: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     hallazgo_folio: Mapped[str | None] = mapped_column(String(30), unique=True, nullable=True)

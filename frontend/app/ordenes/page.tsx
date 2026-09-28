@@ -485,6 +485,11 @@ export default function OrdenesPage() {
                           />
                         )}
                         <span className="font-mono text-sm font-bold text-primary">{o.ot_number}</span>
+                        {o.is_historical && (
+                          <span className="inline-flex items-center rounded-full bg-slate-100 text-slate-700 px-2.5 py-0.5 text-xs font-medium">
+                            Histórica{o.original_ot_number ? ` · original ${o.original_ot_number}` : ""}
+                          </span>
+                        )}
                         <StatusBadge status={o.status} />
                         {o.submitted_for_review && (
                           <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-800 px-2.5 py-0.5 text-xs font-medium">

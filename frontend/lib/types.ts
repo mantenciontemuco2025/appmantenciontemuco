@@ -2,7 +2,7 @@ export type UserRole = "ADMIN" | "SUPERVISOR" | "WORKER";
 export type WaterRegisterAccess = "NONE" | "VIEW" | "EDIT";
 
 export type MaintenanceType = "PREVENTIVE" | "CORRECTIVE" | "PREDICTIVE" | "PROYECTO" | "MONTAJE" | "URGENTE";
-export type SyncStatus = "PENDING" | "SYNCED" | "FAILED";
+export type SyncStatus = "PENDING" | "SYNCED" | "FAILED" | "NOT_APPLICABLE";
 export type LotoControl =
   | "LOTO_BLOQUEO"
   | "AST"
@@ -36,6 +36,10 @@ export interface WorkerColumn {
 export interface EquipmentNode {
   id: number;
   name: string;
+  inventory_code?: string | null;
+  category?: string | null;
+  location?: string | null;
+  operational_status?: string | null;
 }
 
 // Catalog tree: Area -> Equipment (directly, no sections level)
@@ -47,6 +51,23 @@ export interface AreaNode {
 
 // GET /api/catalogs/tree returns a bare array of areas with nested equipment
 export type CatalogTreeResponse = AreaNode[];
+
+export interface PlantAreaNode {
+  id: number;
+  name: string;
+  sections: AreaNode[];
+}
+
+export interface InventoryImportResult {
+  received: number;
+  areas_created: number;
+  sections_created: number;
+  links_created: number;
+  equipment_created: number;
+  equipment_updated: number;
+  skipped: number;
+  errors: string[];
+}
 
 export interface KpiSummary {
   total_ots: number;
@@ -228,6 +249,8 @@ export type SupervisorReviewStatus = "NOT_REQUIRED" | "PENDING" | "CLAIMED" | "A
 export interface WorkOrderRecord {
   id: number;
   ot_number: string;
+  is_historical: boolean;
+  original_ot_number: string | null;
   is_hallazgo_report: boolean;
   hallazgo_folio: string | null;
   hallazgo_kind: "COMPLETED" | "REQUIRES_ATTENTION" | null;
@@ -343,6 +366,8 @@ export interface WorkOrderCounter {
 export interface WorkOrderListItem {
   id: number;
   ot_number: string;
+  is_historical?: boolean;
+  original_ot_number?: string | null;
   is_hallazgo_report?: boolean;
   hallazgo_folio?: string | null;
   hallazgo_kind?: "COMPLETED" | "REQUIRES_ATTENTION" | null;

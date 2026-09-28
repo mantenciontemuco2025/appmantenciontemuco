@@ -1,11 +1,61 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Check, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
+import * as XLSX from "xlsx";
+import { Check, FileSpreadsheet, Loader2, Pencil, Plus, Trash2, Upload, X } from "lucide-react";
 import { api } from "@/lib/api";
-import type { AreaNode, EquipmentNode } from "@/lib/types";
+import type { AreaNode, EquipmentNode, InventoryImportResult } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+
+type InventoryImportItem = {
+  inventory_code: string;
+  plant_area: string;
+  section: string;
+  equipment: string;
+  category?: string;
+  location?: string;
+  operational_status?: string;
+};
+
+function normalizeHeader(value: unknown) {
+  return String(value ?? "").trim().normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+}
+
+function cellText(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+async function parseInventoryWorkbook(file: File): Promise<InventoryImportItem[]> {
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", raw: false });
+  const sheetName = workbook.SheetNames.find((name) => normalizeHeader(name) === "INVENTARIO") || workbook.SheetNames[0];
+  const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], { header: 1, defval: "", raw: false });
+  const headerIndex = rows.findIndex((row) => {
+    const headers = row.map(normalizeHeader);
+    return ["ID", "AREA", "SECCION", "ARTICULO"].every((header) => headers.includes(header));
+  });
+  if (headerIndex < 0) throw new Error("No encontré las columnas ID, AREA, SECCION y ARTICULO.");
+  const headers = rows[headerIndex].map(normalizeHeader);
+  const index = (name: string) => headers.indexOf(name);
+  const items: InventoryImportItem[] = [];
+  for (const row of rows.slice(headerIndex + 1)) {
+    const inventory_code = cellText(row[index("ID")]);
+    const plant_area = cellText(row[index("AREA")]);
+    const section = cellText(row[index("SECCION")]);
+    const equipment = cellText(row[index("ARTICULO")]);
+    if (!inventory_code && !plant_area && !section && !equipment) continue;
+    items.push({
+      inventory_code,
+      plant_area,
+      section,
+      equipment,
+      category: index("CATEGORIA") >= 0 ? cellText(row[index("CATEGORIA")]) : "",
+      location: index("UBICACION") >= 0 ? cellText(row[index("UBICACION")]) : "",
+      operational_status: index("ESTADO OPERATIVIDAD") >= 0 ? cellText(row[index("ESTADO OPERATIVIDAD")]) : "",
+    });
+  }
+  return items;
+}
 
 /** Admin management for OT sections and their equipment catalog. */
 export function CatalogManager() {
@@ -20,6 +70,9 @@ export function CatalogManager() {
   const [editingEquipmentId, setEditingEquipmentId] = useState<number | null>(null);
   const [equipmentDraft, setEquipmentDraft] = useState("");
   const [busy, setBusy] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState("");
+  const [importError, setImportError] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -140,6 +193,28 @@ export function CatalogManager() {
     }
   }
 
+  async function importInventory(file: File) {
+    setImporting(true);
+    setImportMessage("");
+    setImportError("");
+    try {
+      const items = await parseInventoryWorkbook(file);
+      if (!items.length) throw new Error("La hoja Inventario no contiene registros.");
+      const result = await api.post<InventoryImportResult>("/api/catalogs/inventory/import", { items });
+      setImportMessage(
+        `Importación lista: ${result.equipment_created} equipos nuevos, ${result.equipment_updated} actualizados, ${result.sections_created} secciones nuevas y ${result.skipped} omitidos.`
+      );
+      if (result.errors.length) setImportError(result.errors.slice(0, 5).join(" "));
+      api.invalidateCache("/api/catalogs/tree");
+      api.invalidateCache("/api/catalogs/hierarchy");
+      await load();
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : "No se pudo importar el inventario.");
+    } finally {
+      setImporting(false);
+    }
+  }
+
   if (loading) {
     return <div className="flex justify-center py-10"><Loader2 className="h-6 w-6 animate-spin text-primary" /></div>;
   }
@@ -148,6 +223,35 @@ export function CatalogManager() {
     <div>
       <h3 className="mb-1 text-lg font-semibold">Catálogo</h3>
       <p className="mb-4 text-sm text-muted-foreground">Secciones → Equipos. Cada sección determina los equipos disponibles para una OT.</p>
+
+      <div className="mb-4 rounded-lg border bg-card p-4">
+        <div className="flex items-start gap-3">
+          <FileSpreadsheet className="mt-0.5 h-5 w-5 text-primary" />
+          <div className="min-w-0 flex-1">
+            <h4 className="font-semibold">Importar inventario con área y sección</h4>
+            <p className="mb-3 text-sm text-muted-foreground">
+              Usa la hoja Inventario. Los equipos se identifican por su ID y no se borran los registros actuales.
+            </p>
+            <label className="inline-flex cursor-pointer items-center rounded-md border px-3 py-2 text-sm font-medium hover:bg-muted">
+              <Upload className="mr-2 h-4 w-4" />
+              {importing ? "Importando..." : "Seleccionar Excel"}
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                className="hidden"
+                disabled={importing}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (file) void importInventory(file);
+                }}
+              />
+            </label>
+            {importMessage && <p className="mt-2 text-sm text-emerald-700">{importMessage}</p>}
+            {importError && <p className="mt-2 text-sm text-destructive">{importError}</p>}
+          </div>
+        </div>
+      </div>
 
       {error && <p className="mb-3 rounded-md bg-destructive/5 p-2 text-sm text-destructive">{error}</p>}
 
@@ -201,7 +305,7 @@ export function CatalogManager() {
                         </>
                       ) : (
                         <>
-                          <span className="flex-1">{equipment.name}</span>
+                          <span className="flex-1">{equipment.name}{equipment.inventory_code ? ` — ID ${equipment.inventory_code}` : ""}</span>
                           <Button size="icon" variant="ghost" onClick={() => startEquipmentEdit(equipment)} aria-label="Editar tipo de equipo"><Pencil /></Button>
                           <Button size="icon" variant="ghost" onClick={() => removeEquipment(equipment)} disabled={busy === `delete-equipment-${equipment.id}`} aria-label="Eliminar tipo de equipo">
                             {busy === `delete-equipment-${equipment.id}` ? <Loader2 className="animate-spin" /> : <Trash2 />}

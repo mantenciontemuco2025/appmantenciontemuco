@@ -1,6 +1,13 @@
 "use client";
 
-import { CheckCircle2, Clock, AlertTriangle, RefreshCw, Loader2 } from "lucide-react";
+import {
+  CheckCircle2,
+  Clock,
+  AlertTriangle,
+  RefreshCw,
+  Loader2,
+  MinusCircle,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SyncStatus } from "@/lib/types";
 
@@ -27,9 +34,18 @@ export function SyncBadge({
       icon: <AlertTriangle className="h-4 w-4" />,
       classes: "text-red-600 bg-red-50 border-red-200",
     },
+    NOT_APPLICABLE: {
+      label: "No aplica",
+      icon: <MinusCircle className="h-4 w-4" />,
+      classes: "text-slate-500 bg-slate-50 border-slate-200",
+    },
   };
 
-  const c = config[status];
+  const c = config[status] ?? {
+    label: "Estado desconocido",
+    icon: <AlertTriangle className="h-4 w-4" />,
+    classes: "text-slate-600 bg-slate-50 border-slate-200",
+  };
   return (
     <span
       className={cn(

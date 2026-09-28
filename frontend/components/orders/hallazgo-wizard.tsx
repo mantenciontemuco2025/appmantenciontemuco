@@ -84,7 +84,9 @@ export function HallazgoWizard() {
   useEffect(() => { photosRef.current = photos; }, [photos]);
   useEffect(() => () => photosRef.current.forEach((photo) => URL.revokeObjectURL(photo.previewUrl)), []);
 
-  const selectedArea = useMemo(() => areas.find((area) => area.id === areaId), [areas, areaId]);
+  const availableSections = areas;
+  const selectedArea = useMemo(() => availableSections.find((area) => area.id === areaId), [availableSections, areaId]);
+  const plantAreaOptions = WORK_ORDER_AREAS.map((name, id) => ({ id, name }));
 
   function setField(key: keyof typeof form, value: string) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -216,10 +218,10 @@ export function HallazgoWizard() {
       <div className="grid gap-4 md:grid-cols-2"><label className="text-sm font-medium">Folio <span className="font-normal text-muted-foreground">(opcional)</span><input className="mt-1 w-full rounded-md border bg-background px-3 py-2" value={form.folio} onChange={(e) => setField("folio", e.target.value)} placeholder="Folio de la OT" /></label><label className="text-sm font-medium">N.º de vale <span className="font-normal text-muted-foreground">(opcional)</span><input className="mt-1 w-full rounded-md border bg-background px-3 py-2" value={form.voucher_number} onChange={(e) => setField("voucher_number", e.target.value)} placeholder="Número de vale" /></label></div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <label className="text-sm font-medium">Área de planta<select className="mt-1 w-full rounded-md border bg-background px-3 py-2" value={plantArea} onChange={(e) => setPlantArea(e.target.value)}>{WORK_ORDER_AREAS.map((area) => <option key={area} value={area}>{area}</option>)}</select></label>
-        <label className="text-sm font-medium">Sección<select className="mt-1 w-full rounded-md border bg-background px-3 py-2" value={areaId} onChange={(e) => { setAreaId(Number(e.target.value)); setEquipmentId(""); }}>{areas.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</select></label>
+        <label className="text-sm font-medium">Área de planta<select className="mt-1 w-full rounded-md border bg-background px-3 py-2" value={plantArea} onChange={(e) => { setPlantArea(e.target.value); setAreaId(""); setEquipmentId(""); }}>{plantAreaOptions.map((area) => <option key={area.id} value={area.name}>{area.name}</option>)}</select></label>
+        <label className="text-sm font-medium">Sección<select className="mt-1 w-full rounded-md border bg-background px-3 py-2" value={areaId} onChange={(e) => { setAreaId(Number(e.target.value)); setEquipmentId(""); }}>{availableSections.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</select></label>
       </div>
-      <label className="block text-sm font-medium">Equipo (opcional)<select className="mt-1 w-full rounded-md border bg-background px-3 py-2" value={equipmentId} onChange={(e) => setEquipmentId(e.target.value ? Number(e.target.value) : "")}><option value="">Sin equipo específico / agregar después</option>{(selectedArea?.equipment || []).map((equipment) => <option key={equipment.id} value={equipment.id}>{equipment.name}</option>)}</select></label>
+      <label className="block text-sm font-medium">Equipo (opcional)<select className="mt-1 w-full rounded-md border bg-background px-3 py-2" value={equipmentId} onChange={(e) => setEquipmentId(e.target.value ? Number(e.target.value) : "")}><option value="">Sin equipo específico / agregar después</option>{(selectedArea?.equipment || []).map((equipment) => <option key={equipment.id} value={equipment.id}>{equipment.inventory_code ? `${equipment.name} — ID ${equipment.inventory_code}` : equipment.name}</option>)}</select></label>
 
       <div><label className="block text-sm font-medium">Descripción detallada</label><textarea className="mt-1 min-h-28 w-full rounded-md border bg-background px-3 py-2" value={form.description} onChange={(e) => setField("description", e.target.value)} placeholder={completed ? "Describe el trabajo realizado..." : "Describe el problema o trabajo que debe realizarse..."} /><VoiceDictation onTranscript={(text) => appendField("description", text)} /></div>
 

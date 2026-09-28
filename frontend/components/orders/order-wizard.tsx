@@ -193,8 +193,10 @@ export function OrderWizard() {
     load();
   }, [user]);
 
-  const selectedSection = areas.find((a) => a.id === form.area_id) || null;
+  const availableSections = areas;
+  const selectedSection = availableSections.find((a) => a.id === form.area_id) || null;
   const filteredEquipment = selectedSection?.equipment || [];
+  const plantAreaOptions = WORK_ORDER_AREAS.map((name) => ({ value: name, label: name }));
   const supervisorAreaIds =
     user?.role === "SUPERVISOR"
       ? (user.area_ids?.length ? user.area_ids : user.area_id ? [user.area_id] : [])
@@ -449,13 +451,13 @@ export function OrderWizard() {
           <div className="grid grid-cols-1 gap-3">
             <Select
               label="Área"
-              options={WORK_ORDER_AREAS.map((name) => ({ value: name, label: name }))}
+              options={plantAreaOptions}
               value={form.plant_area}
-              onChange={(e) => set("plant_area", e.target.value)}
+              onChange={(e) => setForm((current) => ({ ...current, plant_area: e.target.value, area_id: null, equipment_id: null }))}
             />
             <SearchableSelect
               label="Sección"
-              options={areas.map((a) => ({ value: String(a.id), label: a.name }))}
+              options={availableSections.map((a) => ({ value: String(a.id), label: a.name }))}
               value={form.area_id ? String(form.area_id) : ""}
               placeholder="Buscar sección..."
               disabled={supervisorWithoutArea}
@@ -468,7 +470,10 @@ export function OrderWizard() {
             />
             <SearchableSelect
               label="Equipo"
-              options={filteredEquipment.map((eq) => ({ value: String(eq.id), label: eq.name }))}
+              options={filteredEquipment.map((eq) => ({
+                value: String(eq.id),
+                label: eq.inventory_code ? `${eq.name} — ID ${eq.inventory_code}` : eq.name,
+              }))}
               value={form.equipment_id ? String(form.equipment_id) : ""}
               placeholder={form.area_id ? "Buscar equipo..." : "Primero selecciona una sección"}
               emptyMessage="No hay equipos que coincidan con la búsqueda."

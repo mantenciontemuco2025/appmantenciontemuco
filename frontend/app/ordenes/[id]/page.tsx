@@ -140,6 +140,8 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
     manual_minutes: "",
   });
   const [savingAdminEdit, setSavingAdminEdit] = useState(false);
+  // Se conserva para compatibilidad con el panel antiguo; la edición visible
+  // de las OT finalizadas se realiza directamente junto a cada campo.
   const [showAdminEdit, setShowAdminEdit] = useState(false);
   const [inlineEditField, setInlineEditField] = useState<string | null>(null);
 
@@ -801,18 +803,6 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                 >
                   <FileText className="h-3.5 w-3.5" /> Ver en Drive
                 </a>
-              )}
-              {user.role === "ADMIN" && wo.status === "COMPLETED" && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="ml-auto"
-                  onClick={() => setShowAdminEdit((current) => !current)}
-                >
-                  <Pencil className="mr-1 h-3.5 w-3.5" />
-                  {showAdminEdit ? "Cerrar edición" : "Editar OT"}
-                </Button>
               )}
             </div>
             <h1 className="mt-1 text-xl font-bold">{wo.title}</h1>

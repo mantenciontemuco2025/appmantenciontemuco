@@ -4,7 +4,6 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.models.work_order import WorkOrderStatus, LotoStatus
 from app.core.loto import normalize_loto_controls
-from app.core.work_order_areas import WORK_ORDER_AREAS
 
 
 class WorkOrderCreate(BaseModel):
@@ -87,8 +86,8 @@ class WorkOrderCreate(BaseModel):
     @classmethod
     def valid_plant_area(cls, value: str) -> str:
         normalized = value.strip().upper()
-        if normalized not in WORK_ORDER_AREAS:
-            raise ValueError(f"Área no válida. Use: {', '.join(WORK_ORDER_AREAS)}")
+        if not normalized:
+            raise ValueError("El área no puede estar vacía")
         return normalized
 
     @field_validator(
@@ -115,6 +114,72 @@ class WorkOrderCreate(BaseModel):
             or self.participant_names
         ):
             raise ValueError("Una OT externa no puede asignar trabajadores internos como ejecutores")
+        return self
+
+
+class HistoricalWorkOrderCreate(BaseModel):
+    """Administrator-only import of an OT completed in the past."""
+
+    title: str
+    description: str
+    area_id: int
+    plant_area: str
+    equipment_id: int | None = None
+    section_name: str | None = None
+    maintenance_type: str
+    original_ot_number: str | None = Field(default=None, max_length=50)
+    request_date: date | None = None
+    execution_date: date
+    estimated_time: str | None = None
+    work_time_mode: Literal["RANGE", "MANUAL"] = "MANUAL"
+    work_start_time: time | None = None
+    work_end_time: time | None = None
+    worked_duration_minutes: int | None = Field(default=None, ge=1, le=10080)
+    folio: str | None = Field(default=None, max_length=50)
+    voucher_number: str | None = Field(default=None, max_length=50)
+    voucher_date: date | None = None
+    material_codes: str | None = Field(default=None, max_length=500)
+    resources_required: str | None = None
+    risks: str | None = None
+    observations: str | None = None
+    requested_by: str | None = None
+    responsible_user_id: int | None = None
+    participant_user_ids: list[int] = []
+
+    @field_validator("title", "description")
+    @classmethod
+    def required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("Este campo es obligatorio")
+        return value
+
+    @field_validator("plant_area")
+    @classmethod
+    def valid_plant_area(cls, value: str) -> str:
+        value = value.strip().upper()
+        if not value:
+            raise ValueError("El área de planta es obligatoria")
+        return value
+
+    @field_validator("maintenance_type")
+    @classmethod
+    def valid_maintenance_type(cls, value: str) -> str:
+        value = value.upper().strip()
+        valid = {"PREVENTIVE", "CORRECTIVE", "PREDICTIVE", "PROYECTO", "MONTAJE", "URGENTE"}
+        if value not in valid:
+            raise ValueError("Tipo de mantenimiento inválido")
+        return value
+
+    @model_validator(mode="after")
+    def validate_work_time(self):
+        if self.work_time_mode == "RANGE":
+            if self.work_start_time is None or self.work_end_time is None:
+                raise ValueError("Indica la hora de inicio y término")
+            if self.work_end_time <= self.work_start_time:
+                raise ValueError("La hora de término debe ser posterior a la de inicio")
+        elif not self.worked_duration_minutes or self.worked_duration_minutes <= 0:
+            raise ValueError("Indica los minutos trabajados")
         return self
 
 
@@ -224,6 +289,7 @@ class HallazgoUpdate(BaseModel):
 class WorkOrderUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
+    original_ot_number: str | None = Field(default=None, max_length=50)
     area_id: int | None = None
     plant_area: str | None = None
     equipment_id: int | None = None
@@ -278,8 +344,8 @@ class WorkOrderUpdate(BaseModel):
         if value is None:
             return None
         normalized = value.strip().upper()
-        if normalized not in WORK_ORDER_AREAS:
-            raise ValueError(f"Área no válida. Use: {', '.join(WORK_ORDER_AREAS)}")
+        if not normalized:
+            return None
         return normalized
 
     @field_validator(
@@ -300,6 +366,8 @@ class WorkOrderUpdate(BaseModel):
 class WorkOrderResponse(BaseModel):
     id: int
     ot_number: str
+    is_historical: bool = False
+    original_ot_number: str | None = None
     is_hallazgo_report: bool = False
     hallazgo_folio: str | None = None
     hallazgo_kind: str | None = None
@@ -425,6 +493,8 @@ class WorkOrderEvidenceResponse(BaseModel):
 class WorkOrderListResponse(BaseModel):
     id: int
     ot_number: str
+    is_historical: bool = False
+    original_ot_number: str | None = None
     is_hallazgo_report: bool = False
     hallazgo_folio: str | None = None
     hallazgo_kind: str | None = None

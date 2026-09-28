@@ -25,7 +25,6 @@ from starlette.concurrency import run_in_threadpool
 
 from app.api.dependencies import get_current_user, require_roles
 from app.core.config import settings
-from app.core.work_order_areas import WORK_ORDER_AREAS
 from app.core.loto import (
     controls_from_legacy_status,
     legacy_status_from_controls,
@@ -43,6 +42,7 @@ from app.models.sync_job import ExternalSyncJob, SyncJobStatus
 from app.models.notification import Notification
 from app.schemas.work_order import (
     WorkOrderCreate,
+    HistoricalWorkOrderCreate,
     HallazgoCreate,
     HallazgoReviewPayload,
     HallazgoUpdate,
@@ -311,11 +311,8 @@ def _display_section_name(wo: WorkOrder) -> str | None:
 
 def _validate_plant_area(value: str | None) -> str:
     normalized = (value or "").strip().upper()
-    if normalized not in WORK_ORDER_AREAS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Selecciona un área válida: {', '.join(WORK_ORDER_AREAS)}",
-        )
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Selecciona un área de planta")
     return normalized
 
 
@@ -367,6 +364,8 @@ def _work_order_to_response(wo: WorkOrder) -> dict:
     return {
         "id": wo.id,
         "ot_number": wo.ot_number,
+        "is_historical": wo.is_historical,
+        "original_ot_number": wo.original_ot_number,
         "is_hallazgo_report": wo.is_hallazgo_report,
         "hallazgo_folio": wo.hallazgo_folio,
         "hallazgo_kind": wo.hallazgo_kind,
@@ -735,6 +734,112 @@ async def _sync_work_order_to_monthly(
 # ───────────────────────────────────────────────────────────────────────────
 # Create Work Order
 # ───────────────────────────────────────────────────────────────────────────
+@router.post("/historical", response_model=WorkOrderResponse, status_code=status.HTTP_201_CREATED)
+async def create_historical_work_order(
+    payload: HistoricalWorkOrderCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
+):
+    """Register an already-completed legacy OT without opening a workflow."""
+    plant_area = _validate_plant_area(payload.plant_area)
+    area, equipment = await _validate_area_equipment(
+        db, payload.area_id, payload.equipment_id
+    )
+
+    participant_ids = list(dict.fromkeys(
+        [uid for uid in [payload.responsible_user_id, *payload.participant_user_ids] if uid]
+    ))
+    participant_names_str = None
+    if participant_ids:
+        result = await db.execute(
+            select(User.id, User.full_name).where(User.id.in_(participant_ids))
+        )
+        users_map = {row[0]: row[1] for row in result.all()}
+        if len(users_map) != len(participant_ids):
+            raise HTTPException(status_code=400, detail="Hay participantes no válidos")
+        participant_names_str = ", ".join(users_map[uid] for uid in participant_ids)
+
+    if payload.work_time_mode == "RANGE":
+        assert payload.work_start_time is not None and payload.work_end_time is not None
+        duration_minutes = int(
+            (datetime.combine(_date.today(), payload.work_end_time)
+             - datetime.combine(_date.today(), payload.work_start_time)).total_seconds() / 60
+        )
+        started_at = datetime.combine(payload.execution_date, payload.work_start_time, tzinfo=timezone.utc)
+        completed_at = datetime.combine(payload.execution_date, payload.work_end_time, tzinfo=timezone.utc)
+    else:
+        duration_minutes = payload.worked_duration_minutes or 0
+        started_at = datetime.combine(payload.execution_date, _time(12, 0), tzinfo=timezone.utc)
+        completed_at = started_at + timedelta(minutes=duration_minutes)
+
+    wo = WorkOrder(
+        ot_number=await _next_ot_number(db),
+        is_historical=True,
+        original_ot_number=payload.original_ot_number.strip() if payload.original_ot_number else None,
+        title=payload.title,
+        description=payload.description,
+        area_id=payload.area_id,
+        plant_area=plant_area,
+        equipment_id=equipment.id if equipment else None,
+        section_name=area.name,
+        maintenance_type=payload.maintenance_type,
+        loto_status="NOT_APPLICABLE",
+        loto_controls=["NOT_APPLICABLE"],
+        folio=payload.folio,
+        estimated_time=payload.estimated_time,
+        request_date=payload.request_date or payload.execution_date,
+        execution_date=payload.execution_date,
+        resources_required=payload.resources_required,
+        voucher_number=payload.voucher_number,
+        voucher_date=payload.voucher_date,
+        material_codes=payload.material_codes,
+        risks=payload.risks,
+        observations=payload.observations,
+        requested_by=payload.requested_by or current_user.full_name,
+        status=WorkOrderStatus.COMPLETED.value,
+        submitted_for_review=False,
+        requires_supervisor_validation=False,
+        supervisor_review_status=SupervisorReviewStatus.NOT_REQUIRED.value,
+        responsible_user_id=payload.responsible_user_id,
+        participant_names=participant_names_str,
+        is_planned=True,
+        scheduled_date=payload.execution_date,
+        due_date=payload.execution_date,
+        started_at=started_at,
+        started_by_user_id=payload.responsible_user_id or current_user.id,
+        completed_at=completed_at,
+        completed_by_user_id=payload.responsible_user_id or current_user.id,
+        work_time_mode=payload.work_time_mode,
+        work_start_time=payload.work_start_time,
+        work_end_time=payload.work_end_time,
+        worked_duration_minutes=duration_minutes,
+        actual_duration_minutes=float(duration_minutes),
+        # Historical OTs do not need a new individual Drive document, but
+        # they must still be written to the monthly register for reporting.
+        ot_sheet_sync_status="NOT_APPLICABLE",
+        monthly_sheet_sync_status="PENDING",
+        created_by_user_id=current_user.id,
+    )
+    db.add(wo)
+    await db.flush()
+    for uid in participant_ids:
+        await db.execute(work_order_participants.insert().values(work_order_id=wo.id, user_id=uid))
+    await create_audit_log(
+        db,
+        user_id=current_user.id,
+        action="CREATE_HISTORICAL_WORK_ORDER",
+        entity_type="WorkOrder",
+        entity_id=wo.id,
+        new_data={"ot_number": wo.ot_number, "original_ot_number": wo.original_ot_number},
+    )
+    await enqueue_external_sync(
+        db, wo.id, job_type="MONTHLY", actor_user_id=current_user.id
+    )
+    await db.commit()
+    result = await db.execute(_base_query().where(WorkOrder.id == wo.id))
+    return _work_order_to_response(result.scalar_one())
+
+
 @router.post("", response_model=WorkOrderResponse, status_code=status.HTTP_201_CREATED)
 async def create_work_order(
     payload: WorkOrderCreate,
@@ -1558,6 +1663,7 @@ async def list_work_orders(
         query = query.where(
             or_(
                 WorkOrder.ot_number.ilike(search_value),
+                WorkOrder.original_ot_number.ilike(search_value),
                 WorkOrder.title.ilike(search_value),
             )
         )
@@ -1600,6 +1706,8 @@ async def list_work_orders(
         WorkOrderListResponse(
             id=wo.id,
             ot_number=wo.ot_number,
+            is_historical=wo.is_historical,
+            original_ot_number=wo.original_ot_number,
             title=wo.title,
             area_name=_display_area_name(wo),
             plant_area=wo.plant_area,
@@ -1752,7 +1860,9 @@ async def list_hallazgos(
     orders = result.scalars().all()
     return [
         WorkOrderListResponse(
-            id=wo.id, ot_number=wo.ot_number, title=wo.title,
+            id=wo.id, ot_number=wo.ot_number,
+            is_historical=wo.is_historical, original_ot_number=wo.original_ot_number,
+            title=wo.title,
             area_name=_display_area_name(wo), plant_area=wo.plant_area,
             equipment_name=wo.equipment.name if wo.equipment else None,
             section_name=_display_section_name(wo), maintenance_type=wo.maintenance_type,
@@ -1981,6 +2091,8 @@ async def my_work_orders(
         WorkOrderListResponse(
             id=wo.id,
             ot_number=wo.ot_number,
+            is_historical=wo.is_historical,
+            original_ot_number=wo.original_ot_number,
             title=wo.title,
             area_name=_display_area_name(wo),
             plant_area=wo.plant_area,
@@ -2597,6 +2709,8 @@ async def update_work_order(
         wo.title = payload.title.strip()
     if payload.description is not None:
         wo.description = payload.description
+    if "original_ot_number" in payload.model_fields_set:
+        wo.original_ot_number = payload.original_ot_number.strip() if payload.original_ot_number else None
     if payload.area_id is not None:
         if payload.area_id != wo.area_id and payload.equipment_id is None:
             raise HTTPException(status_code=400, detail="Selecciona un equipo de la sección elegida")
@@ -2750,7 +2864,9 @@ async def update_work_order(
     }
     changed = payload.model_dump(exclude_unset=True)
     monthly_relevant = set(changed) & _changed_monthly_fields
-    should_sync = bool(monthly_relevant and wo.google_ot_file_id)
+    # Historical OTs do not have an individual Drive file, but their monthly
+    # register row must still be refreshed after an administrative edit.
+    should_sync = bool(monthly_relevant and (wo.google_ot_file_id or wo.is_historical))
 
     # Re-populate the OT document whenever an admin/OT-relevant field changed,
     # so the Google OT stays in sync with edits (e.g. changing fecha solicitud
@@ -2771,16 +2887,21 @@ async def update_work_order(
 
     bg_factory = None
     if should_sync:
-        _mark_external_sync_pending(wo)
+        if wo.is_historical and not wo.google_ot_file_id:
+            wo.monthly_sheet_sync_status = "PENDING"
+            wo.monthly_sheet_sync_error = None
+        else:
+            _mark_external_sync_pending(wo)
         bg_factory = async_sessionmaker(
             db.bind, class_=AsyncSession, expire_on_commit=False
         )
 
     if should_sync:
+        sync_job_type = "LIFECYCLE" if wo.google_ot_file_id else "MONTHLY"
         await enqueue_external_sync(
             db,
             wo.id,
-            job_type="LIFECYCLE",
+            job_type=sync_job_type,
             actor_user_id=current_user.id,
             populate_individual=populate_individual,
             previous_execution_date=previous_execution_date,
