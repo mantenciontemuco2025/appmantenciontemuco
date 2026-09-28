@@ -78,7 +78,7 @@ class WorkOrder(Base):
     title: Mapped[str] = mapped_column(String(300))
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    area_id: Mapped[int] = mapped_column(ForeignKey("areas.id"), index=True)
+    area_id: Mapped[int | None] = mapped_column(ForeignKey("areas.id"), index=True, nullable=True)
     # The old Area catalog is retained as the Section catalog, since each
     # catalog entry owns its equipment. Nullable for historical work orders.
     plant_area: Mapped[str | None] = mapped_column(String(50), nullable=True)

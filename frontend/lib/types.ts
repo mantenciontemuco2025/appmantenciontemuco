@@ -262,7 +262,7 @@ export interface WorkOrderRecord {
   hallazgo_reviewed_by_name: string | null;
   title: string;
   description: string | null;
-  area_id: number;
+  area_id: number | null;
   plant_area: string | null;
   area_name: string | null;
   equipment_id: number | null;
@@ -368,6 +368,7 @@ export interface WorkOrderListItem {
   ot_number: string;
   is_historical?: boolean;
   original_ot_number?: string | null;
+  classification_pending?: boolean;
   is_hallazgo_report?: boolean;
   hallazgo_folio?: string | null;
   hallazgo_kind?: "COMPLETED" | "REQUIRES_ATTENTION" | null;

@@ -1,5 +1,7 @@
 from sqlalchemy import select
 
+from app.core.security import hash_password
+from app.models.user import User, UserRole
 from app.models.sync_job import ExternalSyncJob
 from tests.conftest import auth_headers, get_token
 
@@ -90,3 +92,79 @@ async def test_worker_cannot_register_historical_ot(client, seed_data):
         headers=auth_headers(worker_token),
     )
     assert response.status_code == 403
+
+
+async def test_admin_imports_unclassified_historical_rows_and_lists_pending(
+    client, seed_data, db_session_factory
+):
+    async with db_session_factory() as db:
+        db.add_all([
+            User(
+                full_name="Wilson Ortiz",
+                email="wilson@test.com",
+                password_hash=hash_password("pass123"),
+                role=UserRole.WORKER,
+            ),
+            User(
+                full_name="Domingo Contreras",
+                email="domingo@test.com",
+                password_hash=hash_password("pass123"),
+                role=UserRole.WORKER,
+            ),
+        ])
+        await db.commit()
+
+    admin_token = await get_token(client, "admin@test.com")
+    response = await client.post(
+        "/api/work-orders/historical/import",
+        json={
+            "items": [
+                {
+                    "source_row": 2,
+                    "original_ot_number": "OT-ANTIGUA-001",
+                    "source_responsible": "Wilson / Domingo",
+                    "title": "Bomba de alimentación",
+                    "description": "Se reemplazó sello y se dejó operativa.",
+                    "execution_date": "2025-06-15",
+                    "duration_minutes": 90,
+                    "duration_text": "1 h 30 min",
+                }
+            ]
+        },
+        headers=auth_headers(admin_token),
+    )
+
+    assert response.status_code == 201, response.text
+    result = response.json()
+    assert result["received"] == 1
+    assert result["created"] == 1
+    assert result["unmatched_responsibles"] == []
+    assert result["created_items"][0]["classification_pending"] is True
+
+    pending = await client.get(
+        "/api/work-orders/historical/pending-classification",
+        headers=auth_headers(admin_token),
+    )
+    assert pending.status_code == 200, pending.text
+    assert len(pending.json()) == 1
+    assert pending.json()[0]["classification_pending"] is True
+    assert pending.json()[0]["area_name"] is None
+    assert pending.json()[0]["responsible_user_name"] == "Wilson Ortiz"
+
+    duplicate = await client.post(
+        "/api/work-orders/historical/import",
+        json={
+            "items": [{
+                "source_row": 2,
+                "original_ot_number": "OT-ANTIGUA-001",
+                "title": "Bomba de alimentación",
+                "description": "Duplicado",
+                "execution_date": "2025-06-15",
+                "duration_minutes": 30,
+            }]
+        },
+        headers=auth_headers(admin_token),
+    )
+    assert duplicate.status_code == 201, duplicate.text
+    assert duplicate.json()["created"] == 0
+    assert duplicate.json()["skipped"] == 1

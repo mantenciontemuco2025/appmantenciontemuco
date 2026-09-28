@@ -12,7 +12,9 @@ Permission model:
 
 import asyncio
 import logging
+import re
 import time
+import unicodedata
 from datetime import datetime, timezone, timedelta, date as _date, time as _time
 from typing import Literal
 
@@ -43,6 +45,7 @@ from app.models.notification import Notification
 from app.schemas.work_order import (
     WorkOrderCreate,
     HistoricalWorkOrderCreate,
+    HistoricalImportRequest,
     HallazgoCreate,
     HallazgoReviewPayload,
     HallazgoUpdate,
@@ -323,7 +326,6 @@ def _parse_duration_hours(estimated_time: str | None) -> float:
     text = estimated_time.strip().lower()
     total_minutes = 0.0
 
-    import re
     h_match = re.search(r"(\d+(?:\.\d+)?)\s*h(?:oras?)?", text)
     m_match = re.search(r"(\d+(?:\.\d+)?)\s*m(?:in(?:utos?)?)?", text)
     if h_match:
@@ -339,6 +341,51 @@ def _parse_duration_hours(estimated_time: str | None) -> float:
         return 0.0
 
 
+def _normalize_person_key(value: str | None) -> str:
+    """Normalize legacy responsible names for matching against app users."""
+    text = str(value or "").replace("�", "a").strip().lower()
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode()
+    text = re.sub(r"[^a-z0-9 ]+", " ", text)
+    return " ".join(text.split())
+
+
+async def _match_import_responsibles(
+    db: AsyncSession, source: str | None
+) -> tuple[list[int], list[str], list[str]]:
+    """Resolve legacy names to active users without silently losing aliases."""
+    tokens = [
+        token.strip()
+        for token in re.split(r"[/,]", source or "")
+        if token.strip()
+    ]
+    users_result = await db.execute(select(User).where(User.is_active.is_(True)))
+    users = users_result.scalars().all()
+    by_key = {_normalize_person_key(user.full_name): user for user in users}
+    ids: list[int] = []
+    names: list[str] = []
+    unmatched: list[str] = []
+
+    for token in tokens:
+        key = _normalize_person_key(token)
+        user = by_key.get(key)
+        if user is None:
+            # Aliases observed in the legacy workbook and their unambiguous
+            # equivalents in the application user catalog.
+            alias_targets = {
+                "wilson": "wilson ortiz",
+                "domingo": "domingo contreras",
+                "alvaro j": "alvaro jara",
+                "rodrigo inostrosa": "rodrigo inostroza lilo",
+            }
+            target_key = alias_targets.get(key)
+            user = by_key.get(target_key) if target_key else None
+        if user is None:
+            unmatched.append(token)
+            continue
+        if user.id not in ids:
+            ids.append(user.id)
+            names.append(user.full_name)
+    return ids, names, unmatched
 def _work_order_to_response(wo: WorkOrder) -> dict:
     """Build a response dict from a WorkOrder instance, resolving relationships."""
     # Resolve participant IDs from the M2M relationship
@@ -366,6 +413,7 @@ def _work_order_to_response(wo: WorkOrder) -> dict:
         "ot_number": wo.ot_number,
         "is_historical": wo.is_historical,
         "original_ot_number": wo.original_ot_number,
+        "classification_pending": bool(wo.is_historical and wo.area_id is None),
         "is_hallazgo_report": wo.is_hallazgo_report,
         "hallazgo_folio": wo.hallazgo_folio,
         "hallazgo_kind": wo.hallazgo_kind,
@@ -741,10 +789,17 @@ async def create_historical_work_order(
     current_user: User = Depends(require_roles(UserRole.ADMIN)),
 ):
     """Register an already-completed legacy OT without opening a workflow."""
-    plant_area = _validate_plant_area(payload.plant_area)
-    area, equipment = await _validate_area_equipment(
-        db, payload.area_id, payload.equipment_id
-    )
+    plant_area = payload.plant_area.strip().upper() if payload.plant_area else None
+    area = None
+    equipment = None
+    if payload.area_id is not None:
+        if not plant_area:
+            raise HTTPException(status_code=400, detail="Selecciona un Ã¡rea de planta")
+        area, equipment = await _validate_area_equipment(
+            db, payload.area_id, payload.equipment_id
+        )
+    elif payload.equipment_id is not None:
+        raise HTTPException(status_code=400, detail="No puedes asignar equipo sin secciÃ³n")
 
     participant_ids = list(dict.fromkeys(
         [uid for uid in [payload.responsible_user_id, *payload.participant_user_ids] if uid]
@@ -781,7 +836,7 @@ async def create_historical_work_order(
         area_id=payload.area_id,
         plant_area=plant_area,
         equipment_id=equipment.id if equipment else None,
-        section_name=area.name,
+        section_name=area.name if area else None,
         maintenance_type=payload.maintenance_type,
         loto_status="NOT_APPLICABLE",
         loto_controls=["NOT_APPLICABLE"],
@@ -817,7 +872,7 @@ async def create_historical_work_order(
         # Historical OTs do not need a new individual Drive document, but
         # they must still be written to the monthly register for reporting.
         ot_sheet_sync_status="NOT_APPLICABLE",
-        monthly_sheet_sync_status="PENDING",
+        monthly_sheet_sync_status="PENDING" if area else "NOT_APPLICABLE",
         created_by_user_id=current_user.id,
     )
     db.add(wo)
@@ -832,12 +887,185 @@ async def create_historical_work_order(
         entity_id=wo.id,
         new_data={"ot_number": wo.ot_number, "original_ot_number": wo.original_ot_number},
     )
-    await enqueue_external_sync(
-        db, wo.id, job_type="MONTHLY", actor_user_id=current_user.id
-    )
+    if area:
+        await enqueue_external_sync(
+            db, wo.id, job_type="MONTHLY", actor_user_id=current_user.id
+        )
     await db.commit()
     result = await db.execute(_base_query().where(WorkOrder.id == wo.id))
     return _work_order_to_response(result.scalar_one())
+
+
+@router.post("/historical/import", status_code=status.HTTP_201_CREATED)
+async def import_historical_work_orders(
+    payload: HistoricalImportRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
+):
+    """Import legacy rows as completed OTs pending catalog classification."""
+    original_numbers = [
+        item.original_ot_number.strip()
+        for item in payload.items
+        if item.original_ot_number and item.original_ot_number.strip()
+    ]
+    existing_numbers: set[str] = set()
+    if original_numbers:
+        result = await db.execute(
+            select(WorkOrder.original_ot_number).where(
+                WorkOrder.is_historical.is_(True),
+                WorkOrder.original_ot_number.in_(original_numbers),
+            )
+        )
+        existing_numbers = {value for (value,) in result.all() if value}
+
+    created: list[dict] = []
+    skipped: list[dict] = []
+    unmatched_tokens: set[str] = set()
+
+    for item in payload.items:
+        original_number = item.original_ot_number.strip() if item.original_ot_number else None
+        if original_number and original_number in existing_numbers:
+            skipped.append({
+                "source_row": item.source_row,
+                "original_ot_number": original_number,
+                "reason": "Ya existe una OT histórica con ese número original",
+            })
+            continue
+
+        participant_ids, participant_names, unmatched = await _match_import_responsibles(
+            db, item.source_responsible
+        )
+        unmatched_tokens.update(unmatched)
+        responsible_id = participant_ids[0] if participant_ids else None
+        started_at = datetime.combine(item.execution_date, _time(12, 0), tzinfo=timezone.utc)
+        completed_at = started_at + timedelta(minutes=item.duration_minutes)
+        participant_names_str = ", ".join(participant_names) or None
+
+        wo = WorkOrder(
+            ot_number=await _next_ot_number(db),
+            is_historical=True,
+            original_ot_number=original_number,
+            title=item.title,
+            description=item.description,
+            area_id=None,
+            plant_area=None,
+            equipment_id=None,
+            maintenance_type="CORRECTIVE",
+            loto_status="NOT_APPLICABLE",
+            loto_controls=["NOT_APPLICABLE"],
+            request_date=item.execution_date,
+            execution_date=item.execution_date,
+            observations=(
+                f"Responsable(s) original(es) de planilla: {item.source_responsible.strip()}"
+                if item.source_responsible and unmatched
+                else None
+            ),
+            requested_by=current_user.full_name,
+            status=WorkOrderStatus.COMPLETED.value,
+            submitted_for_review=False,
+            requires_supervisor_validation=False,
+            supervisor_review_status=SupervisorReviewStatus.NOT_REQUIRED.value,
+            responsible_user_id=responsible_id,
+            participant_names=participant_names_str,
+            is_planned=True,
+            scheduled_date=item.execution_date,
+            due_date=item.execution_date,
+            started_at=started_at,
+            started_by_user_id=responsible_id or current_user.id,
+            completed_at=completed_at,
+            completed_by_user_id=responsible_id or current_user.id,
+            work_time_mode="MANUAL",
+            worked_duration_minutes=item.duration_minutes,
+            actual_duration_minutes=float(item.duration_minutes),
+            ot_sheet_sync_status="NOT_APPLICABLE",
+            monthly_sheet_sync_status="NOT_APPLICABLE",
+            created_by_user_id=current_user.id,
+        )
+        db.add(wo)
+        await db.flush()
+        for user_id in participant_ids:
+            await db.execute(
+                work_order_participants.insert().values(
+                    work_order_id=wo.id, user_id=user_id
+                )
+            )
+        await create_audit_log(
+            db,
+            user_id=current_user.id,
+            action="IMPORT_HISTORICAL_WORK_ORDER",
+            entity_type="WorkOrder",
+            entity_id=wo.id,
+            new_data={
+                "ot_number": wo.ot_number,
+                "original_ot_number": original_number,
+                "source_row": item.source_row,
+                "source_responsible": item.source_responsible,
+                "matched_responsibles": participant_names,
+                "unmatched_responsibles": unmatched,
+            },
+        )
+        created.append({
+            "id": wo.id,
+            "ot_number": wo.ot_number,
+            "original_ot_number": original_number,
+            "source_row": item.source_row,
+            "title": item.title,
+            "matched_responsibles": participant_names,
+            "unmatched_responsibles": unmatched,
+            "classification_pending": True,
+        })
+        if original_number:
+            existing_numbers.add(original_number)
+
+    await db.commit()
+    return {
+        "received": len(payload.items),
+        "created": len(created),
+        "skipped": len(skipped),
+        "created_items": created,
+        "skipped_items": skipped,
+        "unmatched_responsibles": sorted(unmatched_tokens),
+    }
+
+
+@router.get("/historical/pending-classification", response_model=list[WorkOrderListResponse])
+async def list_historical_pending_classification(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
+):
+    """List imported historical OTs that still need area/section/equipment."""
+    result = await db.execute(
+        _list_query()
+        .where(WorkOrder.is_historical.is_(True), WorkOrder.area_id.is_(None))
+        .order_by(WorkOrder.execution_date.asc(), WorkOrder.id.asc())
+    )
+    orders = result.scalars().all()
+    return [
+        WorkOrderListResponse(
+            id=wo.id,
+            ot_number=wo.ot_number,
+            is_historical=wo.is_historical,
+            original_ot_number=wo.original_ot_number,
+            classification_pending=True,
+            title=wo.title,
+            area_name=None,
+            plant_area=None,
+            equipment_name=None,
+            section_name=None,
+            maintenance_type=wo.maintenance_type,
+            loto_status=wo.loto_status,
+            status=wo.status,
+            execution_date=wo.execution_date,
+            request_date=wo.request_date,
+            ot_sheet_sync_status=wo.ot_sheet_sync_status,
+            monthly_sheet_sync_status=wo.monthly_sheet_sync_status,
+            created_at=wo.created_at,
+            is_planned=wo.is_planned,
+            responsible_user_id=wo.responsible_user_id,
+            responsible_user_name=wo.responsible_user.full_name if wo.responsible_user else None,
+        )
+        for wo in orders
+    ]
 
 
 @router.post("", response_model=WorkOrderResponse, status_code=status.HTTP_201_CREATED)
@@ -1708,6 +1936,7 @@ async def list_work_orders(
             ot_number=wo.ot_number,
             is_historical=wo.is_historical,
             original_ot_number=wo.original_ot_number,
+            classification_pending=bool(wo.is_historical and wo.area_id is None),
             title=wo.title,
             area_name=_display_area_name(wo),
             plant_area=wo.plant_area,

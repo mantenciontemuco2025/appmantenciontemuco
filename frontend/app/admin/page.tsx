@@ -14,6 +14,7 @@ import { PageLoading } from "@/components/ui/page-loading";
 import { WorkerColumnManager } from "@/components/admin/worker-column-manager";
 import { MaterialCatalogManager } from "@/components/admin/material-catalog-manager";
 import { HistoricalWorkOrderForm } from "@/components/admin/historical-work-order-form";
+import { HistoricalWorkOrderImport } from "@/components/admin/historical-work-order-import";
 
 export default function AdminPage() {
   const { user, loading, logout } = useAuth();
@@ -89,7 +90,15 @@ export default function AdminPage() {
       {tab === "users" && isAdmin && <UserManager />}
       {tab === "catalog" && isAdmin && <CatalogManager />}
       {tab === "materials" && isAdmin && <MaterialCatalogManager />}
-      {tab === "historical" && isAdmin && <HistoricalWorkOrderForm />}
+      {tab === "historical" && isAdmin && (
+        <div className="space-y-6">
+          <HistoricalWorkOrderImport />
+          <details className="rounded-lg border bg-card p-4">
+            <summary className="cursor-pointer font-medium">Registrar una OT histórica manualmente</summary>
+            <div className="mt-4"><HistoricalWorkOrderForm /></div>
+          </details>
+        </div>
+      )}
       {tab === "worker-columns" && isAdmin && <WorkerColumnManager />}
       {(tab === "audit" || !isAdmin) && <AuditLogView />}
     </Shell>

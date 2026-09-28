@@ -122,8 +122,8 @@ class HistoricalWorkOrderCreate(BaseModel):
 
     title: str
     description: str
-    area_id: int
-    plant_area: str
+    area_id: int | None = None
+    plant_area: str | None = None
     equipment_id: int | None = None
     section_name: str | None = None
     maintenance_type: str
@@ -156,7 +156,9 @@ class HistoricalWorkOrderCreate(BaseModel):
 
     @field_validator("plant_area")
     @classmethod
-    def valid_plant_area(cls, value: str) -> str:
+    def valid_plant_area(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         value = value.strip().upper()
         if not value:
             raise ValueError("El área de planta es obligatoria")
@@ -181,6 +183,31 @@ class HistoricalWorkOrderCreate(BaseModel):
         elif not self.worked_duration_minutes or self.worked_duration_minutes <= 0:
             raise ValueError("Indica los minutos trabajados")
         return self
+
+
+class HistoricalImportItem(BaseModel):
+    """One normalized row from the legacy consolidated workbook."""
+
+    source_row: int = Field(ge=2)
+    original_ot_number: str | None = Field(default=None, max_length=50)
+    source_responsible: str | None = Field(default=None, max_length=300)
+    title: str
+    description: str
+    execution_date: date
+    duration_minutes: int = Field(ge=1, le=10080)
+    duration_text: str | None = Field(default=None, max_length=80)
+
+    @field_validator("title", "description")
+    @classmethod
+    def import_text_required(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("El tÃ­tulo y la descripciÃ³n son obligatorios")
+        return value
+
+
+class HistoricalImportRequest(BaseModel):
+    items: list[HistoricalImportItem] = Field(min_length=1, max_length=500)
 
 
 class HallazgoCreate(BaseModel):
@@ -368,6 +395,7 @@ class WorkOrderResponse(BaseModel):
     ot_number: str
     is_historical: bool = False
     original_ot_number: str | None = None
+    classification_pending: bool = False
     is_hallazgo_report: bool = False
     hallazgo_folio: str | None = None
     hallazgo_kind: str | None = None
@@ -379,7 +407,7 @@ class WorkOrderResponse(BaseModel):
     hallazgo_reviewed_by_name: str | None = None
     title: str
     description: str | None
-    area_id: int
+    area_id: int | None
     plant_area: str | None = None
     area_name: str | None = None
     equipment_id: int | None
@@ -495,6 +523,7 @@ class WorkOrderListResponse(BaseModel):
     ot_number: str
     is_historical: bool = False
     original_ot_number: str | None = None
+    classification_pending: bool = False
     is_hallazgo_report: bool = False
     hallazgo_folio: str | None = None
     hallazgo_kind: str | None = None

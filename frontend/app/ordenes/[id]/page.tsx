@@ -133,6 +133,8 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
     resources_required: "",
     risks: "",
     observations: "",
+    responsible_user_id: null as number | null,
+    participant_user_ids: [] as number[],
     work_time_mode: "RANGE" as WorkTimeMode,
     work_start_time: "",
     work_end_time: "",
@@ -175,6 +177,8 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
       resources_required: wo.resources_required || "",
       risks: wo.risks || "",
       observations: wo.observations || "",
+      responsible_user_id: wo.responsible_user_id,
+      participant_user_ids: wo.participant_user_ids || [],
       work_time_mode:
         wo.work_time_mode || (wo.worked_duration_minutes != null ? "MANUAL" : "RANGE"),
       work_start_time:
@@ -277,6 +281,8 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
         resources_required: adminEdit.resources_required || null,
         risks: adminEdit.risks || null,
         observations: adminEdit.observations || null,
+        responsible_user_id: adminEdit.responsible_user_id,
+        participant_user_ids: adminEdit.participant_user_ids,
         work_time_mode: adminEdit.work_time_mode,
         work_start_time: adminEdit.work_time_mode === "RANGE" ? adminEdit.work_start_time || null : null,
         work_end_time: adminEdit.work_time_mode === "RANGE" ? adminEdit.work_end_time || null : null,
@@ -352,9 +358,50 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
       if (label.includes("Fecha de vale")) return "voucher_date";
       if (label.includes("vale")) return "voucher_number";
       if (label.includes("digos de materiales")) return "material_codes";
+      if (label === "Responsable") return "responsible_user_id";
+      if (label === "Participantes") return "participant_user_ids";
       return null;
     },
     renderEditor: (field) => {
+      if (field === "responsible_user_id") return (
+        <select
+          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          value={adminEdit.responsible_user_id ?? ""}
+          onChange={(event) => {
+            const responsibleId = event.target.value ? Number(event.target.value) : null;
+            setAdminEdit((current) => ({
+              ...current,
+              responsible_user_id: responsibleId,
+              participant_user_ids: responsibleId && !current.participant_user_ids.includes(responsibleId)
+                ? [...current.participant_user_ids, responsibleId]
+                : current.participant_user_ids,
+            }));
+          }}
+        >
+          <option value="">Seleccionar responsable</option>
+          {assignableUsers.map((worker) => <option key={worker.id} value={worker.id}>{worker.full_name}</option>)}
+        </select>
+      );
+      if (field === "participant_user_ids") return (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {assignableUsers.length === 0 ? <p className="text-sm text-muted-foreground">No hay trabajadores disponibles.</p> : assignableUsers.map((worker) => (
+            <label key={worker.id} className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
+              <input
+                type="checkbox"
+                checked={adminEdit.participant_user_ids.includes(worker.id)}
+                disabled={adminEdit.responsible_user_id === worker.id}
+                onChange={() => setAdminEdit((current) => ({
+                  ...current,
+                  participant_user_ids: current.participant_user_ids.includes(worker.id)
+                    ? current.participant_user_ids.filter((id) => id !== worker.id)
+                    : [...current.participant_user_ids, worker.id],
+                }))}
+              />
+              {worker.full_name}{adminEdit.responsible_user_id === worker.id ? " (responsable)" : ""}
+            </label>
+          ))}
+        </div>
+      );
       if (field === "equipment_id") {
         const catalogArea = sections.find((section) => section.id === adminEdit.area_id);
         const equipmentOptions = [...(catalogArea?.equipment || [])];
@@ -449,7 +496,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
               }));
             }}
           >
-            <option value="">Seleccionar secciÃ³n</option>
+            <option value="">Seleccionar seccion</option>
             {sections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
           </select>
           <select
@@ -458,12 +505,12 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
             onChange={(event) => setAdminEdit((current) => ({ ...current, equipment_id: event.target.value ? Number(event.target.value) : null }))}
             disabled={!adminEdit.area_id}
           >
-            <option value="">Seleccionar equipo de la secciÃ³n</option>
+            <option value="">Seleccionar equipo de la seccion</option>
             {(sections.find((section) => section.id === adminEdit.area_id)?.equipment || []).map((equipment) => (
               <option key={equipment.id} value={equipment.id}>{equipment.name}</option>
             ))}
           </select>
-          <p className="text-xs text-muted-foreground">El equipo debe pertenecer a la secciÃ³n seleccionada.</p>
+          <p className="text-xs text-muted-foreground">El equipo debe pertenecer a la seccion seleccionada.</p>
         </div>
       );
       if (field === "section_name") return (
@@ -959,15 +1006,20 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                   )}
                 </div>,
               )}
-              <InfoRow
-                label={wo.is_external_work ? "Persona externa" : "Responsable"}
-                value={wo.is_external_work
-                  ? wo.external_executor_name
-                  : wo.responsible_user_name || <span className="text-orange-600 font-medium">No asignado</span>}
-              />
+              {wo.is_external_work ? (
+                <InfoRow label="Persona externa" value={wo.external_executor_name} />
+              ) : (
+                <InfoRow
+                  label="Responsable"
+                  value={wo.responsible_user_name || <span className="text-orange-600 font-medium">No asignado</span>}
+                />
+              )}
               {wo.is_external_work && <InfoRow label="Empresa contratista" value={wo.external_company} />}
-              {wo.participant_names.length > 0 && (
-                <InfoRow label="Participantes" value={wo.participant_names.join(", ")} />
+              {!wo.is_external_work && (
+                <InfoRow
+                  label="Participantes"
+                  value={wo.participant_names.length > 0 ? wo.participant_names.join(", ") : "Sin participantes"}
+                />
               )}
               <InfoRow label="Solicitado por" value={wo.requested_by} />
               {editableInfoRow("Trabajo", "description", wo.description || wo.title, <textarea className="min-h-[70px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm" value={adminEdit.description} onChange={(event) => setAdminEdit((current) => ({ ...current, description: event.target.value }))} />)}
@@ -1181,7 +1233,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                       onChange={(event) => setAdminEdit((current) => ({ ...current, equipment_id: event.target.value ? Number(event.target.value) : null }))}
                       disabled={!adminEdit.area_id}
                     >
-                      <option value="">Seleccionar equipo de la secciÃ³n</option>
+                      <option value="">Seleccionar equipo de la seccion</option>
                       {(sections.find((section) => section.id === adminEdit.area_id)?.equipment || []).map((equipment) => (
                         <option key={equipment.id} value={equipment.id}>{equipment.name}</option>
                       ))}
