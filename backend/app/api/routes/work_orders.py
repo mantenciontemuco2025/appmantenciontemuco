@@ -301,8 +301,8 @@ async def _validate_area_equipment(
 
 
 def _display_area_name(wo: WorkOrder) -> str | None:
-    """New records use plant_area; old records retain their original display."""
-    return wo.plant_area or (wo.area.name if wo.area else None)
+    """Return only the general plant area, never the legacy section catalog."""
+    return wo.plant_area or None
 
 
 def _display_section_name(wo: WorkOrder) -> str | None:
@@ -1883,6 +1883,7 @@ async def list_work_orders(
     area_id: int | None = Query(default=None),
     search: str | None = Query(default=None, min_length=1, max_length=100),
     responsible: str | None = Query(default=None, min_length=1, max_length=100),
+    without_area: bool = Query(default=False),
     overdue: bool = Query(default=False),
     created_by_me: bool = Query(default=False),
     pending_review: bool = Query(default=False),
@@ -1962,6 +1963,14 @@ async def list_work_orders(
             )
         )
 
+    if without_area:
+        # ``plant_area`` is the general area. Keep legacy section data
+        # untouched: these are precisely the OTs that still need to be
+        # classified by an administrator.
+        query = query.where(
+            or_(WorkOrder.plant_area.is_(None), func.trim(WorkOrder.plant_area) == "")
+        )
+
     if overdue:
         # Panel de OTs vencidas: con fecha límite pasada y aún abiertas.
         today = datetime.now().date()
@@ -1993,7 +2002,10 @@ async def list_work_orders(
             ot_number=wo.ot_number,
             is_historical=wo.is_historical,
             original_ot_number=wo.original_ot_number,
-            classification_pending=bool(wo.is_historical and wo.area_id is None),
+            classification_pending=bool(
+                wo.is_historical
+                and (not wo.plant_area or wo.area_id is None or wo.equipment_id is None)
+            ),
             title=wo.title,
             area_name=_display_area_name(wo),
             plant_area=wo.plant_area,
@@ -2422,6 +2434,7 @@ async def _build_work_order_counter(
     view: Literal["ALL", "CREATED_BY_ME", "PENDING_REVIEW", "SUPERVISOR_VALIDATION"],
     current_user: User,
     db: AsyncSession,
+    without_area: bool = False,
 ) -> WorkOrderCounterResponse:
     """Cuantifica las OTs (totales por año y por mes del año actual) y el próximo
     N° OT que se asignará. Solo ADMIN — la planificación los necesita."""
@@ -2432,6 +2445,7 @@ async def _build_work_order_counter(
         current_user.role.value,
         tuple(sorted(current_user.area_ids or [])),
         view,
+        without_area,
     )
     cached = _counter_cache
     if (
@@ -2499,6 +2513,11 @@ async def _build_work_order_counter(
                     WorkOrder.is_hallazgo_report.is_(False),
                     WorkOrder.hallazgo_status == "CONVERTED",
                 )
+            )
+
+        if without_area:
+            scope_conditions.append(
+                or_(WorkOrder.plant_area.is_(None), func.trim(WorkOrder.plant_area) == "")
             )
 
         # One grouped query provides yearly and current-year monthly totals.
@@ -2571,11 +2590,12 @@ async def get_work_order_counter(
 @router.get("/status-counts", response_model=WorkOrderCounterResponse)
 async def get_work_order_status_counts(
     view: Literal["ALL", "CREATED_BY_ME", "PENDING_REVIEW", "SUPERVISOR_VALIDATION"] = Query(default="ALL"),
+    without_area: bool = Query(default=False),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Complete status totals for the paginated order tabs."""
-    return await _build_work_order_counter(view, current_user, db)
+    return await _build_work_order_counter(view, current_user, db, without_area=without_area)
 
 
 # ───────────────────────────────────────────────────────────────────────────

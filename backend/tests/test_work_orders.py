@@ -146,6 +146,35 @@ async def test_list_work_orders_searches_all_pages_and_responsible(
     assert all("jara" in (item["responsible_user_name"] or "").lower() for item in responsible.json())
 
 
+async def test_list_work_orders_can_filter_without_general_area(client, seed_data):
+    """The KPI shortcut must return every unclassified OT, not only loaded rows."""
+    token = await get_token(client, "admin@test.com")
+    response = await client.post(
+        "/api/work-orders/historical",
+        json={
+            "original_ot_number": "LEGACY-WITHOUT-AREA",
+            "title": "OT histórica sin área",
+            "description": "Debe aparecer en la bandeja de clasificación.",
+            "maintenance_type": "CORRECTIVE",
+            "execution_date": "2026-09-20",
+            "worked_duration_minutes": 60,
+        },
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 201, response.text
+    created = response.json()
+
+    filtered = await client.get(
+        "/api/work-orders?without_area=true&limit=500",
+        headers=auth_headers(token),
+    )
+    assert filtered.status_code == 200
+    matching = [item for item in filtered.json() if item["id"] == created["id"]]
+    assert len(matching) == 1
+    assert matching[0]["area_name"] is None
+    assert matching[0]["classification_pending"] is True
+
+
 async def test_admin_delete_removes_ot_and_related_records(
     client, seed_data, db_session_factory, monkeypatch
 ):

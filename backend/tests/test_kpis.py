@@ -91,6 +91,10 @@ async def test_kpi_report_counts_each_participant_with_full_ot_duration(
     assert workers["Ortiz"]["total_hours"] == 4.5
     other_worker_hours = [row["total_hours"] for name, row in workers.items() if name != "Ortiz"]
     assert other_worker_hours == [2.5]
+    area_rows = {row["area_name"]: row for row in payload["by_area"]}
+    assert area_rows["Sin área"]["total_ots"] == 2
+    section_rows = {(row["area_name"], row["section_name"]): row for row in payload["by_section"]}
+    assert section_rows[("Sin área", "Malta")]["total_ots"] == 2
     current_month = next(row for row in payload["by_month"] if row["month"] == date.today().strftime("%Y-%m"))
     assert current_month["total_ots"] == 2
     assert current_month["planned_ots"] == 2

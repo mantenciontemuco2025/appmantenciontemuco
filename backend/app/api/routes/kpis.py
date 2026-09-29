@@ -193,7 +193,9 @@ async def get_kpis(
         if status in {"PENDING", "IN_PROGRESS"} and age_date and age_date < stale_cutoff:
             stale_pending_ots += 1
 
-        area = wo.plant_area or (wo.area.name if wo.area else "Sin área")
+        # ``plant_area`` is the general area. The legacy ``area`` relation is
+        # the section catalog and must never be used as an area fallback.
+        area = (wo.plant_area or "").strip() or "Sin área"
         area_row = area_counts.setdefault(area, {
             "total": 0, "completed": 0, "minutes": 0.0,
             "preventive": 0, "corrective": 0,
@@ -212,7 +214,7 @@ async def get_kpis(
         area_type_row["completed"] += int(is_completed)
         area_type_row["minutes"] += minutes
 
-        section_value = wo.area.name if wo.plant_area and wo.area else wo.section_name
+        section_value = wo.area.name if wo.area else wo.section_name
         section = (section_value or "Sin sección").strip() or "Sin sección"
         section_key = (area, section)
         section_row = section_counts.setdefault(section_key, {

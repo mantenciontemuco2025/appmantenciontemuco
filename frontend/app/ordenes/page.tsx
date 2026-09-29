@@ -44,6 +44,7 @@ export default function OrdenesPage() {
   const [activeView, setActiveView] = useState<ViewKey>("ALL");
   const [searchOT, setSearchOT] = useState("");
   const [searchResponsible, setSearchResponsible] = useState("");
+  const [withoutArea, setWithoutArea] = useState(false);
   const [counter, setCounter] = useState<WorkOrderCounter | null>(null);
   const [error, setError] = useState("");
 
@@ -64,6 +65,10 @@ export default function OrdenesPage() {
   }, [loading, user, router]);
 
   useEffect(() => {
+    setWithoutArea(new URLSearchParams(window.location.search).get("without_area") === "true");
+  }, []);
+
+  useEffect(() => {
     if (!user) return;
     if (activeTab === "OVERDUE") return;
     const timer = setTimeout(() => {
@@ -74,13 +79,13 @@ export default function OrdenesPage() {
     loadFirstPage();
     setCounter(null);
     api
-      .getCached<WorkOrderCounter>(`/api/work-orders/status-counts?view=${activeView}`, 15000)
+      .getCached<WorkOrderCounter>(`/api/work-orders/status-counts?view=${activeView}${withoutArea ? "&without_area=true" : ""}`, 15000)
       .then(setCounter)
       .catch(() => setCounter(null));
     }, 250);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, activeView, activeTab, searchOT, searchResponsible]);
+  }, [user, activeView, activeTab, searchOT, searchResponsible, withoutArea]);
 
   // Carga el panel de Vencidas cuando se activa la pestaña (una vez por visita).
   useEffect(() => {
@@ -97,7 +102,7 @@ export default function OrdenesPage() {
     }, 250);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, activeTab, activeView, searchOT, searchResponsible]);
+  }, [user, activeTab, activeView, searchOT, searchResponsible, withoutArea]);
 
   // Poll mientras alguna OT visible esté en sincronización asíncrona (PENDING),
   // para que el badge pase solo a SYNCED/FAILED sin recargar manualmente.
@@ -174,6 +179,7 @@ export default function OrdenesPage() {
     if (activeView === "SUPERVISOR_VALIDATION") filters.set("supervisor_validation_pending", "true");
     if (searchOT.trim()) filters.set("search", searchOT.trim());
     if (searchResponsible.trim()) filters.set("responsible", searchResponsible.trim());
+    if (withoutArea) filters.set("without_area", "true");
     return filters;
   }
 
@@ -243,7 +249,7 @@ export default function OrdenesPage() {
   // La pestaña "Vencidas" usa su propia ventana consultada al servidor.
   const source = activeTab === "OVERDUE" ? overdue : orders;
   const filtered = source;
-  const hasSearch = Boolean(searchOT.trim() || searchResponsible.trim());
+  const hasSearch = Boolean(searchOT.trim() || searchResponsible.trim() || withoutArea);
 
   function tabCount(key: TabKey): number {
     if (key === "OVERDUE") return counter?.overdue_count ?? overdue.length;
@@ -376,6 +382,22 @@ export default function OrdenesPage() {
       </div>
 
       {/* Emisión en lote — barra de selección (visible en pestañas con DRAFT) */}
+      {withoutArea && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+          <span><strong>OTs sin área general:</strong> clasifica cada OT para completar sus datos.</span>
+          <button
+            type="button"
+            className="font-semibold underline underline-offset-2 hover:text-amber-700"
+            onClick={() => {
+              setWithoutArea(false);
+              router.replace("/ordenes");
+            }}
+          >
+            Ver todas
+          </button>
+        </div>
+      )}
+
       {user.role === "ADMIN" && activeTab !== "OVERDUE" && selectable.length > 0 && (
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-dashed bg-muted/30 px-3 py-2">
           <label className="inline-flex items-center gap-2 text-sm">
@@ -516,7 +538,7 @@ export default function OrdenesPage() {
                       </div>
                       <div className="mt-1 font-semibold truncate">{o.title || o.equipment_name}</div>
                       <div className="text-sm text-muted-foreground">
-                        {o.area_name} · {o.section_name || "-"} · {o.equipment_name || "-"}
+                        {o.area_name || "Sin área"} · {o.section_name || "-"} · {o.equipment_name || "-"}
                       </div>
                       <div className="mt-0.5 text-sm text-muted-foreground">
                         {maintenanceTypeLabel(o.maintenance_type)} ·{" "}

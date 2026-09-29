@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   BarChart3,
   CalendarRange,
@@ -32,6 +33,27 @@ const TYPE_LABELS: Record<string, string> = {
 function localDate(date: Date) {
   const offset = date.getTimezoneOffset();
   return new Date(date.getTime() - offset * 60_000).toISOString().slice(0, 10);
+}
+
+const KPI_DATE_RANGE_STORAGE_KEY = "mantencion:kpi-date-range:v1";
+
+function defaultKpiDateRange() {
+  const today = new Date();
+  return { from: `${today.getFullYear()}-01-01`, to: localDate(today) };
+}
+
+function savedKpiDateRange() {
+  const fallback = defaultKpiDateRange();
+  if (typeof window === "undefined") return fallback;
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(KPI_DATE_RANGE_STORAGE_KEY) || "null") as { from?: unknown; to?: unknown } | null;
+    const validDate = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value);
+    return saved && validDate(saved.from) && validDate(saved.to)
+      ? { from: saved.from, to: saved.to }
+      : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function monthLabel(value: string) {
@@ -90,10 +112,14 @@ function DistributionPie({
   title,
   description,
   rows,
+  onSegmentClick,
+  scrollLegend = false,
 }: {
   title: string;
   description: string;
   rows: { label: string; value: number }[];
+  onSegmentClick?: (label: string) => void;
+  scrollLegend?: boolean;
 }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const data = rows
@@ -114,7 +140,7 @@ function DistributionPie({
   });
 
   return (
-    <div className="rounded-2xl border bg-card p-4 shadow-sm sm:p-5">
+    <div className="min-w-0 overflow-hidden rounded-2xl border bg-card p-4 shadow-sm sm:p-5">
       <div className="mb-4 text-center">
         <h3 className="text-xl font-semibold">{title}</h3>
         <p className="mt-1 text-xs text-muted-foreground">{description}</p>
@@ -124,7 +150,7 @@ function DistributionPie({
           No hay datos para este período.
         </div>
       ) : (
-        <div className="grid items-center gap-5 md:grid-cols-[minmax(220px,0.9fr)_1.1fr]">
+        <div className="grid min-w-0 items-center gap-5 md:grid-cols-[minmax(220px,0.9fr)_1.1fr]">
           <div className="flex justify-center">
             <div className="relative aspect-square w-full max-w-[260px]">
               <svg
@@ -161,6 +187,7 @@ function DistributionPie({
                       strokeWidth="1.5"
                       className="cursor-pointer transition-opacity hover:opacity-80"
                       onMouseEnter={() => setHoveredIndex(index)}
+                      onClick={() => onSegmentClick?.(segment.label)}
                     />
                   );
                 })}
@@ -187,13 +214,14 @@ function DistributionPie({
               </div>
             </div>
           </div>
-          <div className="space-y-2">
+          <div className={scrollLegend ? "min-w-0 max-h-64 space-y-2 overflow-y-auto pr-2" : "min-w-0 space-y-2"}>
             {segments.map((segment, index) => (
               <div
                 key={segment.label}
                 className="flex cursor-pointer items-center gap-2 rounded-md px-1 text-sm transition-colors hover:bg-muted/60"
                 onMouseEnter={() => setHoveredIndex(index)}
                 onMouseLeave={() => setHoveredIndex(null)}
+                onClick={() => onSegmentClick?.(segment.label)}
               >
                 <span className="h-3 w-3 shrink-0 rounded-sm" style={{ backgroundColor: segment.color }} />
                 <span className="min-w-0 flex-1 truncate" title={segment.label}>{segment.label}</span>
@@ -230,7 +258,7 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
 
   return (
     <>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="order-1 mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
           label="Horas-persona"
           value={formatHours(summary.total_person_hours)}
@@ -261,7 +289,7 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
         />
       </div>
 
-      <div className="mt-5 rounded-2xl border p-4 sm:p-5">
+      <div className="order-2 mt-5 rounded-2xl border p-4 sm:p-5">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h3 className="font-semibold">Estado de las {summary.total_ots} OTs</h3>
           <p className="text-sm text-muted-foreground">Distribución del período seleccionado</p>
@@ -282,7 +310,7 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
         </div>
       </div>
 
-      <div className="mt-5 overflow-hidden rounded-2xl border">
+      <div className="order-5 mt-5 overflow-hidden rounded-2xl border">
         <div className="border-b p-4">
           <h3 className="font-semibold">Trabajos realizados por externos</h3>
           <p className="text-xs text-muted-foreground">Horas y OTs del contratista, sin sumarlas a las horas-persona del administrador.</p>
@@ -319,7 +347,7 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
         </div>
       </div>
 
-      <div className="mt-5 overflow-hidden rounded-2xl border">
+      <div className="order-5 mt-5 overflow-hidden rounded-2xl border">
         <div className="border-b p-4">
           <h3 className="font-semibold">Detalle por trabajador, área y tipo</h3>
           <p className="text-xs text-muted-foreground">Permite identificar combinaciones como Wilson · Cebada · Correctivo · 2 h</p>
@@ -352,7 +380,7 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
         </div>
       </div>
 
-      <div className="mt-5 overflow-hidden rounded-2xl border">
+      <div className="order-5 mt-5 overflow-hidden rounded-2xl border">
         <div className="border-b p-4">
           <h3 className="font-semibold">Distribución por área y tipo</h3>
           <p className="text-xs text-muted-foreground">Las horas de esta tabla cuentan cada OT una sola vez</p>
@@ -377,7 +405,7 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
         </div>
       </div>
 
-      <p className="mt-4 text-right text-xs text-muted-foreground">
+      <p className="order-6 mt-4 text-right text-xs text-muted-foreground">
         Período: {new Date(data.date_from).toLocaleDateString("es-CL")} — {new Date(data.date_to).toLocaleDateString("es-CL")} · Actualizado: {new Date(data.generated_at).toLocaleString("es-CL")}
       </p>
     </>
@@ -385,15 +413,36 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
 }
 
 export function KpiDashboard() {
-  const today = useMemo(() => new Date(), []);
   const plantAreaOptions = usePlantAreaOptions();
-  const [dateFrom, setDateFrom] = useState(`${today.getFullYear()}-01-01`);
-  const [dateTo, setDateTo] = useState(localDate(today));
+  const initialDates = defaultKpiDateRange();
+  const [dateFrom, setDateFrom] = useState(initialDates.from);
+  const [dateTo, setDateTo] = useState(initialDates.to);
+  const [datesHydrated, setDatesHydrated] = useState(false);
   const [plantArea, setPlantArea] = useState("");
   const [maintenanceType, setMaintenanceType] = useState("");
   const [data, setData] = useState<KpiResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const saved = savedKpiDateRange();
+    setDateFrom(saved.from);
+    setDateTo(saved.to);
+    setDatesHydrated(true);
+  }, []);
+
+  useEffect(() => {
+    if (!datesHydrated) return;
+    try {
+      window.localStorage.setItem(
+        KPI_DATE_RANGE_STORAGE_KEY,
+        JSON.stringify({ from: dateFrom, to: dateTo }),
+      );
+    } catch {
+      // La persistencia local es opcional; el informe sigue funcionando si el
+      // navegador bloquea el almacenamiento.
+    }
+  }, [dateFrom, dateTo, datesHydrated]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -410,11 +459,21 @@ export function KpiDashboard() {
     }
   }, [plantArea, dateFrom, dateTo, maintenanceType]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    if (datesHydrated) void load();
+  }, [datesHydrated, load]);
 
   const maxType = Math.max(1, ...(data?.by_maintenance_type.map((row) => row.total_ots) || [1]));
   const maxPlannedMonth = Math.max(1, ...(data?.by_month.map((row) => row.planned_ots) || [1]));
   const summary = data?.summary;
+  const missingAreaRow = data?.by_area.find((row) => row.area_name === "Sin área");
+  const sectionDistribution = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const row of data?.by_section ?? []) {
+      totals.set(row.section_name, (totals.get(row.section_name) ?? 0) + row.total_ots);
+    }
+    return Array.from(totals, ([label, value]) => ({ label, value }));
+  }, [data?.by_section]);
 
   return (
     <section className="mb-8 overflow-hidden rounded-3xl border bg-card shadow-sm">
@@ -445,7 +504,7 @@ export function KpiDashboard() {
         </form>
       </div>
 
-      <div className="p-4 sm:p-6">
+      <div className="flex flex-col p-4 sm:p-6">
         {error ? (
           <div className="mb-5 rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">{error}. Revisa la sesión y vuelve a actualizar.</div>
         ) : null}
@@ -463,20 +522,31 @@ export function KpiDashboard() {
 
             <KpiProfessionalExtras data={data} />
 
-            <div className="mt-5 grid gap-5 lg:grid-cols-2">
+            <div className="order-3 mt-5 grid gap-5 lg:grid-cols-2">
               <DistributionPie
                 title="Recuento de áreas"
                 description="Distribución de las OTs del período por área"
                 rows={data.by_area.map((row) => ({ label: row.area_name, value: row.total_ots }))}
+                onSegmentClick={(label) => {
+                  if (label === "Sin área") window.location.href = "/ordenes?without_area=true";
+                }}
               />
               <DistributionPie
                 title="Asignación de trabajos"
                 description="OTs asignadas por responsable"
                 rows={data.by_worker.map((row) => ({ label: row.worker_name, value: row.assigned_ots }))}
               />
+              <div className="lg:col-span-2">
+                <DistributionPie
+                  title="Recuento de secciones"
+                  description="Distribución de las OTs por sección"
+                  rows={sectionDistribution}
+                  scrollLegend
+                />
+              </div>
             </div>
 
-            <div className="mt-5 grid gap-5 lg:grid-cols-2">
+            <div className="order-4 mt-5 grid gap-5 lg:grid-cols-2">
               <div className="rounded-2xl border p-4 sm:p-5">
                 <div className="mb-4 flex items-center justify-between"><div><h3 className="font-semibold">Por tipo de mantenimiento</h3><p className="text-xs text-muted-foreground">Cantidad de OTs y horas</p></div><BarChart3 className="h-5 w-5 text-primary" /></div>
                 <div className="space-y-4">
@@ -492,9 +562,27 @@ export function KpiDashboard() {
               </div>
             </div>
 
-            <div className="mt-5 grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
+            <div className="order-5 mt-5 grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
               <div className="overflow-hidden rounded-2xl border"><div className="flex items-center justify-between border-b p-4"><div><h3 className="font-semibold">Horas por trabajador</h3><p className="text-xs text-muted-foreground">Cada participante recibe la duración completa de la OT</p></div><Users className="h-5 w-5 text-primary" /></div><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr><th className="px-4 py-3">Trabajador</th><th className="px-4 py-3 text-right">OTs</th><th className="px-4 py-3 text-right">Finalizadas</th><th className="px-4 py-3 text-right">Horas</th></tr></thead><tbody className="divide-y">{data.by_worker.length ? data.by_worker.map((row) => <tr key={row.user_id}><td className="px-4 py-3 font-medium">{row.worker_name}</td><td className="px-4 py-3 text-right">{row.assigned_ots}</td><td className="px-4 py-3 text-right">{row.completed_ots} <span className="text-xs text-muted-foreground">({percent(row.completed_ots, row.assigned_ots)}%)</span></td><td className="px-4 py-3 text-right font-semibold text-primary">{formatHours(row.total_hours)}</td></tr>) : <tr><td colSpan={4} className="px-4 py-8 text-center text-muted-foreground">No hay participantes en el período.</td></tr>}</tbody></table></div></div>
-              <div className="overflow-hidden rounded-2xl border"><div className="flex items-center justify-between border-b p-4"><div><h3 className="font-semibold">Por área</h3><p className="text-xs text-muted-foreground">Preventivo y correctivo por área</p></div><Wrench className="h-5 w-5 text-primary" /></div><div className="max-h-80 overflow-auto"><table className="w-full text-left text-sm"><thead className="sticky top-0 bg-muted/90 text-xs uppercase text-muted-foreground"><tr><th className="px-4 py-3">Área</th><th className="px-4 py-3 text-right">OTs</th><th className="px-4 py-3 text-right">Horas</th></tr></thead><tbody className="divide-y">{data.by_area.length ? data.by_area.map((row) => <tr key={row.area_name}><td className="px-4 py-3"><div className="font-medium">{row.area_name}</div><div className="text-xs text-muted-foreground">P {row.preventive_ots} · C {row.corrective_ots}</div></td><td className="px-4 py-3 text-right">{row.total_ots}</td><td className="px-4 py-3 text-right font-semibold">{formatHours(row.total_hours)}</td></tr>) : <tr><td colSpan={3} className="px-4 py-8 text-center text-muted-foreground">No hay áreas en el período.</td></tr>}</tbody></table></div></div>
+              <div className="overflow-hidden rounded-2xl border">
+                <div className="flex items-center justify-between border-b p-4">
+                  <div><h3 className="font-semibold">Por área</h3><p className="text-xs text-muted-foreground">Preventivo y correctivo por área</p></div>
+                  <Wrench className="h-5 w-5 text-primary" />
+                </div>
+                {missingAreaRow ? <div className="border-b bg-amber-50 px-4 py-3 text-sm text-amber-900"><span>Hay <strong>{missingAreaRow.total_ots}</strong> OTs sin área general.</span>{" "}<Link href="/ordenes?without_area=true" className="font-semibold underline underline-offset-2 hover:text-amber-700">Ver y clasificar</Link></div> : null}
+                <div className="max-h-80 overflow-auto">
+                  <table className="w-full text-left text-sm">
+                    <thead className="sticky top-0 bg-muted/90 text-xs uppercase text-muted-foreground"><tr><th className="px-4 py-3">Área</th><th className="px-4 py-3 text-right">OTs</th><th className="px-4 py-3 text-right">Horas</th></tr></thead>
+                    <tbody className="divide-y">
+                      {data.by_area.length ? data.by_area.map((row) => {
+                        const missingArea = row.area_name === "Sin área";
+                        const cells = <><td className="px-4 py-3"><div className="font-medium">{row.area_name}</div><div className="text-xs text-muted-foreground">P {row.preventive_ots} · C {row.corrective_ots}</div></td><td className="px-4 py-3 text-right">{row.total_ots}</td><td className="px-4 py-3 text-right font-semibold">{formatHours(row.total_hours)}</td></>;
+                        return missingArea ? <tr key={row.area_name} className="cursor-pointer bg-amber-50/60 hover:bg-amber-100/70" role="link" tabIndex={0} onClick={() => { window.location.href = "/ordenes?without_area=true"; }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") window.location.href = "/ordenes?without_area=true"; }}>{cells}</tr> : <tr key={row.area_name}>{cells}</tr>;
+                      }) : <tr><td colSpan={3} className="px-4 py-8 text-center text-muted-foreground">No hay áreas en el período.</td></tr>}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             </div>
           </>
         ) : null}
