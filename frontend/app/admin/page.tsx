@@ -58,7 +58,7 @@ export default function AdminPage() {
             active={tab === "catalog"}
             onClick={() => setTab("catalog")}
             icon={<Boxes className="h-4 w-4" />}
-            label="Catálogo"
+            label="Áreas y equipos"
           />
           <TabButton
             active={tab === "materials"}

@@ -6,7 +6,7 @@ import { api } from "@/lib/api";
 import type { AreaNode, User } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { WORK_ORDER_AREAS } from "@/lib/work-order-areas";
+import { usePlantAreaOptions } from "@/lib/use-plant-area-options";
 
 type FormState = {
   original_ot_number: string;
@@ -44,6 +44,7 @@ const initialForm: FormState = {
 
 export function HistoricalWorkOrderForm() {
   const [form, setForm] = useState<FormState>(initialForm);
+  const plantAreaOptions = usePlantAreaOptions();
   const [legacyAreas, setLegacyAreas] = useState<AreaNode[]>([]);
   const [workers, setWorkers] = useState<User[]>([]);
   const [busy, setBusy] = useState(false);
@@ -156,7 +157,7 @@ export function HistoricalWorkOrderForm() {
       <Field label="Descripción del trabajo realizado *"><textarea required className="min-h-24 w-full rounded-md border bg-background p-3 text-sm" value={form.description} onChange={(e) => update("description", e.target.value)} /></Field>
 
       <div className="grid gap-4 md:grid-cols-3">
-        <Field label="Área de planta *"><select required className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={form.plant_area} onChange={(e) => selectPlantArea(e.target.value)}><option value="">Seleccionar...</option>{WORK_ORDER_AREAS.map((area) => <option key={area} value={area}>{area}</option>)}</select></Field>
+        <Field label="Área de planta *"><select required className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={form.plant_area} onChange={(e) => selectPlantArea(e.target.value)}><option value="">Seleccionar...</option>{plantAreaOptions.map((area) => <option key={area.id} value={area.name}>{area.name}</option>)}</select></Field>
         <Field label="Sección *"><select required className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={form.area_id} onChange={(e) => selectSection(e.target.value)}><option value="">Seleccionar...</option>{sections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
         <Field label="Equipo (opcional)"><select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={form.equipment_id} onChange={(e) => update("equipment_id", e.target.value)}><option value="">Sin equipo específico</option>{equipment.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
       </div>

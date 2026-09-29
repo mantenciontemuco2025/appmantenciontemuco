@@ -14,7 +14,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { VoiceDictation } from "@/components/maintenance/voice-dictation";
 import { MaterialCodePicker } from "@/components/orders/material-code-picker";
 import { todayDateInputValue } from "@/lib/utils";
-import { WORK_ORDER_AREAS } from "@/lib/work-order-areas";
+import { usePlantAreaOptions } from "@/lib/use-plant-area-options";
 
 interface WorkerOption {
   id: number;
@@ -105,6 +105,7 @@ export function OrderWizard() {
 
   const [areas, setAreas] = useState<AreaNode[]>([]);
   const [workers, setWorkers] = useState<WorkerOption[]>([]);
+  const plantAreaCatalog = usePlantAreaOptions();
 
   const [form, setForm] = useState<Form>(() => emptyForm());
   const [pendingEvidence, setPendingEvidence] = useState<PendingEvidence[]>([]);
@@ -196,7 +197,7 @@ export function OrderWizard() {
   const availableSections = areas;
   const selectedSection = availableSections.find((a) => a.id === form.area_id) || null;
   const filteredEquipment = selectedSection?.equipment || [];
-  const plantAreaOptions = WORK_ORDER_AREAS.map((name) => ({ value: name, label: name }));
+  const plantAreaOptions = plantAreaCatalog.map((area) => ({ value: area.name, label: area.name }));
   const supervisorAreaIds =
     user?.role === "SUPERVISOR"
       ? (user.area_ids?.length ? user.area_ids : user.area_id ? [user.area_id] : [])

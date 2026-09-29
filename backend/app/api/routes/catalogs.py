@@ -28,6 +28,10 @@ from app.schemas.catalog import (
     AreaResponse,
     AreaWithEquipment,
     AreaUpdate,
+    PlantAreaCreate,
+    PlantAreaResponse,
+    PlantAreaUpdate,
+    PlantAreaWorkOrderBrief,
     EquipmentCreate,
     EquipmentResponse,
     EquipmentUpdate,
@@ -79,6 +83,120 @@ async def get_catalog_hierarchy(
             PlantAreaWithSections(id=plant.id, name=plant.name, sections=sections)
         )
     return response
+
+
+# --------------------------------------------------------------------------
+# Plant areas (general areas) -> sections -> equipment
+# --------------------------------------------------------------------------
+@router.get("/plant-areas", response_model=list[PlantAreaResponse])
+async def list_plant_areas(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(select(PlantArea).order_by(PlantArea.name))
+    return result.scalars().all()
+
+
+@router.post("/plant-areas", response_model=PlantAreaResponse, status_code=status.HTTP_201_CREATED)
+async def create_plant_area(
+    payload: PlantAreaCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(admin_only),
+):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="El nombre del área general no puede estar vacío")
+    duplicate = await db.scalar(select(PlantArea.id).where(PlantArea.name.ilike(name)).limit(1))
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail="Ya existe un área general con ese nombre")
+    area = PlantArea(name=name)
+    db.add(area)
+    await db.flush()
+    await create_audit_log(
+        db, user_id=current_user.id, action="CREATE",
+        entity_type="PlantArea", entity_id=area.id, new_data={"name": area.name},
+    )
+    await db.refresh(area)
+    return area
+
+
+@router.patch("/plant-areas/{plant_area_id}", response_model=PlantAreaResponse)
+async def update_plant_area(
+    plant_area_id: int,
+    payload: PlantAreaUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(admin_only),
+):
+    area = await db.get(PlantArea, plant_area_id)
+    if area is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Área general no encontrada")
+    previous = {"name": area.name}
+    if payload.name is not None:
+        name = payload.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="El nombre del área general no puede estar vacío")
+        duplicate = await db.scalar(
+            select(PlantArea.id).where(
+                PlantArea.id != plant_area_id,
+                PlantArea.name.ilike(name),
+            ).limit(1)
+        )
+        if duplicate is not None:
+            raise HTTPException(status_code=409, detail="Ya existe un área general con ese nombre")
+        area.name = name
+    await create_audit_log(
+        db, user_id=current_user.id, action="UPDATE",
+        entity_type="PlantArea", entity_id=area.id,
+        previous_data=previous, new_data={"name": area.name},
+    )
+    await db.refresh(area)
+    return area
+
+
+@router.delete("/plant-areas/{plant_area_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_plant_area(
+    plant_area_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(admin_only),
+):
+    area = await db.get(PlantArea, plant_area_id)
+    if area is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Área general no encontrada")
+    normalized_name = area.name.strip().upper()
+    has_work_order = await db.scalar(
+        select(WorkOrder.id)
+        .where(func.upper(func.trim(WorkOrder.plant_area)) == normalized_name)
+        .limit(1)
+    )
+    if has_work_order is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="No se puede eliminar el área general porque tiene OTs asociadas",
+        )
+    await create_audit_log(
+        db, user_id=current_user.id, action="DELETE",
+        entity_type="PlantArea", entity_id=area.id,
+        previous_data={"name": area.name},
+    )
+    await db.delete(area)
+
+
+@router.get("/plant-areas/{plant_area_id}/work-orders", response_model=list[PlantAreaWorkOrderBrief])
+async def list_plant_area_work_orders(
+    plant_area_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(admin_only),
+):
+    area = await db.get(PlantArea, plant_area_id)
+    if area is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Área general no encontrada")
+    normalized_name = area.name.strip().upper()
+    result = await db.execute(
+        select(WorkOrder)
+        .where(func.upper(func.trim(WorkOrder.plant_area)) == normalized_name)
+        .order_by(WorkOrder.created_at.desc(), WorkOrder.id.desc())
+    )
+    return result.scalars().all()
 
 
 @router.post("/inventory/import", response_model=InventoryImportResult)

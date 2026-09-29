@@ -13,7 +13,6 @@ from app.api.dependencies import require_roles
 from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.models.work_order import WorkOrder
-from app.core.work_order_areas import WORK_ORDER_AREAS
 from app.schemas.kpi import (
     KpiMaintenanceRow,
     KpiMonthRow,
@@ -136,8 +135,6 @@ async def get_kpis(
         query = query.where(WorkOrder.area_id == area_id)
     if plant_area and plant_area.strip():
         normalized_area = plant_area.strip().upper()
-        if normalized_area not in WORK_ORDER_AREAS:
-            raise HTTPException(status_code=400, detail="Área no válida")
         query = query.where(WorkOrder.plant_area == normalized_area)
     if section_name and section_name.strip():
         query = query.where(func.lower(func.coalesce(WorkOrder.section_name, "")) == section_name.strip().lower())

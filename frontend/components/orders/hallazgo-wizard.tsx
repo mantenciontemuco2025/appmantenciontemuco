@@ -9,7 +9,7 @@ import type { AreaNode, WorkOrderRecord } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { VoiceDictation } from "@/components/maintenance/voice-dictation";
 import { MaterialCodePicker } from "@/components/orders/material-code-picker";
-import { WORK_ORDER_AREAS } from "@/lib/work-order-areas";
+import { usePlantAreaOptions } from "@/lib/use-plant-area-options";
 
 type HallazgoKind = "COMPLETED" | "REQUIRES_ATTENTION";
 type TimeMode = "RANGE" | "MANUAL";
@@ -49,7 +49,8 @@ export function HallazgoWizard() {
   const { user } = useAuth();
   const [areas, setAreas] = useState<AreaNode[]>([]);
   const [workers, setWorkers] = useState<{ id: number; full_name: string }[]>([]);
-  const [plantArea, setPlantArea] = useState<string>(WORK_ORDER_AREAS[0]);
+  const plantAreaOptions = usePlantAreaOptions();
+  const [plantArea, setPlantArea] = useState<string>("CEBADA");
   const [areaId, setAreaId] = useState<number | "">("");
   const [equipmentId, setEquipmentId] = useState<number | "">("");
   const [kind, setKind] = useState<HallazgoKind>("COMPLETED");
@@ -86,8 +87,6 @@ export function HallazgoWizard() {
 
   const availableSections = areas;
   const selectedArea = useMemo(() => availableSections.find((area) => area.id === areaId), [availableSections, areaId]);
-  const plantAreaOptions = WORK_ORDER_AREAS.map((name, id) => ({ id, name }));
-
   function setField(key: keyof typeof form, value: string) {
     setForm((current) => ({ ...current, [key]: value }));
   }

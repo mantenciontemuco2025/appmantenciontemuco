@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { KpiResponse } from "@/lib/types";
-import { WORK_ORDER_AREAS } from "@/lib/work-order-areas";
+import { usePlantAreaOptions } from "@/lib/use-plant-area-options";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -386,6 +386,7 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
 
 export function KpiDashboard() {
   const today = useMemo(() => new Date(), []);
+  const plantAreaOptions = usePlantAreaOptions();
   const [dateFrom, setDateFrom] = useState(`${today.getFullYear()}-01-01`);
   const [dateTo, setDateTo] = useState(localDate(today));
   const [plantArea, setPlantArea] = useState("");
@@ -438,7 +439,7 @@ export function KpiDashboard() {
         <form className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5" onSubmit={(event) => { event.preventDefault(); void load(); }}>
           <Input aria-label="Desde" type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} />
           <Input aria-label="Hasta" type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} />
-          <Select aria-label="Área" value={plantArea} onChange={(event) => setPlantArea(event.target.value)} options={WORK_ORDER_AREAS.map((area) => ({ value: area, label: area }))} placeholder="Todas las áreas" />
+          <Select aria-label="Área" value={plantArea} onChange={(event) => setPlantArea(event.target.value)} options={plantAreaOptions.map((area) => ({ value: area.name, label: area.name }))} placeholder="Todas las áreas" />
           <Select aria-label="Tipo" value={maintenanceType} onChange={(event) => setMaintenanceType(event.target.value)} options={Object.entries(TYPE_LABELS).map(([value, label]) => ({ value, label }))} placeholder="Todos los tipos" />
           <Button type="submit" disabled={loading} className="h-12 gap-2"><RefreshCw className={loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} /> Actualizar</Button>
         </form>

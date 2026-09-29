@@ -257,8 +257,8 @@ class HallazgoCreate(BaseModel):
     @classmethod
     def valid_hallazgo_area(cls, value: str) -> str:
         value = value.strip().upper()
-        if value not in WORK_ORDER_AREAS:
-            raise ValueError(f"Área no válida. Use: {', '.join(WORK_ORDER_AREAS)}")
+        if not value:
+            raise ValueError("El área no puede estar vacía")
         return value
 
     @model_validator(mode="after")

@@ -22,7 +22,7 @@ import { SyncBadge, RetrySyncButton } from "@/components/maintenance/sync-badge"
 import { cn, formatDateOnly } from "@/lib/utils";
 import { PageLoading } from "@/components/ui/page-loading";
 import { LOTO_CONTROL_LABELS, LOTO_CONTROL_OPTIONS } from "@/lib/loto";
-import { WORK_ORDER_AREAS } from "@/lib/work-order-areas";
+import { usePlantAreaOptions } from "@/lib/use-plant-area-options";
 import { WorkOrderEvidencePanel } from "@/components/maintenance/work-order-evidence";
 import { HallazgoReviewPanel } from "@/components/orders/hallazgo-review-panel";
 import { HallazgoEditPanel } from "@/components/orders/hallazgo-edit-panel";
@@ -90,6 +90,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
   const { id } = use(params);
   const { user, loading, logout } = useAuth();
   const router = useRouter();
+  const plantAreaOptions = usePlantAreaOptions();
   const [wo, setWo] = useState<WorkOrderRecord | null>(null);
   const [loadingOrder, setLoadingOrder] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
@@ -426,7 +427,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
           onChange={(event) => setAdminEdit((current) => ({ ...current, plant_area: event.target.value }))}
         >
           <option value="">Seleccionar Ã¡rea</option>
-          {WORK_ORDER_AREAS.map((area) => <option key={area} value={area}>{area}</option>)}
+          {plantAreaOptions.map((area) => <option key={area.id} value={area.name}>{area.name}</option>)}
         </select>
       );
       if (field === "loto_status") return (
@@ -1630,7 +1631,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                       Área
                       <select className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2" value={reassignPlantArea} onChange={(e) => setReassignPlantArea(e.target.value)}>
                         <option value="">Seleccionar...</option>
-                        {WORK_ORDER_AREAS.map((name) => <option key={name} value={name}>{name}</option>)}
+                        {plantAreaOptions.map((area) => <option key={area.id} value={area.name}>{area.name}</option>)}
                       </select>
                     </label>
                     <label className="text-sm">

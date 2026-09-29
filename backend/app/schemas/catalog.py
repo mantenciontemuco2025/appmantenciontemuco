@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from pydantic import BaseModel, Field
 
 
@@ -23,6 +23,36 @@ class AreaResponse(BaseModel):
 class AreaBrief(BaseModel):
     id: int
     name: str
+
+    model_config = {"from_attributes": True}
+
+
+# Plant area (general area that groups sections)
+class PlantAreaCreate(BaseModel):
+    name: str
+
+
+class PlantAreaUpdate(BaseModel):
+    name: str | None = None
+
+
+class PlantAreaResponse(BaseModel):
+    id: int
+    name: str
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class PlantAreaWorkOrderBrief(BaseModel):
+    id: int
+    ot_number: str
+    title: str
+    plant_area: str | None = None
+    status: str
+    execution_date: date | None = None
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 

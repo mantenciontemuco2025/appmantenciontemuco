@@ -58,6 +58,11 @@ export interface PlantAreaNode {
   sections: AreaNode[];
 }
 
+export interface PlantAreaOption {
+  id: number;
+  name: string;
+}
+
 export interface InventoryImportResult {
   received: number;
   areas_created: number;

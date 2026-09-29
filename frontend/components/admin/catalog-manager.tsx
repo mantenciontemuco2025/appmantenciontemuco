@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import * as XLSX from "xlsx";
 import { Check, FileSpreadsheet, Loader2, Pencil, Plus, Trash2, Upload, X } from "lucide-react";
 import { api } from "@/lib/api";
-import type { AreaNode, EquipmentNode, InventoryImportResult } from "@/lib/types";
+import type { AreaNode, EquipmentNode, InventoryImportResult, PlantAreaNode } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -60,9 +60,17 @@ async function parseInventoryWorkbook(file: File): Promise<InventoryImportItem[]
 /** Admin management for OT sections and their equipment catalog. */
 export function CatalogManager() {
   const [areas, setAreas] = useState<AreaNode[]>([]);
+  const [plantAreas, setPlantAreas] = useState<PlantAreaNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [newArea, setNewArea] = useState("");
+  const [areaMessage, setAreaMessage] = useState("");
+  const [newPlantArea, setNewPlantArea] = useState("");
+  const [plantAreaMessage, setPlantAreaMessage] = useState("");
+  const [editingPlantAreaId, setEditingPlantAreaId] = useState<number | null>(null);
+  const [plantAreaDraft, setPlantAreaDraft] = useState("");
+  const [viewingPlantAreaId, setViewingPlantAreaId] = useState<number | null>(null);
+  const [plantAreaOrders, setPlantAreaOrders] = useState<Record<number, { id: number; ot_number: string; title: string; status: string; execution_date: string | null }[]>>({});
   const [newEquipment, setNewEquipment] = useState("");
   const [activeArea, setActiveArea] = useState<number | null>(null);
   const [editingAreaId, setEditingAreaId] = useState<number | null>(null);
@@ -75,13 +83,13 @@ export function CatalogManager() {
   const [importError, setImportError] = useState("");
 
   const load = useCallback(async () => {
-    try {
-      setAreas(await api.getCached<AreaNode[]>("/api/catalogs/tree", 5 * 60 * 1000));
-    } catch {
-      setAreas([]);
-    } finally {
-      setLoading(false);
-    }
+    const [tree, hierarchy] = await Promise.allSettled([
+      api.getCached<AreaNode[]>("/api/catalogs/tree", 5 * 60 * 1000),
+      api.getCached<PlantAreaNode[]>("/api/catalogs/hierarchy", 5 * 60 * 1000),
+    ]);
+    setAreas(tree.status === "fulfilled" ? tree.value : []);
+    setPlantAreas(hierarchy.status === "fulfilled" ? hierarchy.value : []);
+    setLoading(false);
   }, []);
 
   useEffect(() => {
@@ -92,16 +100,98 @@ export function CatalogManager() {
     setError(err instanceof Error ? err.message : fallback);
   }
 
-  async function addArea() {
-    if (!newArea.trim()) return;
+  function startPlantAreaEdit(area: PlantAreaNode) {
+    setError("");
+    setEditingPlantAreaId(area.id);
+    setPlantAreaDraft(area.name);
+  }
+
+  async function savePlantArea(areaId: number) {
+    if (!plantAreaDraft.trim()) return;
+    setBusy(`plant-area-${areaId}`);
     setError("");
     try {
+      await api.patch(`/api/catalogs/plant-areas/${areaId}`, { name: plantAreaDraft.trim() });
+      setEditingPlantAreaId(null);
+      api.invalidateCache("/api/catalogs/hierarchy");
+      api.invalidateCache("/api/catalogs/plant-areas");
+      await load();
+      setPlantAreaMessage("Área general actualizada correctamente.");
+    } catch (err) {
+      fail(err, "No se pudo editar el área general");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function removePlantArea(area: PlantAreaNode) {
+    if (!window.confirm(`¿Eliminar el área general "${area.name}"?`)) return;
+    setBusy(`delete-plant-area-${area.id}`);
+    setError("");
+    try {
+      await api.del(`/api/catalogs/plant-areas/${area.id}`);
+      api.invalidateCache("/api/catalogs/hierarchy");
+      api.invalidateCache("/api/catalogs/plant-areas");
+      await load();
+      setPlantAreaMessage(`Área general "${area.name}" eliminada.`);
+    } catch (err) {
+      fail(err, "No se pudo eliminar el área general. Puede tener datos asociados.");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function togglePlantAreaOrders(areaId: number) {
+    if (viewingPlantAreaId === areaId) {
+      setViewingPlantAreaId(null);
+      return;
+    }
+    setViewingPlantAreaId(areaId);
+    if (plantAreaOrders[areaId]) return;
+    try {
+      const orders = await api.get<typeof plantAreaOrders[number]>(`/api/catalogs/plant-areas/${areaId}/work-orders`);
+      setPlantAreaOrders((current) => ({ ...current, [areaId]: orders }));
+    } catch (err) {
+      fail(err, "No se pudieron cargar las OTs del área");
+    }
+  }
+
+  async function addPlantArea() {
+    if (!newPlantArea.trim()) return;
+    setBusy("create-plant-area");
+    setError("");
+    setPlantAreaMessage("");
+    try {
+      await api.post("/api/catalogs/plant-areas", { name: newPlantArea.trim() });
+      const createdName = newPlantArea.trim();
+      setNewPlantArea("");
+      api.invalidateCache("/api/catalogs/hierarchy");
+      api.invalidateCache("/api/catalogs/plant-areas");
+      await load();
+      setPlantAreaMessage(`Área general "${createdName}" agregada correctamente.`);
+    } catch (err) {
+      fail(err, "Error al crear el área general");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function addArea() {
+    if (!newArea.trim()) return;
+    setBusy("create-area");
+    setError("");
+    setAreaMessage("");
+    try {
       await api.post("/api/catalogs/areas", { name: newArea.trim() });
+      const createdName = newArea.trim();
       setNewArea("");
       api.invalidateCache("/api/catalogs/tree");
       await load();
+      setAreaMessage(`Área "${createdName}" agregada correctamente.`);
     } catch (err) {
-      fail(err, "Error al crear la sección");
+      fail(err, "Error al crear el área");
+    } finally {
+      setBusy("");
     }
   }
 
@@ -221,8 +311,84 @@ export function CatalogManager() {
 
   return (
     <div>
-      <h3 className="mb-1 text-lg font-semibold">Catálogo</h3>
-      <p className="mb-4 text-sm text-muted-foreground">Secciones → Equipos. Cada sección determina los equipos disponibles para una OT.</p>
+      <h3 className="mb-1 text-lg font-semibold">Áreas, secciones y equipos</h3>
+      <p className="mb-4 text-sm text-muted-foreground">El área general y la sección son datos independientes. La sección solo determina los equipos disponibles para una OT.</p>
+
+      <div className="mb-4 rounded-lg border bg-card p-4">
+        <div className="mb-2">
+          <h4 className="font-semibold">Agregar un área general</h4>
+          <p className="text-sm text-muted-foreground">Ejemplo: Planta Malta, Planta Cajón o Planta de Riles. El administrador podrá seleccionarla en la OT sin cambiar la sección ni sus equipos.</p>
+        </div>
+        <div className="flex gap-2">
+          <Input
+            placeholder="Nombre del área general"
+            value={newPlantArea}
+            onChange={(event) => {
+              setNewPlantArea(event.target.value);
+              setPlantAreaMessage("");
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void addPlantArea();
+            }}
+            className="h-10"
+            disabled={busy === "create-plant-area"}
+            aria-label="Nombre del área general"
+          />
+          <Button size="sm" onClick={() => void addPlantArea()} disabled={!newPlantArea.trim() || busy === "create-plant-area"}>
+            {busy === "create-plant-area" ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Plus className="mr-1 h-4 w-4" />}
+            {busy === "create-plant-area" ? "Guardando..." : "Agregar área"}
+          </Button>
+        </div>
+        {plantAreaMessage && <p className="mt-2 text-sm text-emerald-700">{plantAreaMessage}</p>}
+        {plantAreas.length > 0 && (
+          <div className="mt-3 space-y-2">
+            {plantAreas.map((plantArea) => (
+              <div key={plantArea.id} className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+                {editingPlantAreaId === plantArea.id ? (
+                  <>
+                    <Input value={plantAreaDraft} onChange={(event) => setPlantAreaDraft(event.target.value)} className="h-9 flex-1" aria-label="Editar área general" />
+                    <Button size="icon" variant="ghost" onClick={() => void savePlantArea(plantArea.id)} disabled={busy === `plant-area-${plantArea.id}`} aria-label="Guardar área general">
+                      {busy === `plant-area-${plantArea.id}` ? <Loader2 className="animate-spin" /> : <Check />}
+                    </Button>
+                    <Button size="icon" variant="ghost" onClick={() => setEditingPlantAreaId(null)} aria-label="Cancelar edición"><X /></Button>
+                  </>
+                ) : (
+                  <>
+                    <span className="flex-1 text-sm font-medium">{plantArea.name}</span>
+                    <Button size="sm" variant="outline" onClick={() => void togglePlantAreaOrders(plantArea.id)}>
+                      {viewingPlantAreaId === plantArea.id ? "Ocultar OTs" : "Ver OTs"}
+                    </Button>
+                    <Button size="icon" variant="ghost" onClick={() => startPlantAreaEdit(plantArea)} aria-label="Editar área general"><Pencil /></Button>
+                    <Button size="icon" variant="ghost" onClick={() => void removePlantArea(plantArea)} disabled={busy === `delete-plant-area-${plantArea.id}`} aria-label="Eliminar área general">
+                      {busy === `delete-plant-area-${plantArea.id}` ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                    </Button>
+                  </>
+                )}
+                {viewingPlantAreaId === plantArea.id && editingPlantAreaId !== plantArea.id && (
+                  <div className="col-span-full border-t pt-2 text-sm">
+                    {!plantAreaOrders[plantArea.id] ? (
+                      <p className="text-muted-foreground">Cargando OTs...</p>
+                    ) : plantAreaOrders[plantArea.id].length === 0 ? (
+                      <p className="text-muted-foreground">Esta área no tiene OTs relacionadas y se puede eliminar.</p>
+                    ) : (
+                      <div className="space-y-1">
+                        <p className="font-medium">OTs relacionadas: {plantAreaOrders[plantArea.id].length}</p>
+                        {plantAreaOrders[plantArea.id].map((order) => (
+                          <div key={order.id} className="flex flex-wrap gap-x-2 text-muted-foreground">
+                            <span className="font-medium text-foreground">{order.ot_number}</span>
+                            <span>{order.title}</span>
+                            <span>· {order.status}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       <div className="mb-4 rounded-lg border bg-card p-4">
         <div className="flex items-start gap-3">
@@ -255,13 +421,40 @@ export function CatalogManager() {
 
       {error && <p className="mb-3 rounded-md bg-destructive/5 p-2 text-sm text-destructive">{error}</p>}
 
-      <div className="mb-4 flex gap-2 rounded-lg border bg-card p-3">
-        <Input placeholder="Nueva sección (ej: Horno)" value={newArea} onChange={(event) => setNewArea(event.target.value)} className="h-10" />
-        <Button size="sm" onClick={addArea}><Plus className="mr-1 h-4 w-4" />Agregar</Button>
+      <div className="mb-4 rounded-lg border bg-card p-4">
+        <div className="mb-2">
+          <h4 className="font-semibold">Agregar una sección del catálogo antiguo</h4>
+          <p className="text-sm text-muted-foreground">La sección agrupa los equipos que pueden seleccionarse en una OT, independientemente del área general.</p>
+        </div>
+        <div className="flex gap-2">
+          <Input
+            placeholder="Nombre de la sección (ej: Remojo)"
+            value={newArea}
+            onChange={(event) => {
+              setNewArea(event.target.value);
+              setAreaMessage("");
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void addArea();
+            }}
+            className="h-10"
+            disabled={busy === "create-area"}
+            aria-label="Nombre de la sección"
+          />
+          <Button size="sm" onClick={() => void addArea()} disabled={!newArea.trim() || busy === "create-area"}>
+            {busy === "create-area" ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Plus className="mr-1 h-4 w-4" />}
+            {busy === "create-area" ? "Guardando..." : "Agregar sección"}
+          </Button>
+        </div>
+        {areaMessage && <p className="mt-2 text-sm text-emerald-700">{areaMessage}</p>}
       </div>
 
       <div className="space-y-2">
-        {areas.map((area) => (
+        {areas.length === 0 ? (
+          <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+            Todavía no hay áreas creadas. Agrega la primera arriba.
+          </div>
+        ) : areas.map((area) => (
           <div key={area.id} className="rounded-lg border bg-card">
             <div className="flex items-center gap-2 p-3">
               {editingAreaId === area.id ? (
