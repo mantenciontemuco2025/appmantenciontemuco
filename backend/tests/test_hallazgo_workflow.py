@@ -123,7 +123,6 @@ async def test_attention_hallazgo_admin_assigns_equipment_responsible_and_plan(
             "responsible_user_id": seed_data["worker_jara"].id,
             "participant_user_ids": [seed_data["valdes"].id],
             "maintenance_type": "CORRECTIVE",
-            "estimated_time": "1 hora 15 minutos",
             "scheduled_date": "2026-09-24",
             "due_date": "2026-09-25",
             "folio": "FOL-ATT",
@@ -140,7 +139,7 @@ async def test_attention_hallazgo_admin_assigns_equipment_responsible_and_plan(
     assert seed_data["worker_jara"].id in data["participant_user_ids"]
     assert seed_data["valdes"].id in data["participant_user_ids"]
     assert data["equipment_id"] == seed_data["equipment"].id
-    assert data["estimated_time"] == "1 hora 15 minutos"
+    assert data["estimated_time"] is None
     assert data["scheduled_date"] == "2026-09-24"
     assert data["due_date"] == "2026-09-25"
     assert data["folio"] == "FOL-ATT"

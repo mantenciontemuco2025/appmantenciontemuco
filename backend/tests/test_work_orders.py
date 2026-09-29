@@ -145,6 +145,16 @@ async def test_list_work_orders_searches_all_pages_and_responsible(
     assert responsible.json()
     assert all("jara" in (item["responsible_user_name"] or "").lower() for item in responsible.json())
 
+    kpi_filters = await client.get(
+        "/api/work-orders?plant_area=CEBADA&section_name=Malta&maintenance_type=CORRECTIVE&date_from=2026-01-01&date_to=2026-12-31&limit=100",
+        headers=auth_headers(token),
+    )
+    assert kpi_filters.status_code == 200
+    assert {item["title"] for item in kpi_filters.json()} == {
+        "Bomba de transferencia",
+        "Válvula de retorno",
+    }
+
 
 async def test_list_work_orders_can_filter_without_general_area(client, seed_data):
     """The KPI shortcut must return every unclassified OT, not only loaded rows."""

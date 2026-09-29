@@ -280,11 +280,12 @@ class HallazgoCreate(BaseModel):
 class HallazgoReviewPayload(BaseModel):
     action: Literal["ACCEPT", "RETURN", "REJECT"]
     notes: str | None = None
+    plant_area: str | None = None
+    area_id: int | None = None
     equipment_id: int | None = None
     responsible_user_id: int | None = None
     participant_user_ids: list[int] = []
     maintenance_type: str | None = None
-    estimated_time: str | None = None
     scheduled_date: date | None = None
     due_date: date | None = None
     loto_controls: list[str] | None = None

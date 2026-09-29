@@ -82,15 +82,23 @@ function KpiCard({
   helper,
   icon,
   tone,
+  href,
 }: {
   label: string;
   value: string;
   helper: string;
   icon: React.ReactNode;
   tone: string;
+  href?: string;
 }) {
   return (
-    <div className="rounded-2xl border bg-card p-4 shadow-sm transition-shadow hover:shadow-md sm:p-5">
+    <div
+      className={`rounded-2xl border bg-card p-4 shadow-sm transition-shadow hover:shadow-md sm:p-5 ${href ? "cursor-pointer hover:border-primary/50" : ""}`}
+      role={href ? "link" : undefined}
+      tabIndex={href ? 0 : undefined}
+      onClick={() => { if (href) window.location.href = href; }}
+      onKeyDown={(event) => { if (href && (event.key === "Enter" || event.key === " ")) window.location.href = href; }}
+    >
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-medium text-muted-foreground">{label}</p>
@@ -236,7 +244,7 @@ function DistributionPie({
   );
 }
 
-function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
+function KpiProfessionalExtras({ data, ordersHref }: { data: KpiResponse; ordersHref: (filters?: Record<string, string>) => string }) {
   const summary = data.summary;
   // The dashboard can stay open while an API process is being upgraded. Treat
   // fields added by newer API versions as optional during that short window.
@@ -248,11 +256,11 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
     summary.total_ots - summary.completed_ots - summary.pending_ots - summary.in_progress_ots - summary.cancelled_ots,
   );
   const statusRows = [
-    { key: "completed", label: "Finalizadas", count: summary.completed_ots, color: "bg-emerald-600", dot: "bg-emerald-600" },
-    { key: "in-progress", label: "En proceso", count: summary.in_progress_ots, color: "bg-blue-700", dot: "bg-blue-700" },
-    { key: "pending", label: "Pendientes", count: summary.pending_ots, color: "bg-orange-600", dot: "bg-orange-600" },
-    { key: "draft", label: "Borrador", count: draftOts, color: "bg-slate-400", dot: "bg-slate-400" },
-    { key: "cancelled", label: "Canceladas", count: summary.cancelled_ots, color: "bg-background border border-slate-400", dot: "bg-background border border-slate-400" },
+    { key: "completed", status: "COMPLETED", label: "Finalizadas", count: summary.completed_ots, color: "bg-emerald-600", dot: "bg-emerald-600" },
+    { key: "in-progress", status: "IN_PROGRESS", label: "En proceso", count: summary.in_progress_ots, color: "bg-blue-700", dot: "bg-blue-700" },
+    { key: "pending", status: "PENDING", label: "Pendientes", count: summary.pending_ots, color: "bg-orange-600", dot: "bg-orange-600" },
+    { key: "draft", status: "DRAFT", label: "Borrador", count: draftOts, color: "bg-slate-400", dot: "bg-slate-400" },
+    { key: "cancelled", status: "CANCELLED", label: "Canceladas", count: summary.cancelled_ots, color: "bg-background border border-slate-400", dot: "bg-background border border-slate-400" },
   ];
   const statusTotal = Math.max(1, summary.total_ots);
 
@@ -265,6 +273,7 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
           helper="Suma la duración completa para cada participante"
           icon={<Users className="h-5 w-5 text-indigo-700" />}
           tone="bg-indigo-100"
+          href={ordersHref()}
         />
         <KpiCard
           label="OTs vencidas"
@@ -272,6 +281,7 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
           helper="Pendientes o en proceso con fecha límite pasada"
           icon={<Wrench className="h-5 w-5 text-red-700" />}
           tone="bg-red-100"
+          href={ordersHref({ overdue: "true" })}
         />
         <KpiCard
           label="Pendientes antiguas"
@@ -279,6 +289,7 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
           helper="Pendientes o en proceso de más de 7 días"
           icon={<Clock3 className="h-5 w-5 text-amber-700" />}
           tone="bg-amber-100"
+          href={ordersHref({ stale_pending: "true" })}
         />
         <KpiCard
           label="Trabajo externo"
@@ -286,6 +297,7 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
           helper={`${externalOts} OTs; separado de las horas del personal interno`}
           icon={<Users className="h-5 w-5 text-cyan-700" />}
           tone="bg-cyan-100"
+          href={ordersHref({ external: "true" })}
         />
       </div>
 
@@ -298,15 +310,16 @@ function KpiProfessionalExtras({ data }: { data: KpiResponse }) {
           {statusRows.map((row) => row.count > 0 ? (
             <div
               key={row.key}
-              className={`${row.color} border-r border-card last:border-r-0`}
+              className={`${row.color} cursor-pointer border-r border-card last:border-r-0`}
               style={{ width: `${(row.count / statusTotal) * 100}%` }}
               title={`${row.label}: ${row.count}`}
               aria-label={`${row.label}: ${row.count}`}
+              onClick={() => { window.location.href = ordersHref({ status: row.status }); }}
             />
           ) : null)}
         </div>
         <div className="mt-4 flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground">
-          {statusRows.map((row) => <span key={`legend-${row.key}`} className="inline-flex items-center gap-2"><span className={`h-3 w-3 rounded-sm ${row.dot}`} />{row.label} <strong className="text-foreground">{row.count}</strong></span>)}
+          {statusRows.map((row) => <button type="button" key={`legend-${row.key}`} className="inline-flex items-center gap-2 hover:text-primary" onClick={() => { window.location.href = ordersHref({ status: row.status }); }}><span className={`h-3 w-3 rounded-sm ${row.dot}`} />{row.label} <strong className="text-foreground">{row.count}</strong></button>)}
         </div>
       </div>
 
@@ -467,6 +480,15 @@ export function KpiDashboard() {
   const maxPlannedMonth = Math.max(1, ...(data?.by_month.map((row) => row.planned_ots) || [1]));
   const summary = data?.summary;
   const missingAreaRow = data?.by_area.find((row) => row.area_name === "Sin área");
+  function ordersHref(filters: Record<string, string> = {}) {
+    if (!data) return "/ordenes";
+    const params = new URLSearchParams({ date_from: data.date_from, date_to: data.date_to });
+    if (plantArea && !("plant_area" in filters) && !("without_area" in filters)) params.set("plant_area", plantArea);
+    if (maintenanceType && !("maintenance_type" in filters)) params.set("maintenance_type", maintenanceType);
+    Object.entries(filters).forEach(([key, value]) => params.set(key, value));
+    if (filters.without_area === "true") params.delete("plant_area");
+    return `/ordenes?${params.toString()}`;
+  }
   const sectionDistribution = useMemo(() => {
     const totals = new Map<string, number>();
     for (const row of data?.by_section ?? []) {
@@ -513,14 +535,14 @@ export function KpiDashboard() {
         ) : summary ? (
           <>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-              <KpiCard label="OTs totales" value={String(summary.total_ots)} helper={`${formatHours(summary.average_hours_per_ot)} promedio por OT`} icon={<ListChecks className="h-5 w-5 text-blue-700" />} tone="bg-blue-100" />
-              <KpiCard label="Horas acumuladas" value={formatHours(summary.total_hours)} helper="Horas registradas por OT" icon={<Clock3 className="h-5 w-5 text-violet-700" />} tone="bg-violet-100" />
-              <KpiCard label="Finalizadas" value={String(summary.completed_ots)} helper="Completadas o aprobadas" icon={<CheckCircle2 className="h-5 w-5 text-green-700" />} tone="bg-green-100" />
-              <KpiCard label="Pendientes" value={String(summary.pending_ots)} helper="Esperando ejecución" icon={<CalendarRange className="h-5 w-5 text-amber-700" />} tone="bg-amber-100" />
-              <KpiCard label="En proceso" value={String(summary.in_progress_ots)} helper={`${summary.cancelled_ots} canceladas`} icon={<Wrench className="h-5 w-5 text-orange-700" />} tone="bg-orange-100" />
+              <KpiCard label="OTs totales" value={String(summary.total_ots)} helper={`${formatHours(summary.average_hours_per_ot)} promedio por OT`} icon={<ListChecks className="h-5 w-5 text-blue-700" />} tone="bg-blue-100" href={ordersHref()} />
+              <KpiCard label="Horas acumuladas" value={formatHours(summary.total_hours)} helper="Horas registradas por OT" icon={<Clock3 className="h-5 w-5 text-violet-700" />} tone="bg-violet-100" href={ordersHref()} />
+              <KpiCard label="Finalizadas" value={String(summary.completed_ots)} helper="Completadas o aprobadas" icon={<CheckCircle2 className="h-5 w-5 text-green-700" />} tone="bg-green-100" href={ordersHref({ status: "COMPLETED" })} />
+              <KpiCard label="Pendientes" value={String(summary.pending_ots)} helper="Esperando ejecución" icon={<CalendarRange className="h-5 w-5 text-amber-700" />} tone="bg-amber-100" href={ordersHref({ status: "PENDING" })} />
+              <KpiCard label="En proceso" value={String(summary.in_progress_ots)} helper={`${summary.cancelled_ots} canceladas`} icon={<Wrench className="h-5 w-5 text-orange-700" />} tone="bg-orange-100" href={ordersHref({ status: "IN_PROGRESS" })} />
             </div>
 
-            <KpiProfessionalExtras data={data} />
+            <KpiProfessionalExtras data={data} ordersHref={ordersHref} />
 
             <div className="order-3 mt-5 grid gap-5 lg:grid-cols-2">
               <DistributionPie
@@ -528,13 +550,14 @@ export function KpiDashboard() {
                 description="Distribución de las OTs del período por área"
                 rows={data.by_area.map((row) => ({ label: row.area_name, value: row.total_ots }))}
                 onSegmentClick={(label) => {
-                  if (label === "Sin área") window.location.href = "/ordenes?without_area=true";
+                  window.location.href = ordersHref(label === "Sin área" ? { without_area: "true" } : { plant_area: label });
                 }}
               />
               <DistributionPie
-                title="Asignación de trabajos"
-                description="OTs asignadas por responsable"
+                title="Participaciones por trabajador"
+                description="Cada participación de una OT por responsable"
                 rows={data.by_worker.map((row) => ({ label: row.worker_name, value: row.assigned_ots }))}
+                onSegmentClick={(label) => { window.location.href = ordersHref({ responsible: label }); }}
               />
               <div className="lg:col-span-2">
                 <DistributionPie
@@ -542,6 +565,7 @@ export function KpiDashboard() {
                   description="Distribución de las OTs por sección"
                   rows={sectionDistribution}
                   scrollLegend
+                  onSegmentClick={(label) => { window.location.href = ordersHref(label === "Sin sección" ? { without_section: "true" } : { section_name: label }); }}
                 />
               </div>
             </div>
@@ -550,7 +574,7 @@ export function KpiDashboard() {
               <div className="rounded-2xl border p-4 sm:p-5">
                 <div className="mb-4 flex items-center justify-between"><div><h3 className="font-semibold">Por tipo de mantenimiento</h3><p className="text-xs text-muted-foreground">Cantidad de OTs y horas</p></div><BarChart3 className="h-5 w-5 text-primary" /></div>
                 <div className="space-y-4">
-                  {data.by_maintenance_type.length ? data.by_maintenance_type.map((row) => <div key={row.maintenance_type}><div className="mb-1 flex justify-between text-sm"><span className="font-medium">{TYPE_LABELS[row.maintenance_type] || row.maintenance_type}</span><span className="text-muted-foreground">{row.total_ots} OTs · {formatHours(row.total_hours)}</span></div><div className="h-2.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-gradient-to-r from-blue-600 to-indigo-500" style={{ width: `${(row.total_ots / maxType) * 100}%` }} /></div></div>) : <p className="py-5 text-center text-sm text-muted-foreground">No hay datos para este período.</p>}
+                  {data.by_maintenance_type.length ? data.by_maintenance_type.map((row) => <button type="button" key={row.maintenance_type} className="block w-full cursor-pointer text-left" onClick={() => { window.location.href = ordersHref({ maintenance_type: row.maintenance_type }); }}><div className="mb-1 flex justify-between text-sm"><span className="font-medium">{TYPE_LABELS[row.maintenance_type] || row.maintenance_type}</span><span className="text-muted-foreground">{row.total_ots} OTs · {formatHours(row.total_hours)}</span></div><div className="h-2.5 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-gradient-to-r from-blue-600 to-indigo-500 transition-opacity hover:opacity-80" style={{ width: `${(row.total_ots / maxType) * 100}%` }} /></div></button>) : <p className="py-5 text-center text-sm text-muted-foreground">No hay datos para este período.</p>}
                 </div>
               </div>
               <div className="rounded-2xl border p-4 sm:p-5">
@@ -563,13 +587,13 @@ export function KpiDashboard() {
             </div>
 
             <div className="order-5 mt-5 grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
-              <div className="overflow-hidden rounded-2xl border"><div className="flex items-center justify-between border-b p-4"><div><h3 className="font-semibold">Horas por trabajador</h3><p className="text-xs text-muted-foreground">Cada participante recibe la duración completa de la OT</p></div><Users className="h-5 w-5 text-primary" /></div><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr><th className="px-4 py-3">Trabajador</th><th className="px-4 py-3 text-right">OTs</th><th className="px-4 py-3 text-right">Finalizadas</th><th className="px-4 py-3 text-right">Horas</th></tr></thead><tbody className="divide-y">{data.by_worker.length ? data.by_worker.map((row) => <tr key={row.user_id}><td className="px-4 py-3 font-medium">{row.worker_name}</td><td className="px-4 py-3 text-right">{row.assigned_ots}</td><td className="px-4 py-3 text-right">{row.completed_ots} <span className="text-xs text-muted-foreground">({percent(row.completed_ots, row.assigned_ots)}%)</span></td><td className="px-4 py-3 text-right font-semibold text-primary">{formatHours(row.total_hours)}</td></tr>) : <tr><td colSpan={4} className="px-4 py-8 text-center text-muted-foreground">No hay participantes en el período.</td></tr>}</tbody></table></div></div>
+              <div className="overflow-hidden rounded-2xl border"><div className="flex items-center justify-between border-b p-4"><div><h3 className="font-semibold">Horas por trabajador</h3><p className="text-xs text-muted-foreground">Cada participante recibe la duración completa de la OT</p></div><Users className="h-5 w-5 text-primary" /></div><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr><th className="px-4 py-3">Trabajador</th><th className="px-4 py-3 text-right">OTs</th><th className="px-4 py-3 text-right">Finalizadas</th><th className="px-4 py-3 text-right">Horas</th></tr></thead><tbody className="divide-y">{data.by_worker.length ? data.by_worker.map((row) => <tr key={row.user_id} className="cursor-pointer hover:bg-muted/40" role="link" tabIndex={0} onClick={() => { window.location.href = ordersHref({ responsible: row.worker_name }); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") window.location.href = ordersHref({ responsible: row.worker_name }); }}><td className="px-4 py-3 font-medium">{row.worker_name}</td><td className="px-4 py-3 text-right">{row.assigned_ots}</td><td className="px-4 py-3 text-right">{row.completed_ots} <span className="text-xs text-muted-foreground">({percent(row.completed_ots, row.assigned_ots)}%)</span></td><td className="px-4 py-3 text-right font-semibold text-primary">{formatHours(row.total_hours)}</td></tr>) : <tr><td colSpan={4} className="px-4 py-8 text-center text-muted-foreground">No hay participantes en el período.</td></tr>}</tbody></table></div></div>
               <div className="overflow-hidden rounded-2xl border">
                 <div className="flex items-center justify-between border-b p-4">
                   <div><h3 className="font-semibold">Por área</h3><p className="text-xs text-muted-foreground">Preventivo y correctivo por área</p></div>
                   <Wrench className="h-5 w-5 text-primary" />
                 </div>
-                {missingAreaRow ? <div className="border-b bg-amber-50 px-4 py-3 text-sm text-amber-900"><span>Hay <strong>{missingAreaRow.total_ots}</strong> OTs sin área general.</span>{" "}<Link href="/ordenes?without_area=true" className="font-semibold underline underline-offset-2 hover:text-amber-700">Ver y clasificar</Link></div> : null}
+                {missingAreaRow ? <div className="border-b bg-amber-50 px-4 py-3 text-sm text-amber-900"><span>Hay <strong>{missingAreaRow.total_ots}</strong> OTs sin área general.</span>{" "}<Link href={ordersHref({ without_area: "true" })} className="font-semibold underline underline-offset-2 hover:text-amber-700">Ver y clasificar</Link></div> : null}
                 <div className="max-h-80 overflow-auto">
                   <table className="w-full text-left text-sm">
                     <thead className="sticky top-0 bg-muted/90 text-xs uppercase text-muted-foreground"><tr><th className="px-4 py-3">Área</th><th className="px-4 py-3 text-right">OTs</th><th className="px-4 py-3 text-right">Horas</th></tr></thead>
@@ -577,7 +601,8 @@ export function KpiDashboard() {
                       {data.by_area.length ? data.by_area.map((row) => {
                         const missingArea = row.area_name === "Sin área";
                         const cells = <><td className="px-4 py-3"><div className="font-medium">{row.area_name}</div><div className="text-xs text-muted-foreground">P {row.preventive_ots} · C {row.corrective_ots}</div></td><td className="px-4 py-3 text-right">{row.total_ots}</td><td className="px-4 py-3 text-right font-semibold">{formatHours(row.total_hours)}</td></>;
-                        return missingArea ? <tr key={row.area_name} className="cursor-pointer bg-amber-50/60 hover:bg-amber-100/70" role="link" tabIndex={0} onClick={() => { window.location.href = "/ordenes?without_area=true"; }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") window.location.href = "/ordenes?without_area=true"; }}>{cells}</tr> : <tr key={row.area_name}>{cells}</tr>;
+                        const destination = missingArea ? ordersHref({ without_area: "true" }) : ordersHref({ plant_area: row.area_name });
+                        return <tr key={row.area_name} className={`cursor-pointer hover:bg-muted/40 ${missingArea ? "bg-amber-50/60 hover:bg-amber-100/70" : ""}`} role="link" tabIndex={0} onClick={() => { window.location.href = destination; }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") window.location.href = destination; }}>{cells}</tr>;
                       }) : <tr><td colSpan={3} className="px-4 py-8 text-center text-muted-foreground">No hay áreas en el período.</td></tr>}
                     </tbody>
                   </table>

@@ -1357,6 +1357,7 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
           {!showConfirm &&
             user.role === "ADMIN" &&
             !wo.is_external_work &&
+            !(wo.is_hallazgo_report && wo.hallazgo_status !== "CONVERTED") &&
             (wo.status === "DRAFT" || wo.status === "PENDING" || wo.status === "IN_PROGRESS") && (
               <Button
                 variant="outline"

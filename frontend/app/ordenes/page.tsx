@@ -45,6 +45,14 @@ export default function OrdenesPage() {
   const [searchOT, setSearchOT] = useState("");
   const [searchResponsible, setSearchResponsible] = useState("");
   const [withoutArea, setWithoutArea] = useState(false);
+  const [kpiPlantArea, setKpiPlantArea] = useState("");
+  const [kpiSection, setKpiSection] = useState("");
+  const [kpiMaintenanceType, setKpiMaintenanceType] = useState("");
+  const [kpiDateFrom, setKpiDateFrom] = useState("");
+  const [kpiDateTo, setKpiDateTo] = useState("");
+  const [kpiStalePending, setKpiStalePending] = useState(false);
+  const [kpiExternal, setKpiExternal] = useState(false);
+  const [kpiWithoutSection, setKpiWithoutSection] = useState(false);
   const [counter, setCounter] = useState<WorkOrderCounter | null>(null);
   const [error, setError] = useState("");
 
@@ -65,7 +73,20 @@ export default function OrdenesPage() {
   }, [loading, user, router]);
 
   useEffect(() => {
-    setWithoutArea(new URLSearchParams(window.location.search).get("without_area") === "true");
+    const params = new URLSearchParams(window.location.search);
+    setWithoutArea(params.get("without_area") === "true");
+    setKpiPlantArea(params.get("plant_area") || "");
+    setKpiSection(params.get("section_name") || "");
+    setKpiMaintenanceType(params.get("maintenance_type") || "");
+    setKpiDateFrom(params.get("date_from") || "");
+    setKpiDateTo(params.get("date_to") || "");
+    setKpiStalePending(params.get("stale_pending") === "true");
+    setKpiExternal(params.get("external") === "true");
+    setKpiWithoutSection(params.get("without_section") === "true");
+    setSearchResponsible(params.get("responsible") || "");
+    const status = params.get("status") as TabKey | null;
+    if (status && TABS.some((tab) => tab.key === status)) setActiveTab(status);
+    if (params.get("overdue") === "true") setActiveTab("OVERDUE");
   }, []);
 
   useEffect(() => {
@@ -85,7 +106,7 @@ export default function OrdenesPage() {
     }, 250);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, activeView, activeTab, searchOT, searchResponsible, withoutArea]);
+  }, [user, activeView, activeTab, searchOT, searchResponsible, withoutArea, kpiPlantArea, kpiSection, kpiMaintenanceType, kpiDateFrom, kpiDateTo, kpiStalePending, kpiExternal, kpiWithoutSection]);
 
   // Carga el panel de Vencidas cuando se activa la pestaña (una vez por visita).
   useEffect(() => {
@@ -102,7 +123,7 @@ export default function OrdenesPage() {
     }, 250);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, activeTab, activeView, searchOT, searchResponsible, withoutArea]);
+  }, [user, activeTab, activeView, searchOT, searchResponsible, withoutArea, kpiPlantArea, kpiSection, kpiMaintenanceType, kpiDateFrom, kpiDateTo, kpiStalePending, kpiExternal, kpiWithoutSection]);
 
   // Poll mientras alguna OT visible esté en sincronización asíncrona (PENDING),
   // para que el badge pase solo a SYNCED/FAILED sin recargar manualmente.
@@ -179,6 +200,14 @@ export default function OrdenesPage() {
     if (activeView === "SUPERVISOR_VALIDATION") filters.set("supervisor_validation_pending", "true");
     if (searchOT.trim()) filters.set("search", searchOT.trim());
     if (searchResponsible.trim()) filters.set("responsible", searchResponsible.trim());
+    if (kpiPlantArea) filters.set("plant_area", kpiPlantArea);
+    if (kpiSection) filters.set("section_name", kpiSection);
+    if (kpiMaintenanceType) filters.set("maintenance_type", kpiMaintenanceType);
+    if (kpiDateFrom) filters.set("date_from", kpiDateFrom);
+    if (kpiDateTo) filters.set("date_to", kpiDateTo);
+    if (kpiStalePending) filters.set("stale_pending", "true");
+    if (kpiExternal) filters.set("external", "true");
+    if (kpiWithoutSection) filters.set("without_section", "true");
     if (withoutArea) filters.set("without_area", "true");
     return filters;
   }
@@ -249,7 +278,8 @@ export default function OrdenesPage() {
   // La pestaña "Vencidas" usa su propia ventana consultada al servidor.
   const source = activeTab === "OVERDUE" ? overdue : orders;
   const filtered = source;
-  const hasSearch = Boolean(searchOT.trim() || searchResponsible.trim() || withoutArea);
+  const hasKpiFilter = Boolean(kpiPlantArea || kpiSection || kpiMaintenanceType || kpiDateFrom || kpiDateTo || kpiStalePending || kpiExternal || kpiWithoutSection);
+  const hasSearch = Boolean(searchOT.trim() || searchResponsible.trim() || withoutArea || hasKpiFilter);
 
   function tabCount(key: TabKey): number {
     if (key === "OVERDUE") return counter?.overdue_count ?? overdue.length;
@@ -398,6 +428,29 @@ export default function OrdenesPage() {
         </div>
       )}
 
+      {hasKpiFilter && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+          <span><strong>Filtro aplicado desde el KPI:</strong> se muestran solo las OTs de la categoría seleccionada.</span>
+          <button
+            type="button"
+            className="font-semibold underline underline-offset-2 hover:text-blue-700"
+            onClick={() => {
+              setKpiPlantArea("");
+              setKpiSection("");
+              setKpiMaintenanceType("");
+              setKpiDateFrom("");
+              setKpiDateTo("");
+              setKpiStalePending(false);
+              setKpiExternal(false);
+              setKpiWithoutSection(false);
+              router.replace("/ordenes");
+            }}
+          >
+            Quitar filtro KPI
+          </button>
+        </div>
+      )}
+
       {user.role === "ADMIN" && activeTab !== "OVERDUE" && selectable.length > 0 && (
         <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-dashed bg-muted/30 px-3 py-2">
           <label className="inline-flex items-center gap-2 text-sm">
@@ -516,6 +569,11 @@ export default function OrdenesPage() {
                         {o.submitted_for_review && (
                           <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-800 px-2.5 py-0.5 text-xs font-medium">
                             Pendiente de revisión
+                          </span>
+                        )}
+                        {o.is_hallazgo_report && o.hallazgo_status !== "CONVERTED" && (
+                          <span className="inline-flex items-center rounded-full bg-orange-100 text-orange-800 px-2.5 py-0.5 text-xs font-medium">
+                            Hallazgo provisional
                           </span>
                         )}
                         {o.requires_supervisor_validation &&

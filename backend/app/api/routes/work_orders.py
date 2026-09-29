@@ -1201,7 +1201,11 @@ async def create_work_order(
     ):
         participant_ids.append(payload.responsible_user_id)
 
-    ot_number = await _next_ot_number(db)
+    # A supervisor's submission is a request for the administrator, not an
+    # official OT yet. Keep the same form and endpoint, but use the
+    # provisional hallazgo sequence until the administrator accepts it.
+    provisional_folio = await _next_hallazgo_folio(db) if is_supervisor_submission else None
+    ot_number = provisional_folio or await _next_ot_number(db)
 
     # Resolve participant names from IDs if provided
     participant_names_str = None
@@ -1224,6 +1228,11 @@ async def create_work_order(
 
     wo = WorkOrder(
         ot_number=ot_number,
+        is_hallazgo_report=is_supervisor_submission,
+        hallazgo_folio=provisional_folio,
+        hallazgo_kind="REQUIRES_ATTENTION" if is_supervisor_submission else None,
+        hallazgo_priority="NORMAL" if is_supervisor_submission else None,
+        hallazgo_status="PENDING_REVIEW" if is_supervisor_submission else None,
         title=payload.title,
         description=payload.description,
         area_id=payload.area_id,
@@ -1277,10 +1286,11 @@ async def create_work_order(
             if is_external_work and current_user.role == UserRole.ADMIN
             else None
         ),
-        # All new OTs are planned. If no separate scheduled date is supplied,
-        # use the request date so the KPI has a stable planning period.
-        is_planned=True,
-        scheduled_date=payload.scheduled_date or payload.request_date,
+        # Supervisor submissions are not planned OTs until the administrator
+        # accepts them. After conversion, hallazgo-review assigns the official
+        # OT number and turns planning on.
+        is_planned=not is_supervisor_submission,
+        scheduled_date=(None if is_supervisor_submission else (payload.scheduled_date or payload.request_date)),
         due_date=payload.due_date,
     )
     db.add(wo)
@@ -1883,7 +1893,15 @@ async def list_work_orders(
     area_id: int | None = Query(default=None),
     search: str | None = Query(default=None, min_length=1, max_length=100),
     responsible: str | None = Query(default=None, min_length=1, max_length=100),
+    plant_area: str | None = Query(default=None, min_length=1, max_length=200),
+    section_name: str | None = Query(default=None, min_length=1, max_length=200),
+    maintenance_type: str | None = Query(default=None, min_length=1, max_length=30),
+    date_from: _date | None = Query(default=None),
+    date_to: _date | None = Query(default=None),
+    stale_pending: bool = Query(default=False),
+    external: bool = Query(default=False),
     without_area: bool = Query(default=False),
+    without_section: bool = Query(default=False),
     overdue: bool = Query(default=False),
     created_by_me: bool = Query(default=False),
     pending_review: bool = Query(default=False),
@@ -1892,6 +1910,9 @@ async def list_work_orders(
     offset: int = Query(default=0, ge=0),
 ):
     query = _list_query()
+
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=400, detail="La fecha inicial no puede ser posterior a la fecha final")
 
     if current_user.role not in manager_roles:
         query = query.where(WorkOrder.created_by_user_id == current_user.id)
@@ -1963,12 +1984,60 @@ async def list_work_orders(
             )
         )
 
+    if plant_area and plant_area.strip():
+        query = query.where(
+            func.upper(func.trim(WorkOrder.plant_area)) == plant_area.strip().upper()
+        )
+
+    if section_name and section_name.strip():
+        section_value = section_name.strip().lower()
+        query = query.where(
+            or_(
+                func.lower(func.coalesce(WorkOrder.section_name, "")) == section_value,
+                WorkOrder.area.has(func.lower(Area.name) == section_value),
+            )
+        )
+
+    if maintenance_type and maintenance_type.strip():
+        query = query.where(WorkOrder.maintenance_type == maintenance_type.strip().upper())
+
+    report_date = func.coalesce(
+        WorkOrder.execution_date,
+        WorkOrder.scheduled_date,
+        func.date(WorkOrder.created_at),
+    )
+    if date_from:
+        query = query.where(report_date >= date_from)
+    if date_to:
+        query = query.where(report_date <= date_to)
+
+    if stale_pending:
+        stale_cutoff = datetime.now().date() - timedelta(days=7)
+        pending_age_date = func.coalesce(
+            WorkOrder.scheduled_date,
+            WorkOrder.request_date,
+            func.date(WorkOrder.created_at),
+        )
+        query = query.where(
+            WorkOrder.status.in_((WorkOrderStatus.PENDING.value, WorkOrderStatus.IN_PROGRESS.value)),
+            pending_age_date < stale_cutoff,
+        )
+
+    if external:
+        query = query.where(WorkOrder.is_external_work.is_(True))
+
     if without_area:
         # ``plant_area`` is the general area. Keep legacy section data
         # untouched: these are precisely the OTs that still need to be
         # classified by an administrator.
         query = query.where(
             or_(WorkOrder.plant_area.is_(None), func.trim(WorkOrder.plant_area) == "")
+        )
+
+    if without_section:
+        query = query.where(
+            WorkOrder.area_id.is_(None),
+            func.trim(func.coalesce(WorkOrder.section_name, "")) == "",
         )
 
     if overdue:
@@ -2195,8 +2264,8 @@ async def update_hallazgo(
     wo = result.scalar_one_or_none()
     if wo is None or not wo.is_hallazgo_report:
         raise HTTPException(status_code=404, detail="Hallazgo no encontrado")
-    if current_user.role not in (UserRole.ADMIN, UserRole.WORKER):
-        raise HTTPException(status_code=403, detail="Los supervisores no tienen acceso al módulo de hallazgos")
+    if current_user.role not in (UserRole.ADMIN, UserRole.WORKER, UserRole.SUPERVISOR):
+        raise HTTPException(status_code=403, detail="No tiene permiso para editar este hallazgo")
     if current_user.role != UserRole.ADMIN and wo.created_by_user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Solo el reportante o el administrador puede editar este hallazgo")
     if wo.hallazgo_status not in ("PENDING_REVIEW", "RETURNED"):
@@ -2287,18 +2356,32 @@ async def review_hallazgo(
             wo.voucher_date = payload.voucher_date
         if "material_codes" in payload.model_fields_set:
             wo.material_codes = payload.material_codes.strip() if payload.material_codes else None
-        if "equipment_id" in payload.model_fields_set:
-            _, equipment = await _validate_area_equipment(
-                db, wo.area_id, payload.equipment_id
+        if "plant_area" in payload.model_fields_set:
+            wo.plant_area = _validate_plant_area(payload.plant_area)
+        if "area_id" in payload.model_fields_set or "equipment_id" in payload.model_fields_set:
+            target_area_id = payload.area_id if payload.area_id is not None else wo.area_id
+            if target_area_id is None:
+                raise HTTPException(status_code=400, detail="Selecciona una sección para convertir el hallazgo en OT")
+            target_equipment_id = (
+                payload.equipment_id
+                if "equipment_id" in payload.model_fields_set
+                else wo.equipment_id
             )
+            section, equipment = await _validate_area_equipment(
+                db, target_area_id, target_equipment_id
+            )
+            wo.area_id = section.id
+            wo.section_name = section.name
             wo.equipment_id = equipment.id if equipment else None
         if payload.scheduled_date is not None:
             wo.scheduled_date = payload.scheduled_date
         if payload.due_date is not None:
             wo.due_date = payload.due_date
-        if payload.estimated_time is not None:
-            wo.estimated_time = payload.estimated_time.strip() or None
-        elif wo.hallazgo_kind == "COMPLETED":
+        # Tiempo estimado/trabajado lo declara el trabajador al ejecutar la
+        # OT. El administrador no lo define durante la conversión del
+        # hallazgo. En los hallazgos de trabajo ya realizado se conserva la
+        # duración real declarada por el reportante.
+        if wo.hallazgo_kind == "COMPLETED":
             # A completed hallazgo must carry its declared duration to the
             # individual OT in Drive and to the monthly register. For RANGE,
             # calculate the minutes before formatting the value used by both
@@ -3698,6 +3781,21 @@ async def issue_work_order(
                 status_code=400,
                 detail=f"Para enviar la OT a revisiÃ³n, complete: {', '.join(errors)}",
             )
+        # Drafts created by older versions were regular OTs. Convert them to
+        # the provisional hallazgo flow when the supervisor finally sends
+        # them, so no official OT is issued before admin review.
+        if not wo.is_hallazgo_report:
+            provisional_folio = await _next_hallazgo_folio(db)
+            wo.ot_number = provisional_folio
+            wo.is_hallazgo_report = True
+            wo.hallazgo_folio = provisional_folio
+            wo.hallazgo_kind = "REQUIRES_ATTENTION"
+            wo.hallazgo_priority = "NORMAL"
+            wo.hallazgo_status = "PENDING_REVIEW"
+            wo.is_planned = False
+            wo.scheduled_date = None
+        else:
+            wo.hallazgo_status = "PENDING_REVIEW"
         wo.submitted_for_review = True
         wo.requested_by = current_user.full_name
         wo.requested_signature = None
@@ -3712,6 +3810,64 @@ async def issue_work_order(
         )
         await notification_service.notify_work_order_submitted_to_admin(
             db, wo, submitted_by=current_user.full_name, link=f"/ordenes/{wo.id}"
+        )
+        await db.commit()
+        result2 = await db.execute(_base_query().where(WorkOrder.id == wo.id))
+        return _work_order_to_response(result2.scalar_one())
+
+    # Keep the administrator's existing "Aceptar y emitir" action working
+    # for supervisor hallazgos. The dedicated hallazgo review panel can also
+    # accept them with extra corrections; this path handles a submission that
+    # was reassigned first and then accepted from the normal OT action.
+    if current_user.role == UserRole.ADMIN and wo.is_hallazgo_report:
+        if not wo.submitted_for_review:
+            raise HTTPException(status_code=400, detail="Este hallazgo ya no está pendiente de revisión")
+        errors = []
+        if not wo.description or not wo.description.strip():
+            errors.append("Descripción del trabajo")
+        if not wo.responsible_user_id:
+            errors.append("Responsable principal")
+        if not current_user.signature:
+            errors.append("Firma manuscrita en Mi firma")
+        if not wo.is_external_work:
+            await _ensure_responsible_is_participant(db, wo)
+            participant_result = await db.execute(
+                select(work_order_participants.c.user_id)
+                .where(work_order_participants.c.work_order_id == wo.id)
+                .limit(1)
+            )
+            if participant_result.scalar_one_or_none() is None:
+                errors.append("Al menos un participante")
+        if errors:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Para aceptar el hallazgo, complete: {', '.join(errors)}",
+            )
+
+        previous_status = wo.status
+        wo.status = WorkOrderStatus.PENDING.value
+        wo.submitted_for_review = False
+        wo.hallazgo_status = "CONVERTED"
+        wo.is_planned = True
+        wo.scheduled_date = wo.scheduled_date or wo.request_date
+        wo.ot_number = await _next_ot_number(db)
+        wo.requested_signature = current_user.signature
+        await create_audit_log(
+            db,
+            user_id=current_user.id,
+            action="CONVERT_HALLAZGO_TO_OT",
+            entity_type="WorkOrder",
+            entity_id=wo.id,
+            previous_data={"status": previous_status, "ot_number": wo.hallazgo_folio},
+            new_data={"status": wo.status, "ot_number": wo.ot_number},
+        )
+        await notification_service.notify_work_order_assigned(
+            db, wo, link=f"/mis-ordenes/{wo.id}"
+        )
+        wo.ot_sheet_sync_status = "PENDING"
+        wo.monthly_sheet_sync_status = "PENDING"
+        await enqueue_external_sync(
+            db, wo.id, job_type="FULL_CREATE", actor_user_id=current_user.id
         )
         await db.commit()
         result2 = await db.execute(_base_query().where(WorkOrder.id == wo.id))

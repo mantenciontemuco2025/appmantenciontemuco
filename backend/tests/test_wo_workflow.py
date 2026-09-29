@@ -110,10 +110,66 @@ async def test_supervisor_can_emit_without_signature(
     )
     assert resp.status_code == 201
     assert resp.json()["submitted_for_review"] is True
+    assert resp.json()["is_hallazgo_report"] is True
+    assert resp.json()["hallazgo_status"] == "PENDING_REVIEW"
+    assert resp.json()["ot_number"].startswith("HALL-")
+    assert resp.json()["is_planned"] is False
     assert resp.json()["requested_signature"] is None
     assert resp.json()["area_name"] == "CEBADA"
     assert resp.json()["section_name"] == "Malta"
     assert resp.json()["equipment_name"] == "Filtro"
+
+    admin = await get_token(client, "admin@test.com")
+    pending = await client.get(
+        "/api/work-orders?pending_review=true",
+        headers=auth_headers(admin),
+    )
+    assert pending.status_code == 200
+    assert any(item["id"] == resp.json()["id"] for item in pending.json())
+
+    accepted = await client.post(
+        f"/api/work-orders/{resp.json()['id']}/hallazgo-review",
+        json={
+            "action": "ACCEPT",
+            "responsible_user_id": seed_data["worker"].id,
+            "participant_user_ids": [seed_data["worker"].id],
+        },
+        headers=auth_headers(admin),
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["hallazgo_status"] == "CONVERTED"
+    assert accepted.json()["submitted_for_review"] is False
+    assert accepted.json()["is_planned"] is True
+    assert accepted.json()["status"] == "PENDING"
+    assert accepted.json()["ot_number"].startswith("OT-")
+
+
+async def test_supervisor_saved_draft_becomes_hallazgo_when_sent(
+    client, seed_data, db_session_factory, monkeypatch
+):
+    async with db_session_factory() as db:
+        await db.execute(
+            insert(supervisor_areas).values(
+                supervisor_id=seed_data["supervisor"].id,
+                area_id=seed_data["area"].id,
+            )
+        )
+        await db.commit()
+
+    supervisor = await get_token(client, "supervisor@test.com")
+    draft = await _create_ot(
+        client, seed_data, monkeypatch, token=supervisor, emit=False
+    )
+    assert draft.status_code == 201
+    submitted = await client.post(
+        f"/api/work-orders/{draft.json()['id']}/issue",
+        headers=auth_headers(supervisor),
+    )
+    assert submitted.status_code == 200, submitted.text
+    assert submitted.json()["is_hallazgo_report"] is True
+    assert submitted.json()["hallazgo_status"] == "PENDING_REVIEW"
+    assert submitted.json()["ot_number"].startswith("HALL-")
+    assert submitted.json()["is_planned"] is False
 
 
 async def test_external_ot_is_coordinated_by_admin_without_internal_participants(
