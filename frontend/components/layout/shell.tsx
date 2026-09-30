@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { usePathname } from "next/navigation";
 import { Wrench, LayoutDashboard, ClipboardList, ClipboardCheck, Users, LogOut, PenLine, Droplets, Siren } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -84,7 +85,21 @@ export function Shell({
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
+            <Link
+              href="/dashboard"
+              className="inline-flex h-9 w-28 items-center justify-center rounded-md px-1 transition-opacity hover:opacity-80 sm:w-36"
+              aria-label="Ir al dashboard"
+            >
+              <Image
+                src="/logo.png"
+                alt="Maltexco"
+                width={144}
+                height={48}
+                priority
+                className="h-8 w-full object-contain sm:h-9"
+              />
+            </Link>
             <NotificationBell />
             <button
               onClick={onLogout}
