@@ -1,6 +1,7 @@
 from datetime import date, datetime, timezone
 
 from app.api.routes.kpis import _duration_minutes, _parse_estimated_minutes
+from app.models.material_catalog import MaterialCatalog
 from app.models.work_order import WorkOrder
 from tests.conftest import auth_headers, get_token
 
@@ -45,6 +46,10 @@ async def test_kpi_report_counts_each_participant_with_full_ot_duration(
     client, seed_data, db_session_factory
 ):
     async with db_session_factory() as db:
+        db.add_all([
+            MaterialCatalog(code="B4320001", description="Abrazadera", family="Ferretería"),
+            MaterialCatalog(code="B4320002", description="Sello", family="Repuestos"),
+        ])
         completed = WorkOrder(
             ot_number="OT-KPI-0001",
             title="Preventivo molino",
@@ -55,6 +60,7 @@ async def test_kpi_report_counts_each_participant_with_full_ot_duration(
             status="COMPLETED",
             is_planned=True,
             worked_duration_minutes=150,
+            material_codes="B4320001-B4320002",
             created_by_user_id=seed_data["admin"].id,
             participants=[seed_data["worker"], seed_data["valdes"]],
         )
@@ -68,6 +74,7 @@ async def test_kpi_report_counts_each_participant_with_full_ot_duration(
             status="PENDING",
             is_planned=True,
             estimated_time="2 horas",
+            material_codes="B4320001",
             created_by_user_id=seed_data["admin"].id,
             participants=[seed_data["worker"]],
         )
@@ -87,6 +94,10 @@ async def test_kpi_report_counts_each_participant_with_full_ot_duration(
     assert payload["summary"]["executed_planned_ots"] == 1
     assert payload["summary"]["compliance_percent"] == 50.0
     assert payload["summary"]["total_hours"] == 4.5
+    material_rows = {row["code"]: row for row in payload["by_material"]}
+    assert material_rows["B4320001"]["times_used"] == 2
+    assert material_rows["B4320001"]["description"] == "Abrazadera"
+    assert material_rows["B4320002"]["times_used"] == 1
     workers = {row["worker_name"]: row for row in payload["by_worker"]}
     assert workers["Ortiz"]["total_hours"] == 4.5
     other_worker_hours = [row["total_hours"] for name, row in workers.items() if name != "Ortiz"]

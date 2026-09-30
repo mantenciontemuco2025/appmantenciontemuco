@@ -1,6 +1,6 @@
 """Operational KPI reporting for administrators and supervisors."""
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 import re
 
@@ -13,6 +13,7 @@ from app.api.dependencies import require_roles
 from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.models.work_order import WorkOrder
+from app.models.material_catalog import MaterialCatalog
 from app.schemas.kpi import (
     KpiMaintenanceRow,
     KpiMonthRow,
@@ -24,6 +25,7 @@ from app.schemas.kpi import (
     KpiWorkerRow,
     KpiWorkerDetailRow,
     KpiExternalWorkRow,
+    KpiMaterialRow,
 )
 
 
@@ -80,6 +82,20 @@ def _report_date(wo: WorkOrder) -> date:
             created = created.replace(tzinfo=timezone.utc)
         return created.date()
     return created
+
+
+def _material_code_tokens(value: str | None) -> set[str]:
+    """Return the distinct material codes stored in an OT.
+
+    The picker persists codes separated by hyphens. A set is intentional:
+    the KPI measures OTs that used a code, so an accidental repeated token in
+    legacy text must not inflate the count for that same OT.
+    """
+    return {
+        token.strip().upper()
+        for token in re.split(r"\s*-\s*", value or "")
+        if token.strip()
+    }
 
 
 @router.get("", response_model=KpiResponse)
@@ -148,6 +164,7 @@ async def get_kpis(
     worker_counts: dict[int, dict[str, float | str]] = {}
     worker_detail_counts: dict[tuple[int, str, str], dict[str, float | str]] = {}
     external_counts: dict[tuple[str, str, str, str], dict[str, float | int | str | None]] = {}
+    material_counts: Counter[str] = Counter()
     area_counts: dict[str, dict[str, float | int]] = {}
     area_type_counts: dict[tuple[str, str], dict[str, float | int]] = {}
     section_counts: dict[tuple[str, str], dict[str, float | int]] = {}
@@ -159,6 +176,7 @@ async def get_kpis(
     stale_cutoff = today - timedelta(days=7)
 
     for wo in orders:
+        material_counts.update(_material_code_tokens(wo.material_codes))
         status = str(getattr(wo.status, "value", wo.status)).upper()
         status_counts[status] += 1
         is_completed = status in EXECUTED_STATUSES
@@ -386,6 +404,23 @@ async def get_kpis(
         for key, row in sorted(month_counts.items())
     ]
 
+    material_catalog_rows = []
+    if material_counts:
+        catalog_result = await db.execute(
+            select(MaterialCatalog).where(MaterialCatalog.code.in_(list(material_counts)))
+        )
+        material_catalog_rows = list(catalog_result.scalars().all())
+    catalog_by_code = {row.code.upper(): row for row in material_catalog_rows}
+    material_rows = [
+        KpiMaterialRow(
+            code=code,
+            description=catalog_by_code[code].description if code in catalog_by_code else None,
+            family=catalog_by_code[code].family if code in catalog_by_code else None,
+            times_used=count,
+        )
+        for code, count in sorted(material_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
     return KpiResponse(
         generated_at=datetime.now(timezone.utc),
         date_from=start,
@@ -416,4 +451,5 @@ async def get_kpis(
         by_area_type=area_type_rows,
         by_section=section_rows,
         by_month=month_rows,
+        by_material=material_rows,
     )

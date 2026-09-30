@@ -166,6 +166,13 @@ export interface KpiMonthRow {
   total_hours: number;
 }
 
+export interface KpiMaterialRow {
+  code: string;
+  description: string | null;
+  family: string | null;
+  times_used: number;
+}
+
 export interface KpiResponse {
   generated_at: string;
   date_from: string;
@@ -179,6 +186,7 @@ export interface KpiResponse {
   by_area_type: KpiAreaTypeRow[];
   by_section: KpiSectionRow[];
   by_month: KpiMonthRow[];
+  by_material: KpiMaterialRow[];
 }
 
 export interface Brief {

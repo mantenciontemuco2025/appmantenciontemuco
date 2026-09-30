@@ -244,6 +244,58 @@ function DistributionPie({
   );
 }
 
+function MaterialUsageBars({ rows }: { rows: KpiResponse["by_material"] }) {
+  const visibleRows = rows.slice(0, 15);
+  const maxValue = Math.max(1, ...visibleRows.map((row) => row.times_used));
+
+  return (
+    <div className="rounded-2xl border p-4 sm:p-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <h3 className="font-semibold">Uso de códigos de materiales</h3>
+          <p className="text-xs text-muted-foreground">
+            Veces que cada código aparece en una OT del período seleccionado
+          </p>
+        </div>
+        <BarChart3 className="h-5 w-5 shrink-0 text-primary" />
+      </div>
+      {visibleRows.length ? (
+        <div className="max-h-96 space-y-3 overflow-y-auto pr-1">
+          {visibleRows.map((row) => (
+            <div key={row.code} title={`${row.code}${row.description ? ` — ${row.description}` : ""}: ${row.times_used} usos`}>
+              <div className="mb-1 flex items-center justify-between gap-3 text-sm">
+                <div className="min-w-0">
+                  <span className="font-mono font-semibold">{row.code}</span>
+                  {row.description ? <span className="ml-2 truncate text-xs text-muted-foreground">{row.description}</span> : null}
+                </div>
+                <span className="shrink-0 font-semibold tabular-nums text-primary">
+                  {row.times_used} {row.times_used === 1 ? "vez" : "veces"}
+                </span>
+              </div>
+              <div className="h-3 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-blue-600 transition-all"
+                  style={{ width: `${Math.max(5, (row.times_used / maxValue) * 100)}%` }}
+                />
+              </div>
+              {row.family ? <p className="mt-1 text-[11px] text-muted-foreground">Familia: {row.family}</p> : null}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="flex min-h-32 items-center justify-center text-sm text-muted-foreground">
+          No hay códigos de materiales registrados en este período.
+        </div>
+      )}
+      {rows.length > visibleRows.length ? (
+        <p className="mt-3 text-xs text-muted-foreground">
+          Se muestran los 15 códigos más utilizados de {rows.length} con registros.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function KpiProfessionalExtras({ data, ordersHref }: { data: KpiResponse; ordersHref: (filters?: Record<string, string>) => string }) {
   const summary = data.summary;
   // The dashboard can stay open while an API process is being upgraded. Treat
@@ -570,7 +622,11 @@ export function KpiDashboard() {
               </div>
             </div>
 
-            <div className="order-4 mt-5 grid gap-5 lg:grid-cols-2">
+            <div className="order-4 mt-5">
+              <MaterialUsageBars rows={data.by_material ?? []} />
+            </div>
+
+            <div className="order-5 mt-5 grid gap-5 lg:grid-cols-2">
               <div className="rounded-2xl border p-4 sm:p-5">
                 <div className="mb-4 flex items-center justify-between"><div><h3 className="font-semibold">Por tipo de mantenimiento</h3><p className="text-xs text-muted-foreground">Cantidad de OTs y horas</p></div><BarChart3 className="h-5 w-5 text-primary" /></div>
                 <div className="space-y-4">
@@ -586,7 +642,7 @@ export function KpiDashboard() {
               </div>
             </div>
 
-            <div className="order-5 mt-5 grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
+            <div className="order-6 mt-5 grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
               <div className="overflow-hidden rounded-2xl border"><div className="flex items-center justify-between border-b p-4"><div><h3 className="font-semibold">Horas por trabajador</h3><p className="text-xs text-muted-foreground">Cada participante recibe la duración completa de la OT</p></div><Users className="h-5 w-5 text-primary" /></div><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead className="bg-muted/40 text-xs uppercase text-muted-foreground"><tr><th className="px-4 py-3">Trabajador</th><th className="px-4 py-3 text-right">OTs</th><th className="px-4 py-3 text-right">Finalizadas</th><th className="px-4 py-3 text-right">Horas</th></tr></thead><tbody className="divide-y">{data.by_worker.length ? data.by_worker.map((row) => <tr key={row.user_id} className="cursor-pointer hover:bg-muted/40" role="link" tabIndex={0} onClick={() => { window.location.href = ordersHref({ responsible: row.worker_name }); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") window.location.href = ordersHref({ responsible: row.worker_name }); }}><td className="px-4 py-3 font-medium">{row.worker_name}</td><td className="px-4 py-3 text-right">{row.assigned_ots}</td><td className="px-4 py-3 text-right">{row.completed_ots} <span className="text-xs text-muted-foreground">({percent(row.completed_ots, row.assigned_ots)}%)</span></td><td className="px-4 py-3 text-right font-semibold text-primary">{formatHours(row.total_hours)}</td></tr>) : <tr><td colSpan={4} className="px-4 py-8 text-center text-muted-foreground">No hay participantes en el período.</td></tr>}</tbody></table></div></div>
               <div className="overflow-hidden rounded-2xl border">
                 <div className="flex items-center justify-between border-b p-4">

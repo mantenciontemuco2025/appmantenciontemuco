@@ -95,6 +95,13 @@ class KpiMonthRow(BaseModel):
     total_hours: float
 
 
+class KpiMaterialRow(BaseModel):
+    code: str
+    description: str | None
+    family: str | None
+    times_used: int
+
+
 class KpiResponse(BaseModel):
     generated_at: datetime
     date_from: date
@@ -108,3 +115,4 @@ class KpiResponse(BaseModel):
     by_area_type: list[KpiAreaTypeRow]
     by_section: list[KpiSectionRow]
     by_month: list[KpiMonthRow]
+    by_material: list[KpiMaterialRow]
