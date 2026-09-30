@@ -294,6 +294,14 @@ class HallazgoReviewPayload(BaseModel):
     voucher_number: str | None = None
     voucher_date: date | None = None
     material_codes: str | None = Field(default=None, max_length=500)
+    is_external_work: bool | None = None
+    external_executor_name: str | None = Field(default=None, max_length=200)
+    external_company: str | None = Field(default=None, max_length=200)
+    external_quote_number: str | None = Field(default=None, max_length=80)
+    external_oc_number: str | None = Field(default=None, max_length=80)
+    external_invoice_number: str | None = Field(default=None, max_length=80)
+    external_account_number: str | None = Field(default=None, max_length=80)
+    external_oc_amount: str | None = Field(default=None, max_length=80)
 
 
 class HallazgoUpdate(BaseModel):

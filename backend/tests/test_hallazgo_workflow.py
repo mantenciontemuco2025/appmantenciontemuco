@@ -146,6 +146,57 @@ async def test_attention_hallazgo_admin_assigns_equipment_responsible_and_plan(
     assert data["voucher_number"] == "VAL-ATT"
 
 
+async def test_attention_hallazgo_can_be_converted_to_external_work(
+    client, seed_data
+):
+    worker_token = await get_token(client, "ortiz@test.com")
+    admin_token = await get_token(client, "admin@test.com")
+
+    created = await client.post(
+        "/api/work-orders/hallazgos",
+        json=hallazgo_payload(
+            seed_data,
+            report_kind="REQUIRES_ATTENTION",
+            description="Falla que requiere proveedor externo.",
+            work_time_mode=None,
+            work_start_time=None,
+            work_end_time=None,
+            folio=None,
+            voucher_number=None,
+        ),
+        headers=auth_headers(worker_token),
+    )
+    assert created.status_code == 201, created.text
+
+    accepted = await client.post(
+        f"/api/work-orders/{created.json()['id']}/hallazgo-review",
+        json={
+            "action": "ACCEPT",
+            "equipment_id": seed_data["equipment"].id,
+            "is_external_work": True,
+            "external_executor_name": "Proveedor Externo",
+            "external_company": "Servicios Industriales Ltda.",
+            "external_quote_number": "COT-100",
+            "external_oc_number": "OC-200",
+            "maintenance_type": "CORRECTIVE",
+            "scheduled_date": "2026-09-24",
+        },
+        headers=auth_headers(admin_token),
+    )
+    assert accepted.status_code == 200, accepted.text
+    data = accepted.json()
+    assert data["is_external_work"] is True
+    assert data["external_executor_name"] == "Proveedor Externo"
+    assert data["external_company"] == "Servicios Industriales Ltda."
+    assert data["external_quote_number"] == "COT-100"
+    assert data["external_oc_number"] == "OC-200"
+    assert data["coordinator_user_id"] == seed_data["admin"].id
+    assert data["responsible_user_id"] is None
+    assert data["participant_user_ids"] == []
+    assert data["status"] == WorkOrderStatus.PENDING.value
+    assert data["is_planned"] is True
+
+
 async def test_returned_hallazgo_can_be_corrected_and_resubmitted(client, seed_data):
     worker_token = await get_token(client, "ortiz@test.com")
     admin_token = await get_token(client, "admin@test.com")

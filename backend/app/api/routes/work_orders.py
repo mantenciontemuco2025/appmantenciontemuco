@@ -2356,6 +2356,49 @@ async def review_hallazgo(
             wo.voucher_date = payload.voucher_date
         if "material_codes" in payload.model_fields_set:
             wo.material_codes = payload.material_codes.strip() if payload.material_codes else None
+        next_external_work = (
+            payload.is_external_work
+            if "is_external_work" in payload.model_fields_set
+            else wo.is_external_work
+        )
+        if next_external_work:
+            external_name = (
+                payload.external_executor_name.strip()
+                if "external_executor_name" in payload.model_fields_set and payload.external_executor_name
+                else (wo.external_executor_name or "").strip()
+            )
+            if not external_name:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Indica el nombre de la persona externa que realizará el trabajo",
+                )
+            wo.is_external_work = True
+            wo.external_executor_name = external_name
+            for field in (
+                "external_company",
+                "external_quote_number",
+                "external_oc_number",
+                "external_invoice_number",
+                "external_account_number",
+                "external_oc_amount",
+            ):
+                if field in payload.model_fields_set:
+                    value = getattr(payload, field)
+                    setattr(wo, field, value.strip() if value else None)
+            wo.coordinator_user_id = current_user.id
+            wo.responsible_user_id = None
+            await db.execute(delete(work_order_participants).where(work_order_participants.c.work_order_id == wo.id))
+            wo.participant_names = None
+        else:
+            wo.is_external_work = False
+            wo.external_executor_name = None
+            wo.external_company = None
+            wo.external_quote_number = None
+            wo.external_oc_number = None
+            wo.external_invoice_number = None
+            wo.external_account_number = None
+            wo.external_oc_amount = None
+            wo.coordinator_user_id = None
         if "plant_area" in payload.model_fields_set:
             wo.plant_area = _validate_plant_area(payload.plant_area)
         if "area_id" in payload.model_fields_set or "equipment_id" in payload.model_fields_set:
@@ -2391,19 +2434,23 @@ async def review_hallazgo(
                 wo.worked_duration_minutes = declared_minutes
                 wo.estimated_time = _format_work_duration(declared_minutes)
         if wo.hallazgo_kind == "REQUIRES_ATTENTION":
-            if not payload.responsible_user_id:
-                raise HTTPException(status_code=400, detail="Asigna un trabajador para convertir este hallazgo en OT")
-            responsible = await db.get(User, payload.responsible_user_id)
-            if responsible is None or responsible.role != UserRole.WORKER or not responsible.is_active:
-                raise HTTPException(status_code=400, detail="El responsable debe ser un trabajador activo")
-            wo.responsible_user_id = responsible.id
-            participant_ids = list(dict.fromkeys([responsible.id, *payload.participant_user_ids]))
-            await db.execute(delete(work_order_participants).where(work_order_participants.c.work_order_id == wo.id))
-            names_result = await db.execute(select(User.id, User.full_name).where(User.id.in_(participant_ids)))
-            names_map = {row[0]: row[1] for row in names_result.all()}
-            wo.participant_names = ", ".join(names_map[uid] for uid in participant_ids if uid in names_map)
-            for uid in participant_ids:
-                await db.execute(work_order_participants.insert().values(work_order_id=wo.id, user_id=uid))
+            if wo.is_external_work:
+                wo.responsible_user_id = None
+                wo.participant_names = None
+            else:
+                if not payload.responsible_user_id:
+                    raise HTTPException(status_code=400, detail="Asigna un trabajador para convertir este hallazgo en OT")
+                responsible = await db.get(User, payload.responsible_user_id)
+                if responsible is None or responsible.role != UserRole.WORKER or not responsible.is_active:
+                    raise HTTPException(status_code=400, detail="El responsable debe ser un trabajador activo")
+                wo.responsible_user_id = responsible.id
+                participant_ids = list(dict.fromkeys([responsible.id, *payload.participant_user_ids]))
+                await db.execute(delete(work_order_participants).where(work_order_participants.c.work_order_id == wo.id))
+                names_result = await db.execute(select(User.id, User.full_name).where(User.id.in_(participant_ids)))
+                names_map = {row[0]: row[1] for row in names_result.all()}
+                wo.participant_names = ", ".join(names_map[uid] for uid in participant_ids if uid in names_map)
+                for uid in participant_ids:
+                    await db.execute(work_order_participants.insert().values(work_order_id=wo.id, user_id=uid))
             wo.status = WorkOrderStatus.PENDING.value
         else:
             wo.status = WorkOrderStatus.APPROVED.value
