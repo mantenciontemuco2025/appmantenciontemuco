@@ -111,6 +111,8 @@ export interface EquipmentLifeBackfillResult {
   work_orders_synced: number;
   work_orders_without_equipment: number;
   errors: string[];
+  equipment_skipped: number;
+  work_orders_skipped: number;
 }
 
 export interface EquipmentLifeBackfillAccepted {

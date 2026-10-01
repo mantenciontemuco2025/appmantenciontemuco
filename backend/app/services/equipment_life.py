@@ -149,6 +149,24 @@ def _work_order_sort_key(work_order):
     return (event_date or date.min, work_order.ot_number or "")
 
 
+def work_order_needs_sync(work_order, synced_at: datetime) -> bool:
+    """Return whether an OT changed after the equipment sheet was synced."""
+    def is_after(value) -> bool:
+        if not value:
+            return False
+        left = value
+        right = synced_at
+        if left.tzinfo is None and right.tzinfo is not None:
+            left = left.replace(tzinfo=right.tzinfo)
+        elif left.tzinfo is not None and right.tzinfo is None:
+            right = right.replace(tzinfo=left.tzinfo)
+        return left > right
+
+    return is_after(getattr(work_order, "updated_at", None)) or is_after(
+        getattr(work_order, "created_at", None)
+    )
+
+
 def sync_equipment_history(
     *,
     equipment_id: int,

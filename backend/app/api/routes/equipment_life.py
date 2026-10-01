@@ -241,6 +241,26 @@ async def _run_equipment_life_backfill(
     processed_equipment = 0
     total_work_orders = sum(len(items) for items in orders_by_equipment.values())
     equipment_with_work_orders = sum(bool(items) for items in orders_by_equipment.values())
+    sync_targets: set[int] = set()
+    skipped_equipment = 0
+    skipped_work_orders = 0
+
+    for item in equipment:
+        work_orders = orders_by_equipment.get(item.id, [])
+        synced_at = item.life_sheet_synced_at
+        needs_sync = bool(work_orders) and (
+            not item.life_sheet_file_id
+            or item.life_sheet_sync_status != "SYNCED"
+            or not synced_at
+            or any(life_service.work_order_needs_sync(order, synced_at) for order in work_orders)
+        )
+        if needs_sync:
+            sync_targets.add(item.id)
+        elif item.life_sheet_file_id and item.life_sheet_sync_status == "SYNCED":
+            skipped_equipment += 1
+            skipped_work_orders += len(work_orders)
+
+    total_work_orders = sum(len(orders_by_equipment.get(item_id, [])) for item_id in sync_targets)
 
     def update_progress(current_equipment: str | None):
         global _equipment_life_backfill_state
@@ -261,7 +281,7 @@ async def _run_equipment_life_backfill(
 
     for item in equipment:
         work_orders = orders_by_equipment.get(item.id, [])
-        if not work_orders:
+        if item.id not in sync_targets:
             processed_equipment += 1
             update_progress(None)
             continue
@@ -298,6 +318,8 @@ async def _run_equipment_life_backfill(
         work_orders_synced=synced_orders,
         work_orders_without_equipment=without_equipment,
         errors=errors[:50],
+        equipment_skipped=skipped_equipment,
+        work_orders_skipped=skipped_work_orders,
     )
 
 

@@ -45,6 +45,8 @@ class EquipmentLifeBackfillResult(BaseModel):
     work_orders_synced: int
     work_orders_without_equipment: int
     errors: list[str]
+    equipment_skipped: int = 0
+    work_orders_skipped: int = 0
 
 
 class EquipmentLifeBackfillAccepted(BaseModel):
