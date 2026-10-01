@@ -27,6 +27,7 @@ from app.schemas.kpi import (
     KpiWorkerRow,
     KpiWorkerDetailRow,
     KpiExternalWorkRow,
+    KpiExternalCostRow,
     KpiMaterialRow,
 )
 
@@ -112,6 +113,44 @@ def _parse_estimated_minutes(value: str | None) -> float:
         return float(text) * 60
     except ValueError:
         return 0.0
+
+
+def _parse_external_amount(value: str | None) -> float:
+    """Parse the legacy OC amount text into a non-negative numeric value.
+
+    External OT amounts have historically been stored as text. Accept the
+    common Chilean formats (``$1.250.000``, ``1.250.000,50`` and ``1250000``)
+    while ignoring empty or malformed values.
+    """
+    if not value:
+        return 0.0
+    text = re.sub(r"[^0-9,.-]", "", value.strip())
+    if not text or text in {"-", ".", ","}:
+        return 0.0
+    negative = text.startswith("-")
+    text = text.lstrip("-")
+    if not text:
+        return 0.0
+
+    if "," in text and "." in text:
+        if text.rfind(",") > text.rfind("."):
+            normalized = text.replace(".", "").replace(",", ".")
+        else:
+            normalized = text.replace(",", "")
+    elif "," in text:
+        parts = text.split(",")
+        normalized = "".join(parts[:-1]) + "." + parts[-1] if len(parts[-1]) in {1, 2} else "".join(parts)
+    elif "." in text:
+        parts = text.split(".")
+        normalized = "".join(parts) if len(parts) > 1 and len(parts[-1]) == 3 else text
+    else:
+        normalized = text
+
+    try:
+        amount = float(normalized)
+    except ValueError:
+        return 0.0
+    return round(amount, 2) if amount > 0 and not negative else 0.0
 
 
 def _duration_minutes(wo: WorkOrder) -> float:
@@ -244,6 +283,7 @@ async def get_kpis(
     worker_counts: dict[int, dict[str, float | str]] = {}
     worker_detail_counts: dict[tuple[int, str, str], dict[str, float | str]] = {}
     external_counts: dict[tuple[str, str, str, str], dict[str, float | int | str | None]] = {}
+    external_cost_counts: dict[str, dict[str, float | int]] = {}
     material_counts: Counter[str] = Counter()
     area_counts: dict[str, dict[str, float | int]] = {}
     area_type_counts: dict[tuple[str, str], dict[str, float | int]] = {}
@@ -252,6 +292,9 @@ async def get_kpis(
     planned = executed_planned = completed = total_minutes = total_person_minutes = 0
     external_ots = 0
     external_minutes = 0.0
+    external_cost_total = 0.0
+    external_cost_ots = 0
+    external_cost_missing_ots = 0
     overdue_ots = stale_pending_ots = 0
     stale_cutoff = today - timedelta(days=7)
 
@@ -360,6 +403,21 @@ async def get_kpis(
         if wo.is_external_work and wo.external_executor_name:
             external_ots += 1
             external_minutes += minutes
+            external_amount = _parse_external_amount(wo.external_oc_amount)
+            if external_amount > 0:
+                external_cost_total += external_amount
+                external_cost_ots += 1
+            else:
+                external_cost_missing_ots += 1
+            company_key = (wo.external_company or "Sin empresa").strip() or "Sin empresa"
+            cost_row = external_cost_counts.setdefault(company_key, {
+                "total": 0,
+                "with_cost": 0,
+                "amount": 0.0,
+            })
+            cost_row["total"] += 1
+            cost_row["with_cost"] += int(external_amount > 0)
+            cost_row["amount"] += external_amount
             external_key = (
                 wo.external_executor_name,
                 wo.external_company or "",
@@ -434,6 +492,18 @@ async def get_kpis(
                 str(item[1]["area"]).lower(),
                 str(item[1]["kind"]),
             ),
+        )
+    ]
+    external_cost_rows = [
+        KpiExternalCostRow(
+            company=company,
+            total_ots=int(row["total"]),
+            ots_with_cost=int(row["with_cost"]),
+            total_amount=round(float(row["amount"]), 2),
+        )
+        for company, row in sorted(
+            external_cost_counts.items(),
+            key=lambda item: (-float(item[1]["amount"]), item[0].lower()),
         )
     ]
     section_rows = [
@@ -520,6 +590,9 @@ async def get_kpis(
             total_person_hours=hours(total_person_minutes),
             external_ots=external_ots,
             external_hours=hours(external_minutes),
+            external_cost_total=round(external_cost_total, 2),
+            external_cost_ots=external_cost_ots,
+            external_cost_missing_ots=external_cost_missing_ots,
             average_hours_per_ot=hours(total_minutes / len(orders)) if orders else 0.0,
             overdue_ots=overdue_ots,
             stale_pending_ots=stale_pending_ots,
@@ -528,6 +601,7 @@ async def get_kpis(
         by_worker=worker_rows,
         by_worker_detail=worker_detail_rows,
         by_external_work=external_rows,
+        by_external_cost=external_cost_rows,
         by_area=area_rows,
         by_area_type=area_type_rows,
         by_section=section_rows,

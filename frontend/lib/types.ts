@@ -150,6 +150,9 @@ export interface KpiSummary {
   total_person_hours: number;
   external_ots: number;
   external_hours: number;
+  external_cost_total: number;
+  external_cost_ots: number;
+  external_cost_missing_ots: number;
   average_hours_per_ot: number;
   overdue_ots: number;
   stale_pending_ots: number;
@@ -189,6 +192,13 @@ export interface KpiExternalWorkRow {
   total_ots: number;
   completed_ots: number;
   total_hours: number;
+}
+
+export interface KpiExternalCostRow {
+  company: string;
+  total_ots: number;
+  ots_with_cost: number;
+  total_amount: number;
 }
 
 export interface KpiAreaTypeRow {
@@ -244,6 +254,7 @@ export interface KpiResponse {
   by_worker: KpiWorkerRow[];
   by_worker_detail: KpiWorkerDetailRow[];
   by_external_work: KpiExternalWorkRow[];
+  by_external_cost: KpiExternalCostRow[];
   by_area: KpiAreaRow[];
   by_area_type: KpiAreaTypeRow[];
   by_section: KpiSectionRow[];

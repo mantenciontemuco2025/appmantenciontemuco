@@ -152,6 +152,11 @@ async def sync_equipment_from_database(
     work_orders = [wo for wo in result.scalars().all() if _eligible_work_order(wo, include_drafts)]
     if not work_orders:
         return None
+    # The Drive/Sheets rewrite can take seconds. The caller has already
+    # flushed the OT changes, so do not keep a PostgreSQL connection checked
+    # out while waiting on Google. The equipment fields remain available
+    # after commit because the session uses expire_on_commit=False.
+    await db.commit()
     synced = await asyncio.to_thread(
         life_service.sync_equipment_history,
         equipment_id=equipment.id,
@@ -175,7 +180,11 @@ async def list_equipment_life(
     _: User = Depends(get_current_user),
 ):
     equipment, orders_by_equipment = await _load_catalog_and_orders(db)
-    return [_summary(item, len(orders_by_equipment.get(item.id, []))) for item in equipment]
+    # Materialize the response data before releasing the connection. This
+    # prevents response serialization from keeping a read transaction open.
+    response = [_summary(item, len(orders_by_equipment.get(item.id, []))) for item in equipment]
+    await db.commit()
+    return response
 
 
 @router.get("/status", response_model=EquipmentLifeBackfillStatus)
@@ -209,10 +218,14 @@ async def get_equipment_life(
         .order_by(WorkOrder.execution_date, WorkOrder.ot_number)
     )
     work_orders = [wo for wo in result.scalars().all() if _eligible_work_order(wo)]
-    return EquipmentLifeDetail(
+    response = EquipmentLifeDetail(
         **_summary(equipment, len(work_orders)).model_dump(),
         records=_records(work_orders),
     )
+    # Release the read transaction before FastAPI serializes the potentially
+    # large OT history response.
+    await db.commit()
+    return response
 
 
 async def _run_equipment_life_backfill(

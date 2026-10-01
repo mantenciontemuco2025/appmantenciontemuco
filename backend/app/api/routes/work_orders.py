@@ -1763,6 +1763,10 @@ async def _sync_ot_and_monthly(db, wo, area, equipment, payload, user_id):
     participant_column_keys = await _monthly_worker_columns(
         db, participant_user_ids or []
     ) if participant_user_ids is not None else None
+    # Resolving worker columns starts a new read transaction after the
+    # initial commit. Release it before the Drive file creation/population so
+    # slow Google calls never occupy a PostgreSQL pool slot.
+    await db.commit()
 
     try:
         if isinstance(execution_date, _date) and not isinstance(execution_date, datetime):

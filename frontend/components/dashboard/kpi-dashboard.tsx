@@ -76,6 +76,14 @@ function formatHours(value: number) {
   return `${hours} h ${minutes} min`;
 }
 
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat("es-CL", {
+    style: "currency",
+    currency: "CLP",
+    maximumFractionDigits: 0,
+  }).format(Math.max(0, value));
+}
+
 function KpiCard({
   label,
   value,
@@ -303,6 +311,10 @@ function KpiProfessionalExtras({ data, ordersHref }: { data: KpiResponse; orders
   const externalHours = summary.external_hours ?? 0;
   const externalOts = summary.external_ots ?? 0;
   const externalWorkRows = data.by_external_work ?? [];
+  const externalCostTotal = summary.external_cost_total ?? 0;
+  const externalCostOts = summary.external_cost_ots ?? 0;
+  const externalCostMissingOts = summary.external_cost_missing_ots ?? 0;
+  const externalCostRows = data.by_external_cost ?? [];
   const draftOts = Math.max(
     0,
     summary.total_ots - summary.completed_ots - summary.pending_ots - summary.in_progress_ots - summary.cancelled_ots,
@@ -349,6 +361,14 @@ function KpiProfessionalExtras({ data, ordersHref }: { data: KpiResponse; orders
           helper={`${externalOts} OTs; separado de las horas del personal interno`}
           icon={<Users className="h-5 w-5 text-cyan-700" />}
           tone="bg-cyan-100"
+          href={ordersHref({ external: "true" })}
+        />
+        <KpiCard
+          label="Gasto externo"
+          value={formatCurrency(externalCostTotal)}
+          helper={`${externalCostOts} OTs con monto OC · ${externalCostMissingOts} sin monto`}
+          icon={<BarChart3 className="h-5 w-5 text-emerald-700" />}
+          tone="bg-emerald-100"
           href={ordersHref({ external: "true" })}
         />
       </div>
@@ -409,6 +429,30 @@ function KpiProfessionalExtras({ data, ordersHref }: { data: KpiResponse; orders
               )}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <div className="order-5 mt-5 overflow-hidden rounded-2xl border">
+        <div className="border-b p-4">
+          <h3 className="font-semibold">Gasto de OT externas por empresa</h3>
+          <p className="text-xs text-muted-foreground">Suma los montos OC registrados en las OT externas del período.</p>
+        </div>
+        <div className="space-y-3 p-4">
+          {externalCostRows.length ? (() => {
+            const maxAmount = Math.max(...externalCostRows.map((row) => row.total_amount), 1);
+            return externalCostRows.map((row) => (
+              <div key={row.company} className="space-y-1">
+                <div className="flex items-center justify-between gap-3 text-sm">
+                  <span className="font-medium">{row.company}</span>
+                  <span className="whitespace-nowrap font-semibold">{formatCurrency(row.total_amount)}</span>
+                </div>
+                <div className="h-2.5 overflow-hidden rounded-full bg-muted/60" title={`${row.company}: ${formatCurrency(row.total_amount)}`}>
+                  <div className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-500" style={{ width: `${(row.total_amount / maxAmount) * 100}%` }} />
+                </div>
+                <p className="text-xs text-muted-foreground">{row.ots_with_cost} de {row.total_ots} OT con monto OC</p>
+              </div>
+            ));
+          })() : <p className="py-5 text-center text-sm text-muted-foreground">No hay montos OC registrados en este período.</p>}
         </div>
       </div>
 
