@@ -89,6 +89,12 @@ class Settings(BaseSettings):
     GOOGLE_MONTHLY_TEMPLATE_FILE_ID: str = ""
     GOOGLE_MONTHLY_ROOT_FOLDER_ID: str = ""
 
+    # Google Drive — hojas de vida de equipos. La plantilla maestra nunca se
+    # modifica; la aplicación crea una copia por equipo dentro de la carpeta
+    # raíz y la actualiza con las OT asociadas.
+    GOOGLE_EQUIPMENT_LIFE_TEMPLATE_FILE_ID: str = ""
+    GOOGLE_EQUIPMENT_LIFE_ROOT_FOLDER_ID: str = ""
+
     # Google Drive — user signatures. Folder where each user's handwritten
     # signature image is stored (one file per user). Kept readable to
     # "anyone with the link" so Google Sheets can render it as an overlay

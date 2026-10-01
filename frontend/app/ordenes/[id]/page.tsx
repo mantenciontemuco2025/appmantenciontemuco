@@ -1036,15 +1036,15 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
             </InfoRowEditContext.Provider>
           </Card>
 
-          {user.role === "SUPERVISOR" &&
+          {(user.role === "SUPERVISOR" || user.role === "ADMIN") &&
             wo.requires_supervisor_validation &&
             wo.status === "COMPLETED" &&
             (wo.supervisor_review_status === "PENDING" ||
               (wo.supervisor_review_status === "CLAIMED" &&
-                wo.supervisor_validator_user_id === user.id)) && (
+                (user.role === "ADMIN" || wo.supervisor_validator_user_id === user.id))) && (
               <Card className="mb-4 border-violet-200">
                 <CardContent className="p-4">
-                  <h3 className="text-sm font-semibold text-violet-900">Revisión del supervisor</h3>
+                  <h3 className="text-sm font-semibold text-violet-900">Revisión del supervisor o administrador</h3>
                   {wo.supervisor_review_status === "PENDING" && (
                     <>
                       <p className="mt-1 text-sm text-muted-foreground">
@@ -1057,6 +1057,23 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
                       >
                         {actionLoading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Eye className="mr-1 h-4 w-4" />}
                         Tomar revisión
+                      </Button>
+                    </>
+                  )}
+                  {user.role === "ADMIN" &&
+                    wo.supervisor_review_status === "CLAIMED" &&
+                    wo.supervisor_validator_user_id !== user.id && (
+                    <>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        La revisión fue tomada por {wo.supervisor_validator_name || "otro supervisor"}. Puedes tomarla como administrador si no ha sido resuelta.
+                      </p>
+                      <Button
+                        className="mt-3"
+                        disabled={actionLoading}
+                        onClick={() => handleSupervisorReview("CLAIM")}
+                      >
+                        {actionLoading ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <Eye className="mr-1 h-4 w-4" />}
+                        Tomar revisión como administrador
                       </Button>
                     </>
                   )}

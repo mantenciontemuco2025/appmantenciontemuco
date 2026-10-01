@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { Wrench, LayoutDashboard, ClipboardList, ClipboardCheck, Users, LogOut, PenLine, Droplets, Siren } from "lucide-react";
+import { Wrench, LayoutDashboard, ClipboardList, ClipboardCheck, Users, LogOut, PenLine, Droplets, Siren, History } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NotificationBell } from "@/components/notifications/bell";
 import { getAuthUser } from "@/lib/auth";
@@ -23,6 +23,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: <LayoutDashboard className="h-4 w-4" /> },
   { href: "/hallazgos", label: "Hallazgos", icon: <Siren className="h-4 w-4" />, hallazgoOnly: true },
   { href: "/mis-ordenes", label: "Mis Órdenes", icon: <ClipboardCheck className="h-4 w-4" /> },
+  { href: "/hojas-vida", label: "Hojas de vida", icon: <History className="h-4 w-4" /> },
   { href: "/ordenes", label: "Órdenes", icon: <ClipboardList className="h-4 w-4" />, managerOnly: true },
   { href: "/perfil", label: "Mi perfil", icon: <PenLine className="h-4 w-4" /> },
   { href: "/registro-agua", label: "Planta de RILES", icon: <Droplets className="h-4 w-4" />, waterRegisterOnly: true },

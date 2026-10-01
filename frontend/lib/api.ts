@@ -392,7 +392,7 @@ export const api = {
   getBlob: (path: string) => apiFetchBlob(path),
   getCached: <T>(path: string, ttlMs: number) => apiGetCached<T>(path, ttlMs),
   invalidateCache: (path: string) => invalidateApiCache(path),
-  post: <T>(path: string, body?: unknown) => apiFetch<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
+  post: <T>(path: string, body?: unknown, timeoutMs?: number) => apiFetch<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined, timeoutMs }),
   put: <T>(path: string, body: unknown) => apiFetch<T>(path, { method: "PUT", body: JSON.stringify(body) }),
   patch: <T>(path: string, body: unknown) => apiFetch<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
   upload: <T>(path: string, body: FormData, timeoutMs = 60000) =>

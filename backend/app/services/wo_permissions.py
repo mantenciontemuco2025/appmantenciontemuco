@@ -100,10 +100,14 @@ def can_approve(wo: WorkOrder, user: User) -> bool:
 
 
 def can_review_supervisor(wo: WorkOrder, user: User) -> bool:
-    """A supervisor from the OT area may review a supervisor-created OT."""
-    if user.role != UserRole.SUPERVISOR or not wo.requires_supervisor_validation:
+    """Allow the area supervisor or an administrator to review the OT."""
+    if not wo.requires_supervisor_validation:
         return False
     if wo.status != WorkOrderStatus.COMPLETED.value:
+        return False
+    if user.role == UserRole.ADMIN:
+        return True
+    if user.role != UserRole.SUPERVISOR:
         return False
     area_ids = getattr(user, "area_ids", None)
     if area_ids is None:

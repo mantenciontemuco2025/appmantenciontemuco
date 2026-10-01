@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
-from app.api.routes import auth, users, catalogs, maintenance, audit, admin, materials, work_orders, notifications, push_subscriptions, kpis, water_register
+from app.api.routes import auth, users, catalogs, maintenance, audit, admin, materials, work_orders, notifications, push_subscriptions, kpis, water_register, equipment_life
 from app.services import email_service, push_service
 
 
@@ -55,6 +55,7 @@ app.include_router(audit.router)
 app.include_router(admin.router)
 app.include_router(kpis.router)
 app.include_router(water_register.router)
+app.include_router(equipment_life.router)
 
 
 @app.get("/health", tags=["health"])

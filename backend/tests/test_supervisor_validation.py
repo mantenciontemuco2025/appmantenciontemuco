@@ -28,6 +28,9 @@ def test_supervisor_from_another_area_cannot_review():
     assert can_review_supervisor(_order(), _user(area_ids=[11])) is False
 
 
-def test_regular_order_and_admin_do_not_use_supervisor_review():
+def test_regular_order_does_not_use_supervisor_review():
     assert can_review_supervisor(_order(requires_supervisor_validation=False), _user()) is False
-    assert can_review_supervisor(_order(), _user(role=UserRole.ADMIN)) is False
+
+
+def test_admin_can_review_supervisor_order_as_fallback():
+    assert can_review_supervisor(_order(), _user(role=UserRole.ADMIN)) is True

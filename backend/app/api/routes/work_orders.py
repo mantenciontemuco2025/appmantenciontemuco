@@ -66,6 +66,7 @@ from app.services.ot_mapping import get_monthly_sheet_title
 from app.services.wo_state_machine import validate_transition, InvalidTransitionError
 from app.services import wo_permissions as perms
 from app.services import notification_service
+from app.api.routes.equipment_life import sync_equipment_from_database
 from app.services.evidence_images import MAX_UPLOAD_BYTES, prepare_evidence_image
 
 logger = logging.getLogger(__name__)
@@ -1952,10 +1953,10 @@ async def list_work_orders(
         query = query.where(WorkOrder.submitted_for_review.is_(True))
 
     if supervisor_validation_pending:
-        if current_user.role != UserRole.SUPERVISOR:
+        if current_user.role not in (UserRole.SUPERVISOR, UserRole.ADMIN):
             raise HTTPException(
                 status_code=403,
-                detail="Solo los supervisores pueden consultar sus validaciones pendientes",
+                detail="Solo supervisores y administradores pueden consultar las validaciones pendientes",
             )
         query = query.where(
             WorkOrder.requires_supervisor_validation.is_(True),
@@ -4295,6 +4296,18 @@ async def complete_work_order(
     )
     await db.flush()
 
+    # Keep the equipment life sheet current from the same OT data. A Drive
+    # failure is recorded but never blocks OT completion.
+    if wo.equipment_id:
+        try:
+            await sync_equipment_from_database(db, wo.equipment_id)
+        except Exception as exc:  # noqa: BLE001
+            equipment = await db.get(Equipment, wo.equipment_id)
+            if equipment is not None:
+                equipment.life_sheet_sync_status = "FAILED"
+                equipment.life_sheet_sync_error = str(exc)[:500]
+            logger.warning("No se pudo sincronizar hoja de vida de %s: %s", wo.ot_number, exc)
+
     await notification_service.notify_work_order_completed(
         db, wo, link=f"/ordenes/{wo.id}", exclude_user_id=current_user.id
     )
@@ -4350,11 +4363,13 @@ async def review_supervisor_work_order(
     if not perms.can_review_supervisor(wo, current_user):
         raise HTTPException(
             status_code=403,
-            detail="Solo un supervisor asignado al área puede revisar esta OT.",
+            detail="Solo un supervisor del área o un administrador puede revisar esta OT.",
         )
 
     action = payload.action
     notes = (payload.notes or "").strip() or None
+    is_admin = current_user.role == UserRole.ADMIN
+    original_review_status = wo.supervisor_review_status
     if action == "CLAIM":
         if wo.supervisor_review_status == SupervisorReviewStatus.APPROVED.value:
             raise HTTPException(status_code=409, detail="La OT ya fue validada.")
@@ -4362,6 +4377,27 @@ async def review_supervisor_work_order(
             if wo.supervisor_validator_user_id == current_user.id:
                 wo.supervisor_validator = current_user
                 return _work_order_to_response(wo)
+            if is_admin:
+                previous_validator_id = wo.supervisor_validator_user_id
+                wo.supervisor_validator_user_id = current_user.id
+                wo.supervisor_validator = current_user
+                wo.supervisor_reviewed_at = None
+                wo.supervisor_review_notes = None
+                await create_audit_log(
+                    db, user_id=current_user.id, action="TAKEOVER_SUPERVISOR_REVIEW",
+                    entity_type="WorkOrder", entity_id=wo.id,
+                    previous_data={
+                        "supervisor_review_status": SupervisorReviewStatus.CLAIMED.value,
+                        "supervisor_validator_user_id": previous_validator_id,
+                    },
+                    new_data={
+                        "supervisor_review_status": SupervisorReviewStatus.CLAIMED.value,
+                        "supervisor_validator_user_id": current_user.id,
+                    },
+                )
+                await db.commit()
+                result2 = await db.execute(_base_query().where(WorkOrder.id == wo.id))
+                return _work_order_to_response(result2.scalar_one())
             raise HTTPException(status_code=409, detail="Otro supervisor ya tomó la revisión de esta OT.")
         if wo.supervisor_review_status != SupervisorReviewStatus.PENDING.value:
             raise HTTPException(status_code=409, detail="Esta OT no está pendiente de validación de supervisor.")
@@ -4381,14 +4417,25 @@ async def review_supervisor_work_order(
         result2 = await db.execute(_base_query().where(WorkOrder.id == wo.id))
         return _work_order_to_response(result2.scalar_one())
 
-    if wo.supervisor_review_status != SupervisorReviewStatus.CLAIMED.value:
+    if is_admin and wo.supervisor_review_status == SupervisorReviewStatus.PENDING.value:
+        wo.supervisor_review_status = SupervisorReviewStatus.CLAIMED.value
+        wo.supervisor_validator_user_id = current_user.id
+        wo.supervisor_validator = current_user
+        wo.supervisor_reviewed_at = None
+        wo.supervisor_review_notes = None
+    elif wo.supervisor_review_status != SupervisorReviewStatus.CLAIMED.value:
         raise HTTPException(status_code=409, detail="Primero debes tomar la revisión de esta OT.")
-    if wo.supervisor_validator_user_id != current_user.id:
-        raise HTTPException(status_code=409, detail="La revisión de esta OT está tomada por otro supervisor.")
+    elif wo.supervisor_validator_user_id != current_user.id:
+        if not is_admin:
+            raise HTTPException(status_code=409, detail="La revisión de esta OT está tomada por otro supervisor.")
+        wo.supervisor_validator_user_id = current_user.id
+        wo.supervisor_validator = current_user
+        wo.supervisor_reviewed_at = None
+        wo.supervisor_review_notes = None
     if action == "RETURN" and not notes:
         raise HTTPException(status_code=422, detail="Indica el motivo por el que devuelves la OT al trabajador.")
 
-    previous_review_status = wo.supervisor_review_status
+    previous_review_status = original_review_status
     now = datetime.now(timezone.utc)
     wo.supervisor_reviewed_at = now
     wo.supervisor_review_notes = notes
@@ -4590,6 +4637,16 @@ async def approve_work_order(
         },
     )
     await db.flush()
+
+    if wo.equipment_id:
+        try:
+            await sync_equipment_from_database(db, wo.equipment_id)
+        except Exception as exc:  # noqa: BLE001
+            equipment = await db.get(Equipment, wo.equipment_id)
+            if equipment is not None:
+                equipment.life_sheet_sync_status = "FAILED"
+                equipment.life_sheet_sync_error = str(exc)[:500]
+            logger.warning("No se pudo sincronizar hoja de vida de %s: %s", wo.ot_number, exc)
 
     await notification_service.notify_work_order_approved(
         db, wo, link=f"/mis-ordenes/{wo.id}", exclude_user_id=current_user.id

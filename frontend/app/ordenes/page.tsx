@@ -360,7 +360,7 @@ export default function OrdenesPage() {
               Pendientes de revisión
             </button>
           )}
-          {user.role === "SUPERVISOR" && (
+          {(user.role === "SUPERVISOR" || user.role === "ADMIN") && (
             <button
               onClick={() => { setActiveView("SUPERVISOR_VALIDATION"); setActiveTab("ALL"); }}
               className={cn(

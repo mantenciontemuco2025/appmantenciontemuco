@@ -74,6 +74,45 @@ export interface InventoryImportResult {
   errors: string[];
 }
 
+export interface EquipmentLifeSummary {
+  equipment_id: number;
+  equipment_name: string;
+  section_name: string | null;
+  plant_area_name: string | null;
+  work_order_count: number;
+  life_sheet_file_id: string | null;
+  life_sheet_url: string | null;
+  life_sheet_sync_status: string;
+  life_sheet_sync_error: string | null;
+  life_sheet_synced_at: string | null;
+}
+
+export interface EquipmentLifeRecord {
+  work_order_id: number;
+  ot_number: string;
+  original_ot_number: string | null;
+  event_date: string | null;
+  title: string;
+  description: string | null;
+  performed_by: string | null;
+  observations: string | null;
+  status: string;
+  maintenance_type: string;
+}
+
+export interface EquipmentLifeDetail extends EquipmentLifeSummary {
+  records: EquipmentLifeRecord[];
+}
+
+export interface EquipmentLifeBackfillResult {
+  equipment_total: number;
+  equipment_with_work_orders: number;
+  sheets_synced: number;
+  work_orders_synced: number;
+  work_orders_without_equipment: number;
+  errors: string[];
+}
+
 export interface KpiSummary {
   total_ots: number;
   completed_ots: number;
