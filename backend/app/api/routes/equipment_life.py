@@ -1,6 +1,7 @@
 """Equipment life sheets: database history plus Google Drive copies."""
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -10,13 +11,15 @@ from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import get_current_user, require_roles
 from app.core.config import settings
-from app.db.session import get_db
+from app.db.session import async_session, get_db
 from app.models.equipment import Equipment
 from app.models.user import User, UserRole
 from app.models.work_order import WorkOrder, WorkOrderStatus
 from app.schemas.equipment_life import (
+    EquipmentLifeBackfillAccepted,
     EquipmentLifeBackfillPayload,
     EquipmentLifeBackfillResult,
+    EquipmentLifeBackfillStatus,
     EquipmentLifeDetail,
     EquipmentLifeRecord,
     EquipmentLifeSummary,
@@ -27,6 +30,9 @@ from app.services import equipment_life as life_service
 router = APIRouter(prefix="/api/equipment-life", tags=["equipment-life"])
 admin_only = require_roles(UserRole.ADMIN)
 _equipment_life_backfill_lock = asyncio.Lock()
+_equipment_life_backfill_task: asyncio.Task | None = None
+_equipment_life_backfill_state = EquipmentLifeBackfillStatus(status="idle")
+logger = logging.getLogger(__name__)
 
 
 def _eligible_work_order(wo: WorkOrder, include_drafts: bool = False) -> bool:
@@ -172,6 +178,14 @@ async def list_equipment_life(
     return [_summary(item, len(orders_by_equipment.get(item.id, []))) for item in equipment]
 
 
+@router.get("/status", response_model=EquipmentLifeBackfillStatus)
+async def equipment_life_backfill_status(
+    _: User = Depends(get_current_user),
+):
+    """Return the in-process status of the long-running Drive import."""
+    return _equipment_life_backfill_state
+
+
 @router.get("/{equipment_id}", response_model=EquipmentLifeDetail)
 async def get_equipment_life(
     equipment_id: int,
@@ -206,6 +220,7 @@ async def _run_equipment_life_backfill(
     db: AsyncSession,
 ):
     """Create/update every equipment sheet from the existing OT database."""
+    global _equipment_life_backfill_state
     if not life_service.is_configured():
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -223,11 +238,34 @@ async def _run_equipment_life_backfill(
     synced_sheets = 0
     synced_orders = 0
     errors: list[str] = []
+    processed_equipment = 0
+    total_work_orders = sum(len(items) for items in orders_by_equipment.values())
+    equipment_with_work_orders = sum(bool(items) for items in orders_by_equipment.values())
+
+    def update_progress(current_equipment: str | None):
+        global _equipment_life_backfill_state
+        _equipment_life_backfill_state = _equipment_life_backfill_state.model_copy(
+            update={
+                "equipment_total": len(equipment),
+                "equipment_processed": processed_equipment,
+                "equipment_with_work_orders": equipment_with_work_orders,
+                "work_orders_total": total_work_orders,
+                "work_orders_synced": synced_orders,
+                "sheets_synced": synced_sheets,
+                "current_equipment": current_equipment,
+                "errors_count": len(errors),
+            }
+        )
+
+    update_progress(None)
 
     for item in equipment:
         work_orders = orders_by_equipment.get(item.id, [])
         if not work_orders:
+            processed_equipment += 1
+            update_progress(None)
             continue
+        update_progress(item.name)
         try:
             result = await asyncio.to_thread(
                 life_service.sync_equipment_history,
@@ -250,6 +288,8 @@ async def _run_equipment_life_backfill(
             item.life_sheet_sync_error = str(exc)[:500]
             errors.append(f"{item.name} (ID {item.id}): {str(exc)[:250]}")
         await db.commit()
+        processed_equipment += 1
+        update_progress(None)
 
     return EquipmentLifeBackfillResult(
         equipment_total=len(equipment),
@@ -261,13 +301,13 @@ async def _run_equipment_life_backfill(
     )
 
 
-@router.post("/backfill", response_model=EquipmentLifeBackfillResult)
+@router.post("/backfill-legacy", response_model=EquipmentLifeBackfillResult)
 async def backfill_equipment_life(
     payload: EquipmentLifeBackfillPayload = EquipmentLifeBackfillPayload(),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(admin_only),
 ):
-    """Run one idempotent import at a time without exhausting the DB pool."""
+    """Start one idempotent import without holding an HTTP request open."""
     if _equipment_life_backfill_lock.locked():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -275,3 +315,64 @@ async def backfill_equipment_life(
         )
     async with _equipment_life_backfill_lock:
         return await _run_equipment_life_backfill(payload, db)
+
+
+async def _run_equipment_life_backfill_job(payload: EquipmentLifeBackfillPayload):
+    global _equipment_life_backfill_state
+    async with _equipment_life_backfill_lock:
+        try:
+            # The background job owns its session. The HTTP request can return
+            # immediately while the Google Drive calls continue.
+            async with async_session() as db:
+                result = await _run_equipment_life_backfill(payload, db)
+                await db.commit()
+            _equipment_life_backfill_state = EquipmentLifeBackfillStatus(
+                status="completed",
+                started_at=_equipment_life_backfill_state.started_at,
+                finished_at=datetime.now(timezone.utc),
+                equipment_total=result.equipment_total,
+                equipment_processed=result.equipment_total,
+                equipment_with_work_orders=result.equipment_with_work_orders,
+                work_orders_total=_equipment_life_backfill_state.work_orders_total,
+                work_orders_synced=result.work_orders_synced,
+                sheets_synced=result.sheets_synced,
+                errors_count=len(result.errors),
+                result=result,
+            )
+        except Exception as exc:  # noqa: BLE001 - persist a safe job error
+            logger.exception("Error en la importación de hojas de vida")
+            _equipment_life_backfill_state = EquipmentLifeBackfillStatus(
+                status="failed",
+                started_at=_equipment_life_backfill_state.started_at,
+                finished_at=datetime.now(timezone.utc),
+                equipment_total=_equipment_life_backfill_state.equipment_total,
+                equipment_processed=_equipment_life_backfill_state.equipment_processed,
+                equipment_with_work_orders=_equipment_life_backfill_state.equipment_with_work_orders,
+                work_orders_total=_equipment_life_backfill_state.work_orders_total,
+                work_orders_synced=_equipment_life_backfill_state.work_orders_synced,
+                sheets_synced=_equipment_life_backfill_state.sheets_synced,
+                errors_count=_equipment_life_backfill_state.errors_count + 1,
+                error=str(exc)[:500],
+            )
+
+
+@router.post("/backfill", response_model=EquipmentLifeBackfillAccepted, status_code=202)
+async def start_equipment_life_backfill(
+    payload: EquipmentLifeBackfillPayload = EquipmentLifeBackfillPayload(),
+    _: User = Depends(admin_only),
+):
+    """Start one idempotent import without holding an HTTP request open."""
+    global _equipment_life_backfill_task, _equipment_life_backfill_state
+    if (_equipment_life_backfill_task and not _equipment_life_backfill_task.done()) or _equipment_life_backfill_lock.locked():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ya hay una importación en curso.")
+    _equipment_life_backfill_state = EquipmentLifeBackfillStatus(
+        status="running",
+        started_at=datetime.now(timezone.utc),
+    )
+    _equipment_life_backfill_task = asyncio.create_task(
+        _run_equipment_life_backfill_job(payload)
+    )
+    return EquipmentLifeBackfillAccepted(
+        status="started",
+        message="La importación comenzó en segundo plano.",
+    )

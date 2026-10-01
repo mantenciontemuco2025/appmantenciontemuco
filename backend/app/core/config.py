@@ -117,7 +117,13 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins_list(self) -> List[str]:
-        return json.loads(self.CORS_ORIGINS)
+        origins = json.loads(self.CORS_ORIGINS)
+        # Keep the production frontend reachable even if an older VPS .env
+        # still contains only the localhost origins.
+        production_frontend = "https://app.mantenciontemuco.cl"
+        if production_frontend not in origins:
+            origins.append(production_frontend)
+        return origins
 
     @property
     def push_configured(self) -> bool:

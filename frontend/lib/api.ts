@@ -295,6 +295,9 @@ export async function apiFetch<T>(
     if (err instanceof DOMException && err.name === "AbortError") {
       throw new ApiError("El servidor está tardando demasiado. Intenta nuevamente.", 408);
     }
+    if (err instanceof TypeError) {
+      throw new ApiError(`No se pudo conectar con el servidor (${method} ${path}). Revisa la API y CORS.`, 0);
+    }
     throw err;
   } finally {
     clearTimeout(timeout);

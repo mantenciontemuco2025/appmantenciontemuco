@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -44,3 +45,24 @@ class EquipmentLifeBackfillResult(BaseModel):
     work_orders_synced: int
     work_orders_without_equipment: int
     errors: list[str]
+
+
+class EquipmentLifeBackfillAccepted(BaseModel):
+    status: Literal["started"]
+    message: str
+
+
+class EquipmentLifeBackfillStatus(BaseModel):
+    status: Literal["idle", "running", "completed", "failed"]
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    equipment_total: int = 0
+    equipment_processed: int = 0
+    equipment_with_work_orders: int = 0
+    work_orders_total: int = 0
+    work_orders_synced: int = 0
+    sheets_synced: int = 0
+    current_equipment: str | None = None
+    errors_count: int = 0
+    result: EquipmentLifeBackfillResult | None = None
+    error: str | None = None

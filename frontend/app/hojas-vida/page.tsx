@@ -8,7 +8,7 @@ import { PageLoading } from "@/components/ui/page-loading";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import type { EquipmentLifeBackfillResult, EquipmentLifeDetail, EquipmentLifeSummary } from "@/lib/types";
+import type { EquipmentLifeBackfillAccepted, EquipmentLifeBackfillStatus, EquipmentLifeDetail, EquipmentLifeSummary } from "@/lib/types";
 
 function statusLabel(status: string) {
   if (status === "SYNCED") return "Sincronizada";
@@ -32,6 +32,7 @@ export default function EquipmentLifePage() {
   const [loadingData, setLoadingData] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
+  const [backfillStatus, setBackfillStatus] = useState<EquipmentLifeBackfillStatus | null>(null);
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
 
   async function loadItems() {
@@ -65,12 +66,43 @@ export default function EquipmentLifePage() {
   async function backfill() {
     if (!window.confirm("Se actualizarán las hojas de vida de todas las OT que tengan equipo asignado. ¿Continuar?")) return;
     setBackfilling(true);
+    setBackfillStatus(null);
     setMessage(null);
     try {
-      const result = await api.post<EquipmentLifeBackfillResult>("/api/equipment-life/backfill", { include_drafts: false }, 900000);
+      const accepted = await api.post<EquipmentLifeBackfillAccepted & { sheets_synced: number; work_orders_synced: number; work_orders_without_equipment: number }>("/api/equipment-life/backfill", { include_drafts: false }, 30000);
+      const result = accepted;
+      setMessage({ kind: "success", text: accepted.message });
+      for (let attempt = 0; attempt < 180; attempt += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 5000));
+        const state = await api.get<EquipmentLifeBackfillStatus>("/api/equipment-life/status");
+        setBackfillStatus(state);
+        await loadItems();
+        if (state.status === "running") {
+          const total = state.work_orders_total;
+          const synced = state.work_orders_synced;
+          const remaining = Math.max(total - synced, 0);
+          const percent = total > 0 ? Math.min(100, Math.round((synced / total) * 100)) : 0;
+          const current = state.current_equipment ? ` Equipo actual: ${state.current_equipment}.` : "";
+          setMessage({ kind: "success", text: `Sincronizando ${percent}% - ${synced}/${total} OT. Faltan ${remaining} OT; equipos ${state.equipment_processed}/${state.equipment_total}.${current}` });
+        }
+        if (state.status === "completed") {
+          const completed = state.result;
+          setMessage({ kind: "success", text: completed ? `ImportaciÃ³n terminada: ${completed.sheets_synced} hojas y ${completed.work_orders_synced} OT sincronizadas. ${completed.work_orders_without_equipment} OT quedaron sin equipo.` : "ImportaciÃ³n terminada correctamente." });
+          if (selected) await openDetail(selected);
+          return;
+        }
+        if (state.status === "failed") {
+          throw new Error(state.error || "La importaciÃ³n fallÃ³. Revisa el estado del backend.");
+        }
+        if (attempt === 179) throw new Error("La importaciÃ³n sigue en curso. Revisa nuevamente en unos minutos.");
+      }
+      return;
+      if (false) {
       setMessage({ kind: "success", text: `Importación terminada: ${result.sheets_synced} hojas y ${result.work_orders_synced} OT sincronizadas. ${result.work_orders_without_equipment} OT quedaron sin equipo.` });
       await loadItems();
-      if (selected) await openDetail(selected);
+      const currentSelected = selected;
+      if (currentSelected) await openDetail(currentSelected as EquipmentLifeSummary);
+      }
     } catch (error) {
       setMessage({ kind: "error", text: error instanceof Error ? error.message : "No se pudo ejecutar la importación." });
     } finally {
@@ -97,6 +129,15 @@ export default function EquipmentLifePage() {
       </div>
 
       {message && <div className={`mb-4 rounded-lg border p-3 text-sm ${message.kind === "error" ? "border-red-200 bg-red-50 text-red-800" : "border-green-200 bg-green-50 text-green-800"}`}>{message.text}</div>}
+
+      {backfilling && backfillStatus?.status === "running" && (() => {
+        const percent = backfillStatus.work_orders_total > 0 ? Math.min(100, Math.round((backfillStatus.work_orders_synced / backfillStatus.work_orders_total) * 100)) : 0;
+        return <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950">
+          <div className="mb-2 flex items-center justify-between font-semibold"><span>Sincronización en curso</span><span>{percent}%</span></div>
+          <div className="h-2 overflow-hidden rounded-full bg-blue-100"><div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${percent}%` }} /></div>
+          <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs"><span>OT: {backfillStatus.work_orders_synced}/{backfillStatus.work_orders_total}</span><span>Faltan: {Math.max(backfillStatus.work_orders_total - backfillStatus.work_orders_synced, 0)}</span><span>Equipos: {backfillStatus.equipment_processed}/{backfillStatus.equipment_total}</span>{backfillStatus.current_equipment && <span>Actual: {backfillStatus.current_equipment}</span>}</div>
+        </div>;
+      })()}
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
         <section className="rounded-xl border bg-card p-4">

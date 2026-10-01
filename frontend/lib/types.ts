@@ -113,6 +113,27 @@ export interface EquipmentLifeBackfillResult {
   errors: string[];
 }
 
+export interface EquipmentLifeBackfillAccepted {
+  status: "started";
+  message: string;
+}
+
+export interface EquipmentLifeBackfillStatus {
+  status: "idle" | "running" | "completed" | "failed";
+  started_at: string | null;
+  finished_at: string | null;
+  equipment_total: number;
+  equipment_processed: number;
+  equipment_with_work_orders: number;
+  work_orders_total: number;
+  work_orders_synced: number;
+  sheets_synced: number;
+  current_equipment: string | null;
+  errors_count: number;
+  result: EquipmentLifeBackfillResult | null;
+  error: string | null;
+}
+
 export interface KpiSummary {
   total_ots: number;
   completed_ots: number;
