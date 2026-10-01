@@ -63,6 +63,19 @@ export default function EquipmentLifePage() {
     }
   }
 
+  async function getBackfillStatusWithRetry() {
+    let lastError: unknown;
+    for (let retry = 0; retry < 3; retry += 1) {
+      try {
+        return await api.get<EquipmentLifeBackfillStatus>("/api/equipment-life/status");
+      } catch (error) {
+        lastError = error;
+        if (retry < 2) await new Promise((resolve) => window.setTimeout(resolve, 2000));
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("No se pudo consultar el avance de la importación.");
+  }
+
   async function backfill() {
     if (!window.confirm("Se actualizarán las hojas de vida de todas las OT que tengan equipo asignado. ¿Continuar?")) return;
     setBackfilling(true);
@@ -72,9 +85,19 @@ export default function EquipmentLifePage() {
       const accepted = await api.post<EquipmentLifeBackfillAccepted & { sheets_synced: number; work_orders_synced: number; work_orders_without_equipment: number }>("/api/equipment-life/backfill", { include_drafts: false }, 30000);
       const result = accepted;
       setMessage({ kind: "success", text: accepted.message });
+      let statusFailures = 0;
       for (let attempt = 0; attempt < 180; attempt += 1) {
         await new Promise((resolve) => window.setTimeout(resolve, 5000));
-        const state = await api.get<EquipmentLifeBackfillStatus>("/api/equipment-life/status");
+        let state: EquipmentLifeBackfillStatus;
+        try {
+          state = await getBackfillStatusWithRetry();
+          statusFailures = 0;
+        } catch (error) {
+          statusFailures += 1;
+          if (statusFailures >= 3) throw error;
+          setMessage({ kind: "success", text: "No se pudo consultar temporalmente el avance. La importación puede seguir ejecutándose; reintentando..." });
+          continue;
+        }
         setBackfillStatus(state);
         await loadItems();
         if (state.status === "running") {
