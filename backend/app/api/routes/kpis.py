@@ -3,6 +3,8 @@
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 import re
+from threading import Lock
+from time import monotonic
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import Date, and_, cast, func, or_, select
@@ -38,6 +40,58 @@ MONTH_NAMES = (
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre",
 )
 COMPLIANCE_TARGET_PERCENT = 90.0
+KPI_CACHE_TTL_SECONDS = 15
+KPI_CACHE_MAX_ENTRIES = 128
+_KPI_CACHE: dict[tuple, tuple[float, KpiResponse]] = {}
+_KPI_CACHE_LOCK = Lock()
+
+
+def _kpi_cache_key(
+    current_user: User,
+    start: date,
+    end: date,
+    area_id: int | None,
+    plant_area: str | None,
+    section_name: str | None,
+    maintenance_type: str | None,
+) -> tuple:
+    role = getattr(current_user.role, "value", current_user.role)
+    allowed_areas = tuple(sorted(current_user.area_ids or []))
+    return (
+        current_user.id,
+        str(role),
+        allowed_areas,
+        start.isoformat(),
+        end.isoformat(),
+        area_id,
+        (plant_area or "").strip().upper(),
+        (section_name or "").strip().lower(),
+        (maintenance_type or "").strip().upper(),
+    )
+
+
+def _get_cached_kpi(key: tuple) -> KpiResponse | None:
+    now = monotonic()
+    with _KPI_CACHE_LOCK:
+        entry = _KPI_CACHE.get(key)
+        if entry is None:
+            return None
+        expires_at, value = entry
+        if expires_at <= now:
+            _KPI_CACHE.pop(key, None)
+            return None
+        return value
+
+
+def _store_cached_kpi(key: tuple, value: KpiResponse) -> None:
+    now = monotonic()
+    with _KPI_CACHE_LOCK:
+        expired = [cache_key for cache_key, (expires_at, _) in _KPI_CACHE.items() if expires_at <= now]
+        for cache_key in expired:
+            _KPI_CACHE.pop(cache_key, None)
+        _KPI_CACHE[key] = (now + KPI_CACHE_TTL_SECONDS, value)
+        while len(_KPI_CACHE) > KPI_CACHE_MAX_ENTRIES:
+            _KPI_CACHE.pop(next(iter(_KPI_CACHE)))
 
 
 def _parse_estimated_minutes(value: str | None) -> float:
@@ -118,6 +172,11 @@ async def get_kpis(
     selected_type = maintenance_type.upper() if maintenance_type else None
     if selected_type and selected_type not in VALID_MAINTENANCE_TYPES:
         raise HTTPException(status_code=400, detail="Tipo de mantenimiento no válido")
+
+    cache_key = _kpi_cache_key(current_user, start, end, area_id, plant_area, section_name, selected_type)
+    cached = _get_cached_kpi(cache_key)
+    if cached is not None:
+        return cached
 
     report_date = func.coalesce(
         WorkOrder.execution_date,
@@ -443,7 +502,7 @@ async def get_kpis(
         for code, count in sorted(material_counts.items(), key=lambda item: (-item[1], item[0]))
     ]
 
-    return KpiResponse(
+    response = KpiResponse(
         generated_at=datetime.now(timezone.utc),
         date_from=start,
         date_to=end,
@@ -475,3 +534,8 @@ async def get_kpis(
         by_month=month_rows,
         by_material=material_rows,
     )
+    # Keep identical reports in memory briefly so several dashboard requests
+    # do not repeat the same database work. The cache is process-local and
+    # expires quickly, so OT changes become visible without manual invalidation.
+    _store_cached_kpi(cache_key, response)
+    return response
