@@ -36,6 +36,7 @@ export default function EquipmentLifePage() {
 
   async function loadItems() {
     setLoadingData(true);
+    setMessage(null);
     try {
       setItems(await api.get<EquipmentLifeSummary[]>("/api/equipment-life"));
     } catch (error) {
