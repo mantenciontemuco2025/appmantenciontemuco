@@ -26,6 +26,7 @@ from app.services import equipment_life as life_service
 
 router = APIRouter(prefix="/api/equipment-life", tags=["equipment-life"])
 admin_only = require_roles(UserRole.ADMIN)
+_equipment_life_backfill_lock = asyncio.Lock()
 
 
 def _eligible_work_order(wo: WorkOrder, include_drafts: bool = False) -> bool:
@@ -200,11 +201,9 @@ async def get_equipment_life(
     )
 
 
-@router.post("/backfill", response_model=EquipmentLifeBackfillResult)
-async def backfill_equipment_life(
-    payload: EquipmentLifeBackfillPayload = EquipmentLifeBackfillPayload(),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(admin_only),
+async def _run_equipment_life_backfill(
+    payload: EquipmentLifeBackfillPayload,
+    db: AsyncSession,
 ):
     """Create/update every equipment sheet from the existing OT database."""
     if not life_service.is_configured():
@@ -218,6 +217,9 @@ async def backfill_equipment_life(
     )
     all_orders_result = await db.execute(select(WorkOrder.equipment_id))
     without_equipment = sum(1 for (equipment_id,) in all_orders_result.all() if equipment_id is None)
+    # Do not keep a PostgreSQL connection checked out while each Google Drive
+    # sheet is being created or updated. External calls can take minutes.
+    await db.commit()
     synced_sheets = 0
     synced_orders = 0
     errors: list[str] = []
@@ -257,3 +259,19 @@ async def backfill_equipment_life(
         work_orders_without_equipment=without_equipment,
         errors=errors[:50],
     )
+
+
+@router.post("/backfill", response_model=EquipmentLifeBackfillResult)
+async def backfill_equipment_life(
+    payload: EquipmentLifeBackfillPayload = EquipmentLifeBackfillPayload(),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(admin_only),
+):
+    """Run one idempotent import at a time without exhausting the DB pool."""
+    if _equipment_life_backfill_lock.locked():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Ya hay una importación de hojas de vida en curso. Espera a que termine.",
+        )
+    async with _equipment_life_backfill_lock:
+        return await _run_equipment_life_backfill(payload, db)
