@@ -34,6 +34,8 @@ class PlantArea(Base):
         "Area",
         secondary=plant_area_sections,
         back_populates="plant_areas",
-        lazy="selectin",
+        # The hierarchy endpoint opts into sections explicitly. Loading them
+        # for every PlantArea would expand the whole catalog on simple reads.
+        lazy="noload",
     )
-    equipment = relationship("Equipment", back_populates="plant_area", lazy="selectin")
+    equipment = relationship("Equipment", back_populates="plant_area", lazy="noload")

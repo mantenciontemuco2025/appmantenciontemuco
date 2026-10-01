@@ -42,5 +42,8 @@ class Equipment(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    area = relationship("Area", back_populates="equipment", lazy="selectin")
-    plant_area = relationship("PlantArea", back_populates="equipment", lazy="selectin")
+    # Most responses only need the foreign-key IDs. The equipment-life
+    # endpoints opt into both relationships explicitly because they need the
+    # display names; keeping them unloaded avoids catalog fan-out elsewhere.
+    area = relationship("Area", back_populates="equipment", lazy="noload")
+    plant_area = relationship("PlantArea", back_populates="equipment", lazy="noload")

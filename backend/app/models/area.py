@@ -20,7 +20,10 @@ class Area(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    equipment = relationship("Equipment", back_populates="area", lazy="selectin")
+    # Do not expand the complete equipment catalog whenever an Area is loaded
+    # indirectly (for example while authenticating a supervisor). Catalog
+    # endpoints request this relationship explicitly when they need it.
+    equipment = relationship("Equipment", back_populates="area", lazy="noload")
     # ``Area`` is the legacy section catalog. Keep its IDs stable and add a
     # many-to-many link so a section can legitimately exist in more than one
     # plant area without breaking existing OTs or supervisor assignments.
@@ -28,5 +31,5 @@ class Area(Base):
         "PlantArea",
         secondary="plant_area_sections",
         back_populates="sections",
-        lazy="selectin",
+        lazy="noload",
     )

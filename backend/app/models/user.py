@@ -58,21 +58,25 @@ class User(Base):
     )
 
     # relationships
-    audit_logs = relationship("AuditLog", back_populates="user", lazy="selectin")
+    # These reverse collections can contain thousands of rows. Loading them
+    # with every authenticated User query made requests such as /auth/me and
+    # notifications keep a transaction open while all OT/history rows were
+    # fetched. Load them explicitly only in the endpoints that need them.
+    audit_logs = relationship("AuditLog", back_populates="user", lazy="noload")
     created_maintenances = relationship(
-        "MaintenanceRecord", back_populates="created_by", lazy="selectin"
+        "MaintenanceRecord", back_populates="created_by", lazy="noload"
     )
     participations = relationship(
         "MaintenanceRecord",
         secondary="maintenance_participants",
         back_populates="participants",
-        lazy="selectin",
+        lazy="noload",
     )
     work_orders = relationship(
         "WorkOrder",
         secondary="work_order_participants",
         back_populates="participants",
-        lazy="selectin",
+        lazy="noload",
     )
     supervisor_area = relationship("Area", foreign_keys=[area_id], lazy="selectin")
     supervised_areas = relationship(
