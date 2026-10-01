@@ -5,7 +5,7 @@ from datetime import date, datetime, timedelta, timezone
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import Date, cast, func, or_, select
+from sqlalchemy import Date, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -124,6 +124,25 @@ async def get_kpis(
         WorkOrder.scheduled_date,
         cast(WorkOrder.created_at, Date),
     )
+    date_filter = or_(
+        and_(
+            WorkOrder.execution_date.is_not(None),
+            WorkOrder.execution_date >= start,
+            WorkOrder.execution_date <= end,
+        ),
+        and_(
+            WorkOrder.execution_date.is_(None),
+            WorkOrder.scheduled_date.is_not(None),
+            WorkOrder.scheduled_date >= start,
+            WorkOrder.scheduled_date <= end,
+        ),
+        and_(
+            WorkOrder.execution_date.is_(None),
+            WorkOrder.scheduled_date.is_(None),
+            cast(WorkOrder.created_at, Date) >= start,
+            cast(WorkOrder.created_at, Date) <= end,
+        ),
+    )
     query = (
         select(WorkOrder)
         .options(
@@ -132,8 +151,7 @@ async def get_kpis(
             selectinload(WorkOrder.responsible_user),
         )
         .where(
-            report_date >= start,
-            report_date <= end,
+            date_filter,
             or_(
                 WorkOrder.is_hallazgo_report.is_(False),
                 WorkOrder.hallazgo_status == "CONVERTED",
@@ -158,6 +176,9 @@ async def get_kpis(
         query = query.where(WorkOrder.maintenance_type == selected_type)
 
     orders = (await db.execute(query.order_by(report_date, WorkOrder.ot_number))).scalars().all()
+    # All relationships needed below were eagerly loaded. Release the
+    # connection before the in-memory KPI aggregation and response building.
+    await db.commit()
 
     status_counts: dict[str, int] = defaultdict(int)
     type_counts: dict[str, dict[str, float]] = defaultdict(lambda: {"total": 0, "completed": 0, "minutes": 0.0})
@@ -410,6 +431,7 @@ async def get_kpis(
             select(MaterialCatalog).where(MaterialCatalog.code.in_(list(material_counts)))
         )
         material_catalog_rows = list(catalog_result.scalars().all())
+        await db.commit()
     catalog_by_code = {row.code.upper(): row for row in material_catalog_rows}
     material_rows = [
         KpiMaterialRow(

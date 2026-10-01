@@ -81,7 +81,7 @@ class WorkOrder(Base):
     area_id: Mapped[int | None] = mapped_column(ForeignKey("areas.id"), index=True, nullable=True)
     # The old Area catalog is retained as the Section catalog, since each
     # catalog entry owns its equipment. Nullable for historical work orders.
-    plant_area: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    plant_area: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     equipment_id: Mapped[int | None] = mapped_column(
         ForeignKey("equipment.id"), nullable=True
     )
@@ -97,10 +97,10 @@ class WorkOrder(Base):
     )
 
     folio: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    section_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    section_name: Mapped[str | None] = mapped_column(String(200), nullable=True, index=True)
     estimated_time: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Fecha en que se solicitó la OT. La coloca el admin al solicitar/crear la OT.
-    request_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
+    request_date: Mapped[datetime | None] = mapped_column(Date, nullable=True, index=True)
     execution_date: Mapped[datetime | None] = mapped_column(Date, nullable=True, index=True)
     resources_required: Mapped[str | None] = mapped_column(Text, nullable=True)
     voucher_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -167,8 +167,8 @@ class WorkOrder(Base):
 
     # ── Planning ─────────────────────────────────────────────────────────
     is_planned: Mapped[bool] = mapped_column(Boolean, default=True)
-    scheduled_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
-    due_date: Mapped[datetime | None] = mapped_column(Date, nullable=True)
+    scheduled_date: Mapped[datetime | None] = mapped_column(Date, nullable=True, index=True)
+    due_date: Mapped[datetime | None] = mapped_column(Date, nullable=True, index=True)
 
     # ── Lifecycle timestamps ─────────────────────────────────────────────
     started_at: Mapped[datetime | None] = mapped_column(
@@ -233,7 +233,7 @@ class WorkOrder(Base):
     created_by_user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
