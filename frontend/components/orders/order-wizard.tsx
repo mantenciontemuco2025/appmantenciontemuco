@@ -15,6 +15,7 @@ import { VoiceDictation } from "@/components/maintenance/voice-dictation";
 import { MaterialCodePicker } from "@/components/orders/material-code-picker";
 import { todayDateInputValue } from "@/lib/utils";
 import { usePlantAreaOptions } from "@/lib/use-plant-area-options";
+import { MAX_EVIDENCE_PHOTOS_PER_USER } from "@/lib/evidence";
 
 interface WorkerOption {
   id: number;
@@ -224,7 +225,7 @@ export function OrderWizard() {
 
     const selectedFiles = Array.from(files);
     const validFiles = selectedFiles.filter((file) => EVIDENCE_IMAGE_TYPES.has(file.type));
-    const available = Math.max(0, 2 - pendingEvidenceRef.current.length);
+    const available = Math.max(0, MAX_EVIDENCE_PHOTOS_PER_USER - pendingEvidenceRef.current.length);
     const selected = validFiles.slice(0, available);
     const messages: string[] = [];
 
@@ -232,7 +233,7 @@ export function OrderWizard() {
       messages.push("Solo se aceptan imágenes JPG, PNG o WEBP.");
     }
     if (selected.length < validFiles.length) {
-      messages.push("Puedes adjuntar hasta 2 fotos de emisión por OT.");
+      messages.push(`Puedes adjuntar hasta ${MAX_EVIDENCE_PHOTOS_PER_USER} fotos de emisión por OT.`);
     }
 
     const additions = selected.map((file) => ({
@@ -867,7 +868,7 @@ export function OrderWizard() {
             <div>
               <h3 className="text-sm font-semibold text-sky-950">Fotos de evidencia de la emisión</h3>
               <p className="mt-1 text-xs text-sky-900/80">
-                Puedes adjuntar hasta 2 fotos. Se subirán a Google Drive solo cuando confirmes la creación de la OT.
+                Puedes adjuntar hasta {MAX_EVIDENCE_PHOTOS_PER_USER} fotos. Se subirán a Google Drive solo cuando confirmes la creación de la OT.
                 Si cancelas este formulario, no se guardará ninguna foto.
               </p>
             </div>
@@ -878,7 +879,7 @@ export function OrderWizard() {
                   accept="image/jpeg,image/png,image/webp"
                   capture="environment"
                   className="sr-only"
-                  disabled={submitting !== null || pendingEvidence.length >= 2 || createdOrderId !== null}
+                  disabled={submitting !== null || pendingEvidence.length >= MAX_EVIDENCE_PHOTOS_PER_USER || createdOrderId !== null}
                   onChange={(event) => handlePendingEvidenceFiles(event.currentTarget.files, event.currentTarget)}
                 />
                 <span className="inline-flex h-9 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60">
@@ -891,11 +892,11 @@ export function OrderWizard() {
                   accept="image/jpeg,image/png,image/webp"
                   multiple
                   className="sr-only"
-                  disabled={submitting !== null || pendingEvidence.length >= 2 || createdOrderId !== null}
+                  disabled={submitting !== null || pendingEvidence.length >= MAX_EVIDENCE_PHOTOS_PER_USER || createdOrderId !== null}
                   onChange={(event) => handlePendingEvidenceFiles(event.currentTarget.files, event.currentTarget)}
                 />
                 <span className="inline-flex h-9 items-center rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent">
-                  <ImagePlus className="mr-2 h-4 w-4" /> Elegir foto ({2 - pendingEvidence.length})
+                  <ImagePlus className="mr-2 h-4 w-4" /> Elegir foto ({MAX_EVIDENCE_PHOTOS_PER_USER - pendingEvidence.length})
                 </span>
               </label>
             </div>

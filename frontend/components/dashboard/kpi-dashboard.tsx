@@ -130,12 +130,14 @@ function DistributionPie({
   rows,
   onSegmentClick,
   scrollLegend = false,
+  unitLabel = "OTs",
 }: {
   title: string;
   description: string;
-  rows: { label: string; value: number }[];
+  rows: { label: string; value: number; detail?: string; clickValue?: string }[];
   onSegmentClick?: (label: string) => void;
   scrollLegend?: boolean;
+  unitLabel?: string;
 }) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const data = rows
@@ -201,9 +203,18 @@ function DistributionPie({
                       fill={segment.color}
                       stroke="var(--card)"
                       strokeWidth="1.5"
-                      className="cursor-pointer transition-opacity hover:opacity-80"
+                      className={onSegmentClick ? "cursor-pointer transition-opacity hover:opacity-80 focus:outline-none focus-visible:opacity-70" : undefined}
+                      role={onSegmentClick ? "button" : undefined}
+                      tabIndex={onSegmentClick ? 0 : undefined}
+                      aria-label={onSegmentClick ? `Ver ${segment.value} ${unitLabel} de ${segment.label}${segment.detail ? `, ${segment.detail}` : ""}` : undefined}
                       onMouseEnter={() => setHoveredIndex(index)}
-                      onClick={() => onSegmentClick?.(segment.label)}
+                      onClick={() => onSegmentClick?.(segment.clickValue ?? segment.label)}
+                      onKeyDown={(event) => {
+                        if (onSegmentClick && (event.key === "Enter" || event.key === " ")) {
+                          event.preventDefault();
+                          onSegmentClick(segment.clickValue ?? segment.label);
+                        }
+                      }}
                     />
                   );
                 })}
@@ -218,13 +229,13 @@ function DistributionPie({
                       {segments[hoveredIndex].percentage}%
                     </span>
                     <span className="text-[11px] text-muted-foreground">
-                      {segments[hoveredIndex].value} OTs
+                      {segments[hoveredIndex].value} {unitLabel}
                     </span>
                   </>
                 ) : (
                   <>
                     <span className="text-3xl font-bold text-foreground">{total}</span>
-                    <span className="text-xs text-muted-foreground">OTs</span>
+                    <span className="text-xs text-muted-foreground">{unitLabel}</span>
                   </>
                 )}
               </div>
@@ -232,18 +243,23 @@ function DistributionPie({
           </div>
           <div className={scrollLegend ? "min-w-0 max-h-64 space-y-2 overflow-y-auto pr-2" : "min-w-0 space-y-2"}>
             {segments.map((segment, index) => (
-              <div
+              <button
+                type="button"
                 key={segment.label}
-                className="flex cursor-pointer items-center gap-2 rounded-md px-1 text-sm transition-colors hover:bg-muted/60"
+                className="flex w-full items-center gap-2 rounded-md px-1 text-left text-sm transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-default"
                 onMouseEnter={() => setHoveredIndex(index)}
                 onMouseLeave={() => setHoveredIndex(null)}
-                onClick={() => onSegmentClick?.(segment.label)}
+                onClick={() => onSegmentClick?.(segment.clickValue ?? segment.label)}
+                disabled={!onSegmentClick}
               >
                 <span className="h-3 w-3 shrink-0 rounded-sm" style={{ backgroundColor: segment.color }} />
-                <span className="min-w-0 flex-1 truncate" title={segment.label}>{segment.label}</span>
+                <span className="min-w-0 flex-1" title={segment.detail ? `${segment.label} — ${segment.detail}` : segment.label}>
+                  <span className="block truncate">{segment.label}</span>
+                  {segment.detail ? <span className="block truncate text-xs text-muted-foreground">{segment.detail}</span> : null}
+                </span>
                 <span className="font-semibold tabular-nums">{segment.percentage}%</span>
                 <span className="w-12 text-right text-xs text-muted-foreground tabular-nums">{segment.value}</span>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -252,7 +268,13 @@ function DistributionPie({
   );
 }
 
-function MaterialUsageBars({ rows }: { rows: KpiResponse["by_material"] }) {
+function MaterialUsageBars({
+  rows,
+  onCodeClick,
+}: {
+  rows: KpiResponse["by_material"];
+  onCodeClick: (code: string) => void;
+}) {
   const visibleRows = rows.slice(0, 15);
   const maxValue = Math.max(1, ...visibleRows.map((row) => row.times_used));
 
@@ -270,7 +292,14 @@ function MaterialUsageBars({ rows }: { rows: KpiResponse["by_material"] }) {
       {visibleRows.length ? (
         <div className="max-h-96 space-y-3 overflow-y-auto pr-1">
           {visibleRows.map((row) => (
-            <div key={row.code} title={`${row.code}${row.description ? ` — ${row.description}` : ""}: ${row.times_used} usos`}>
+            <button
+              type="button"
+              key={row.code}
+              className="block w-full rounded-lg p-2 text-left transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              title={`${row.code}${row.description ? ` — ${row.description}` : ""}: ${row.times_used} usos. Ver OTs.`}
+              aria-label={`Ver ${row.times_used} ${row.times_used === 1 ? "OT" : "OTs"} que usaron el código ${row.code}`}
+              onClick={() => onCodeClick(row.code)}
+            >
               <div className="mb-1 flex items-center justify-between gap-3 text-sm">
                 <div className="min-w-0">
                   <span className="font-mono font-semibold">{row.code}</span>
@@ -287,7 +316,7 @@ function MaterialUsageBars({ rows }: { rows: KpiResponse["by_material"] }) {
                 />
               </div>
               {row.family ? <p className="mt-1 text-[11px] text-muted-foreground">Familia: {row.family}</p> : null}
-            </div>
+            </button>
           ))}
         </div>
       ) : (
@@ -664,10 +693,30 @@ export function KpiDashboard() {
                   onSegmentClick={(label) => { window.location.href = ordersHref(label === "Sin sección" ? { without_section: "true" } : { section_name: label }); }}
                 />
               </div>
+              <div className="lg:col-span-2">
+                <DistributionPie
+                  title="Recuento de códigos de materiales"
+                  description="Distribución de los códigos utilizados en las OTs del período"
+                  rows={(data.by_material ?? []).map((row) => ({
+                    label: row.code,
+                    detail: row.description || "Sin descripción",
+                    clickValue: row.code,
+                    value: row.times_used,
+                  }))}
+                  scrollLegend
+                  unitLabel="usos"
+                  onSegmentClick={(code) => { window.location.href = ordersHref({ material_code: code }); }}
+                />
+              </div>
             </div>
 
             <div className="order-4 mt-5">
-              <MaterialUsageBars rows={data.by_material ?? []} />
+              <MaterialUsageBars
+                rows={data.by_material ?? []}
+                onCodeClick={(code) => {
+                  window.location.href = ordersHref({ material_code: code });
+                }}
+              />
             </div>
 
             <div className="order-5 mt-5 grid gap-5 lg:grid-cols-2">

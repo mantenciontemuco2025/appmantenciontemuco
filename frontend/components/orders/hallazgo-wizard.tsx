@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { VoiceDictation } from "@/components/maintenance/voice-dictation";
 import { MaterialCodePicker } from "@/components/orders/material-code-picker";
 import { usePlantAreaOptions } from "@/lib/use-plant-area-options";
+import { MAX_EVIDENCE_PHOTOS_PER_USER } from "@/lib/evidence";
 
 type HallazgoKind = "COMPLETED" | "REQUIRES_ATTENTION";
 type TimeMode = "RANGE" | "MANUAL";
@@ -118,7 +119,7 @@ export function HallazgoWizard() {
 
   function choosePhotos(files: FileList | null) {
     if (!files?.length) return;
-    const available = Math.max(0, 2 - photos.length);
+    const available = Math.max(0, MAX_EVIDENCE_PHOTOS_PER_USER - photos.length);
     const selected = Array.from(files).filter((file) => file.type.startsWith("image/")).slice(0, available);
     setPhotos((current) => [...current, ...selected.map((file) => ({
       id: `${Date.now()}-${Math.random()}`,
@@ -235,7 +236,7 @@ export function HallazgoWizard() {
 
       <div className="grid gap-4 md:grid-cols-2"><div><label className="block text-sm font-medium">Riesgos e identificación de peligros</label><textarea className="mt-1 min-h-20 w-full rounded-md border bg-background px-3 py-2" value={form.risks} onChange={(e) => setField("risks", e.target.value)} /><VoiceDictation onTranscript={(text) => appendField("risks", text)} /></div><div><label className="block text-sm font-medium">Observaciones</label><textarea className="mt-1 min-h-20 w-full rounded-md border bg-background px-3 py-2" value={form.observations} onChange={(e) => setField("observations", e.target.value)} /><VoiceDictation onTranscript={(text) => appendField("observations", text)} /></div></div>
 
-      <div className="rounded-lg border border-sky-200 bg-sky-50/50 p-4"><div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-semibold">Evidencia fotográfica</h3><p className="text-xs text-muted-foreground">Hasta 2 fotos. Puedes tomar una foto directamente desde el teléfono.</p></div><Button type="button" variant="outline" onClick={() => photoInputRef.current?.click()} disabled={photos.length >= 2}><Camera className="mr-1 h-4 w-4" />Tomar / elegir foto</Button></div><input ref={photoInputRef} type="file" accept="image/*" capture="environment" multiple className="hidden" onChange={(e) => choosePhotos(e.target.files)} />{photos.length > 0 && <div className="mt-3 grid grid-cols-2 gap-3">{photos.map((photo) => <div key={photo.id} className="relative"><img src={photo.previewUrl} alt="Vista previa" className="h-28 w-full rounded-md object-cover" /><button type="button" onClick={() => removePhoto(photo.id)} className="absolute right-1 top-1 rounded-full bg-red-600 p-1 text-white" aria-label="Eliminar foto"><Trash2 className="h-4 w-4" /></button></div>)}</div>}</div>
+      <div className="rounded-lg border border-sky-200 bg-sky-50/50 p-4"><div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-semibold">Evidencia fotográfica</h3><p className="text-xs text-muted-foreground">Hasta {MAX_EVIDENCE_PHOTOS_PER_USER} fotos. Puedes tomar una foto directamente desde el teléfono.</p></div><Button type="button" variant="outline" onClick={() => photoInputRef.current?.click()} disabled={photos.length >= MAX_EVIDENCE_PHOTOS_PER_USER}><Camera className="mr-1 h-4 w-4" />Tomar / elegir foto</Button></div><input ref={photoInputRef} type="file" accept="image/*" capture="environment" multiple className="hidden" onChange={(e) => choosePhotos(e.target.files)} />{photos.length > 0 && <div className="mt-3 grid grid-cols-2 gap-3">{photos.map((photo) => <div key={photo.id} className="relative"><img src={photo.previewUrl} alt="Vista previa" className="h-28 w-full rounded-md object-cover" /><button type="button" onClick={() => removePhoto(photo.id)} className="absolute right-1 top-1 rounded-full bg-red-600 p-1 text-white" aria-label="Eliminar foto"><Trash2 className="h-4 w-4" /></button></div>)}</div>}</div>
 
       <div className="flex justify-end"><Button disabled={saving}><Save className="mr-2 h-4 w-4" />{saving ? "Enviando..." : completed ? "Enviar trabajo realizado" : "Enviar solicitud de atención"}</Button></div>
     </form>

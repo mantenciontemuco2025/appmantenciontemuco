@@ -98,6 +98,12 @@ async def test_kpi_report_counts_each_participant_with_full_ot_duration(
     assert material_rows["B4320001"]["times_used"] == 2
     assert material_rows["B4320001"]["description"] == "Abrazadera"
     assert material_rows["B4320002"]["times_used"] == 1
+    filtered_orders = await client.get(
+        "/api/work-orders?material_code=B4320002&date_from=2020-01-01&date_to=2099-12-31",
+        headers=auth_headers(token),
+    )
+    assert filtered_orders.status_code == 200
+    assert [row["ot_number"] for row in filtered_orders.json()] == ["OT-KPI-0001"]
     workers = {row["worker_name"]: row for row in payload["by_worker"]}
     assert workers["Ortiz"]["total_hours"] == 4.5
     other_worker_hours = [row["total_hours"] for name, row in workers.items() if name != "Ortiz"]

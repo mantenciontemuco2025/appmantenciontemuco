@@ -425,7 +425,7 @@ async def test_work_order_evidence_upload_list_and_private_download(
     assert photo.headers["cache-control"] == "private, max-age=300"
 
 
-async def test_work_order_evidence_limit_is_two_photos_per_user(
+async def test_work_order_evidence_limit_is_four_photos_per_user(
     client, seed_data, monkeypatch
 ):
     uploaded = []
@@ -446,21 +446,21 @@ async def test_work_order_evidence_limit_is_two_photos_per_user(
             headers=auth_headers(user_token),
         )
 
-    for _ in range(2):
+    for _ in range(4):
         response = await upload(token, "ISSUE")
         assert response.status_code == 201, response.text
 
     worker_token = await get_token(client, "ortiz@test.com")
-    for _ in range(2):
+    for _ in range(4):
         response = await upload(worker_token, "WORK")
         assert response.status_code == 201, response.text
 
-    admin_third = await upload(token, "ISSUE")
-    worker_third = await upload(worker_token, "WORK")
-    assert admin_third.status_code == 409
-    assert worker_third.status_code == 409
-    assert "2 fotos" in admin_third.json()["detail"]
-    assert len(uploaded) == 4
+    admin_fifth = await upload(token, "ISSUE")
+    worker_fifth = await upload(worker_token, "WORK")
+    assert admin_fifth.status_code == 409
+    assert worker_fifth.status_code == 409
+    assert "4 fotos" in admin_fifth.json()["detail"]
+    assert len(uploaded) == 8
 
 
 async def test_responsible_worker_can_upload_work_photo_but_not_issue_photo(

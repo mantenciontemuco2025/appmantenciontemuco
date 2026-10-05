@@ -1,0 +1,1 @@
+export const MAX_EVIDENCE_PHOTOS_PER_USER = 4;

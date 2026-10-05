@@ -53,6 +53,7 @@ export default function OrdenesPage() {
   const [kpiStalePending, setKpiStalePending] = useState(false);
   const [kpiExternal, setKpiExternal] = useState(false);
   const [kpiWithoutSection, setKpiWithoutSection] = useState(false);
+  const [kpiMaterialCode, setKpiMaterialCode] = useState("");
   const [counter, setCounter] = useState<WorkOrderCounter | null>(null);
   const [error, setError] = useState("");
 
@@ -83,6 +84,7 @@ export default function OrdenesPage() {
     setKpiStalePending(params.get("stale_pending") === "true");
     setKpiExternal(params.get("external") === "true");
     setKpiWithoutSection(params.get("without_section") === "true");
+    setKpiMaterialCode(params.get("material_code") || "");
     setSearchResponsible(params.get("responsible") || "");
     const status = params.get("status") as TabKey | null;
     if (status && TABS.some((tab) => tab.key === status)) setActiveTab(status);
@@ -106,7 +108,7 @@ export default function OrdenesPage() {
     }, 250);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, activeView, activeTab, searchOT, searchResponsible, withoutArea, kpiPlantArea, kpiSection, kpiMaintenanceType, kpiDateFrom, kpiDateTo, kpiStalePending, kpiExternal, kpiWithoutSection]);
+  }, [user, activeView, activeTab, searchOT, searchResponsible, withoutArea, kpiPlantArea, kpiSection, kpiMaintenanceType, kpiDateFrom, kpiDateTo, kpiStalePending, kpiExternal, kpiWithoutSection, kpiMaterialCode]);
 
   // Carga el panel de Vencidas cuando se activa la pestaña (una vez por visita).
   useEffect(() => {
@@ -123,7 +125,7 @@ export default function OrdenesPage() {
     }, 250);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, activeTab, activeView, searchOT, searchResponsible, withoutArea, kpiPlantArea, kpiSection, kpiMaintenanceType, kpiDateFrom, kpiDateTo, kpiStalePending, kpiExternal, kpiWithoutSection]);
+  }, [user, activeTab, activeView, searchOT, searchResponsible, withoutArea, kpiPlantArea, kpiSection, kpiMaintenanceType, kpiDateFrom, kpiDateTo, kpiStalePending, kpiExternal, kpiWithoutSection, kpiMaterialCode]);
 
   // Poll mientras alguna OT visible esté en sincronización asíncrona (PENDING),
   // para que el badge pase solo a SYNCED/FAILED sin recargar manualmente.
@@ -208,6 +210,7 @@ export default function OrdenesPage() {
     if (kpiStalePending) filters.set("stale_pending", "true");
     if (kpiExternal) filters.set("external", "true");
     if (kpiWithoutSection) filters.set("without_section", "true");
+    if (kpiMaterialCode) filters.set("material_code", kpiMaterialCode);
     if (withoutArea) filters.set("without_area", "true");
     return filters;
   }
@@ -278,7 +281,7 @@ export default function OrdenesPage() {
   // La pestaña "Vencidas" usa su propia ventana consultada al servidor.
   const source = activeTab === "OVERDUE" ? overdue : orders;
   const filtered = source;
-  const hasKpiFilter = Boolean(kpiPlantArea || kpiSection || kpiMaintenanceType || kpiDateFrom || kpiDateTo || kpiStalePending || kpiExternal || kpiWithoutSection);
+  const hasKpiFilter = Boolean(kpiPlantArea || kpiSection || kpiMaintenanceType || kpiDateFrom || kpiDateTo || kpiStalePending || kpiExternal || kpiWithoutSection || kpiMaterialCode);
   const hasSearch = Boolean(searchOT.trim() || searchResponsible.trim() || withoutArea || hasKpiFilter);
 
   function tabCount(key: TabKey): number {
@@ -443,6 +446,7 @@ export default function OrdenesPage() {
               setKpiStalePending(false);
               setKpiExternal(false);
               setKpiWithoutSection(false);
+              setKpiMaterialCode("");
               router.replace("/ordenes");
             }}
           >

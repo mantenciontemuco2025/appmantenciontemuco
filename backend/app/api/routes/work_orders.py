@@ -82,6 +82,7 @@ supervisor_or_admin = require_roles(*manager_roles)
 _COUNTER_CACHE_TTL_SECONDS = 15.0
 _counter_cache: tuple[float, object, WorkOrderCounterResponse] | None = None
 _counter_cache_lock = asyncio.Lock()
+MAX_EVIDENCE_PHOTOS_PER_USER = 4
 
 
 def _supervisor_area_error(current_user: User, area_id: int) -> str | None:
@@ -1901,6 +1902,7 @@ async def list_work_orders(
     plant_area: str | None = Query(default=None, min_length=1, max_length=200),
     section_name: str | None = Query(default=None, min_length=1, max_length=200),
     maintenance_type: str | None = Query(default=None, min_length=1, max_length=30),
+    material_code: str | None = Query(default=None, min_length=1, max_length=100),
     date_from: _date | None = Query(default=None),
     date_to: _date | None = Query(default=None),
     stale_pending: bool = Query(default=False),
@@ -2005,6 +2007,27 @@ async def list_work_orders(
 
     if maintenance_type and maintenance_type.strip():
         query = query.where(WorkOrder.maintenance_type == maintenance_type.strip().upper())
+
+    if material_code and material_code.strip():
+        # Material codes are persisted as CODE-CODE-CODE. Match a complete
+        # token so selecting B4320001 never includes a longer, similar code.
+        normalized_code = "".join(material_code.strip().upper().split())
+        escaped_code = (
+            normalized_code.replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+        )
+        stored_codes = func.upper(
+            func.replace(func.coalesce(WorkOrder.material_codes, ""), " ", "")
+        )
+        query = query.where(
+            or_(
+                stored_codes == normalized_code,
+                stored_codes.like(f"{escaped_code}-%", escape="\\"),
+                stored_codes.like(f"%-{escaped_code}", escape="\\"),
+                stored_codes.like(f"%-{escaped_code}-%", escape="\\"),
+            )
+        )
 
     report_date = func.coalesce(
         WorkOrder.execution_date,
@@ -2829,8 +2852,11 @@ async def upload_work_order_evidence(
             WorkOrderEvidence.uploaded_by_user_id == current_user.id,
         )
     )
-    if int(count_result.scalar_one() or 0) >= 2:
-        raise HTTPException(status_code=409, detail="Ya subiste el máximo de 2 fotos para esta OT")
+    if int(count_result.scalar_one() or 0) >= MAX_EVIDENCE_PHOTOS_PER_USER:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Ya subiste el máximo de {MAX_EVIDENCE_PHOTOS_PER_USER} fotos para esta OT",
+        )
 
     try:
         drive_file_id = await run_in_threadpool(
