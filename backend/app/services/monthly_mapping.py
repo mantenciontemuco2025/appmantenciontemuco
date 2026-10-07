@@ -106,8 +106,20 @@ def _expected_header(logical_key: str) -> str:
         "MONTAJE": "MONTAJE", "HORAS": "HORAS",
         "ESTADO": "ESTADO", "RESPONSABLE": "RESPONSABLE",
         "PARTICIPANTES": "PARTICIPANTES",
+        "CODIGOS_MATERIALES": "CODIGOS DE MATERIALES",
+        "MATERIALES": "MATERIALES",
     }
     return normalize_header(expected_headers.get(logical_key, logical_key))
+
+
+def _column_letter(index: int) -> str:
+    """Convert a zero-based column index to a Google Sheets column letter."""
+    value = index + 1
+    letters = ""
+    while value:
+        value, remainder = divmod(value - 1, 26)
+        letters = chr(ord("A") + remainder) + letters
+    return letters
 
 
 def resolve_monthly_columns(headers: list[str]) -> dict[str, str]:
@@ -125,11 +137,12 @@ def resolve_monthly_columns(headers: list[str]) -> dict[str, str]:
     for idx, header in enumerate(headers):
         h_text = normalize_header(header)
         if h_text:
-            col_by_header[h_text] = chr(ord("A") + idx)
+            col_by_header[h_text] = _column_letter(idx)
 
     # Known logical keys we care about, in a canonical order.
     all_keys = list(MONTHLY_COLUMN_MAP.keys()) + [
-        "ESTADO", "RESPONSABLE", "PARTICIPANTES"
+        "ESTADO", "RESPONSABLE", "PARTICIPANTES",
+        "CODIGOS_MATERIALES", "MATERIALES",
     ]
 
     resolved: dict[str, str] = {}

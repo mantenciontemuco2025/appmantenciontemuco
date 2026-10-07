@@ -888,8 +888,19 @@ def write_signature_image(
     logger.info("Firma insertada como imagen en OT %s (%s)", spreadsheet_id, field)
 
 
+def _sheet_column_letter(index: int) -> str:
+    """Convert a zero-based index to a Google Sheets column letter."""
+    value = index + 1
+    letters = ""
+    while value:
+        value, remainder = divmod(value - 1, 26)
+        letters = chr(ord("A") + remainder) + letters
+    return letters
+
+
 def _merge_monthly_columns_with_headers(
     spread_sheets_service, spreadsheet_id: str, sheet_title: str,
+    *, ensure_material_headers: bool = False,
 ) -> dict[str, str]:
     """Resolve monthly column letters by reading the real headers.
 
@@ -905,6 +916,40 @@ def _merge_monthly_columns_with_headers(
         ).execute()
         values = resp.get("values", [[]])
         headers = values[0] if values else []
+        if ensure_material_headers:
+            expected = (
+                ("CODIGOS DE MATERIALES", "CÓDIGOS DE MATERIALES"),
+                ("MATERIALES", "MATERIALES"),
+            )
+            normalized_headers = [normalize_header(value) for value in headers]
+            missing = [
+                (normalized, display)
+                for normalized, display in expected
+                if normalize_header(normalized) not in normalized_headers
+            ]
+            if missing:
+                last_used = max(
+                    (index for index, value in enumerate(headers) if str(value).strip()),
+                    default=-1,
+                )
+                next_index = last_used + 1
+                for normalized, display in missing:
+                    if next_index >= 27:  # Header scan is intentionally A:AA.
+                        raise RuntimeError(
+                            "No hay columnas libres entre A y AA para registrar materiales."
+                        )
+                    column_letter = _sheet_column_letter(next_index)
+                    spread_sheets_service.spreadsheets().values().update(
+                        spreadsheetId=spreadsheet_id,
+                        range=f"{sheet_title}!{column_letter}{header_row}",
+                        valueInputOption="RAW",
+                        body={"values": [[display]]},
+                    ).execute()
+                    while len(headers) <= next_index:
+                        headers.append("")
+                    headers[next_index] = display
+                    normalized_headers.append(normalize_header(normalized))
+                    next_index += 1
         return resolve_monthly_columns(headers)
     except Exception:  # noqa: BLE001
         logger.warning("No se pudieron resolver encabezados de %s via Google; usando estaticos.", sheet_title)
@@ -926,6 +971,8 @@ def sync_to_monthly_sheet(
     participant_column_keys: dict[int, str] | None = None,
     status: str = "PENDING",
     actual_duration_minutes: float | None = None,
+    material_codes: str = "",
+    material_names: str = "",
     spreadsheet_id: str | None = None,
 ) -> bool:
     """Append or update a single row in the monthly tracking sheet.
@@ -961,22 +1008,28 @@ def sync_to_monthly_sheet(
 
     sheet_title = get_monthly_sheet_title(execution_date.month)
     monthly_id = spreadsheet_id or settings.GOOGLE_MONTHLY_SPREADSHEET_ID
-    col = _merge_monthly_columns_with_headers(sheets, monthly_id, sheet_title)
+    col = _merge_monthly_columns_with_headers(
+        sheets,
+        monthly_id,
+        sheet_title,
+        ensure_material_headers=bool(material_codes or material_names),
+    )
 
     # Search for existing row with this OT number (idempotency key)
     existing_row = _search_row_by_col(
         monthly_id, sheet_title, col["N_O_T"], ot_number
     )
 
-    # Build the full row up to the last known column. HORAS -> V, ESTADO -> W
-    # (or wherever the header says). Determine the widest present column.
+    # Build the full row up to the last known column. Optional columns such as
+    # ESTADO, PARTICIPANTES and material details are resolved by their real
+    # headers, so adding them at the end never shifts the original layout.
     known_end = col.get("HORAS") or MONTHLY_LAST_COLUMN
-    if "ESTADO" in col:
-        if ord(col["ESTADO"]) > ord(known_end):
-            known_end = col["ESTADO"]
-    if "PARTICIPANTES" in col:
-        if ord(col["PARTICIPANTES"]) > ord(known_end):
-            known_end = col["PARTICIPANTES"]
+    for optional_key in (
+        "ESTADO", "PARTICIPANTES", "CODIGOS_MATERIALES", "MATERIALES"
+    ):
+        optional_column = col.get(optional_key)
+        if optional_column and ord(optional_column) > ord(known_end):
+            known_end = optional_column
     last_idx = ord(known_end) - ord("A") + 1
     row_values = [""] * last_idx
 
@@ -991,6 +1044,11 @@ def sync_to_monthly_sheet(
     _put(col["SECCION"], section_name or "")
     _put(col["EQUIPO"], equipment_name or "")
     _put(col["TRABAJO"], description or "")
+
+    if "CODIGOS_MATERIALES" in col:
+        _put(col["CODIGOS_MATERIALES"], material_codes)
+    if "MATERIALES" in col:
+        _put(col["MATERIALES"], material_names)
 
     # Worker columns: prefer stable user IDs. This prevents a renamed worker
     # from moving to another column and prevents a new worker from inheriting

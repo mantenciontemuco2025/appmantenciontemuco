@@ -1,6 +1,7 @@
 from datetime import date, datetime, timezone
 
 from app.api.routes.kpis import _duration_minutes, _parse_estimated_minutes
+from app.api.routes.work_orders import _monthly_material_values
 from app.models.material_catalog import MaterialCatalog
 from app.models.work_order import WorkOrder
 from tests.conftest import auth_headers, get_token
@@ -22,6 +23,24 @@ def test_completed_kpi_duration_prefers_worker_declared_time():
         created_at=datetime.now(timezone.utc),
     )
     assert _duration_minutes(order) == 150
+
+
+async def test_monthly_material_values_preserve_code_order_and_resolve_names(
+    db_session_factory,
+):
+    async with db_session_factory() as db:
+        db.add_all([
+            MaterialCatalog(code="B4320001", description="Abrazadera", family="Ferretería"),
+            MaterialCatalog(code="B4320002", description="Sello", family="Repuestos"),
+        ])
+        await db.flush()
+
+        codes, names = await _monthly_material_values(
+            db, "B4320002-B4320001-B4320002-COD999"
+        )
+
+    assert codes == "B4320002, B4320001, COD999"
+    assert names == "Sello; Abrazadera; Sin descripción en catálogo (COD999)"
 
 
 async def test_admin_can_read_empty_kpi_report(client, seed_data):

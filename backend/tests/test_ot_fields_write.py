@@ -509,6 +509,7 @@ class _FakeSheetsWithHeaders(_FakeSheets):
         "JUAN SILVA", "INOSTROZA", "CANIULLAN", "CONTRERAS",
         "PREVENTIVO", "CORRECTIVO", "PREDICTIVO", "PROYECTO", "MONTAJE",
         "HORAS", "ESTADO", "PARTICIPANTES",
+        "CÓDIGOS DE MATERIALES", "MATERIALES",
     ]
 
     def get(self, spreadsheetId="", range="", **kwargs):
@@ -517,6 +518,18 @@ class _FakeSheetsWithHeaders(_FakeSheets):
             return _FakeGetSheetResponse([self.REAL_HEADERS])
         # Otherwise delegate to the base fake (searches column for N° OT)
         return super().get(spreadsheetId=spreadsheetId, range=range)
+
+
+class _FakeSheetsWithoutMaterialHeaders(_FakeSheetsWithHeaders):
+    """Matches production: ESTADO in W and X/Y still empty."""
+
+    REAL_HEADERS = [
+        "FECHA", "N° OT", "AREA", "SECCION", "EQUIPO", "TRABAJO",
+        "ORTIZ", "VALDES", "FABRES", "JARA", "SALAZAR", "MILLAR",
+        "JUAN SILVA", "INOSTROZA", "CANIULLAN", "CONTRERAS",
+        "PREVENTIVO", "CORRECTIVO", "PREDICTIVO", "PROYECTO", "MONTAJE",
+        "HORAS", "ESTADO",
+    ]
 
 
 def test_sync_writes_estado_with_header(oauth_settings, monkeypatch, tmp_path):
@@ -562,6 +575,55 @@ def test_sync_writes_new_participant_in_summary_column(oauth_settings, monkeypat
 
     row = fake.writes[0][1]
     assert row[ord("X") - ord("A")] == "Trabajador Nuevo"
+
+
+def test_sync_writes_material_codes_and_names(oauth_settings, monkeypatch):
+    """Material codes and catalog names are written to their own columns."""
+    fake = _FakeSheetsWithHeaders()
+    fake.monthly_rows["SEPTIEMBRE"] = []
+    monkeypatch.setattr(google_drive, "_build_sheets_write_service", lambda: fake)
+    monkeypatch.setattr(google_drive, "_build_sheets_service", lambda: fake)
+    monkeypatch.setattr(google_drive.settings, "GOOGLE_MONTHLY_SPREADSHEET_ID", "m1")
+
+    exec_dt = datetime.combine(date(2026, 9, 3), time.min)
+    google_drive.sync_to_monthly_sheet(
+        "OT-2026-0709", exec_dt,
+        area_name="A", section_name="S", equipment_name="E",
+        description="D", maintenance_type="CORRECTIVE",
+        participants=["Ortiz"], duration_hours=1.0,
+        material_codes="B4320001, B4320002",
+        material_names="Abrazadera; Sello",
+    )
+
+    row = fake.writes[0][1]
+    assert row[ord("Y") - ord("A")] == "B4320001, B4320002"
+    assert row[ord("Z") - ord("A")] == "Abrazadera; Sello"
+
+
+def test_sync_creates_missing_material_headers_without_overwriting(
+    oauth_settings, monkeypatch
+):
+    fake = _FakeSheetsWithoutMaterialHeaders()
+    fake.monthly_rows["SEPTIEMBRE"] = []
+    monkeypatch.setattr(google_drive, "_build_sheets_write_service", lambda: fake)
+    monkeypatch.setattr(google_drive, "_build_sheets_service", lambda: fake)
+    monkeypatch.setattr(google_drive.settings, "GOOGLE_MONTHLY_SPREADSHEET_ID", "m1")
+
+    exec_dt = datetime.combine(date(2026, 9, 3), time.min)
+    google_drive.sync_to_monthly_sheet(
+        "OT-2026-0710", exec_dt,
+        area_name="A", section_name="S", equipment_name="E",
+        description="D", maintenance_type="CORRECTIVE",
+        participants=["Ortiz"], duration_hours=1.0,
+        material_codes="B4320001", material_names="Abrazadera",
+    )
+
+    assert fake.writes[0] == ("SEPTIEMBRE!X3", ["CÓDIGOS DE MATERIALES"])
+    assert fake.writes[1] == ("SEPTIEMBRE!Y3", ["MATERIALES"])
+    row = fake.writes[-1][1]
+    assert row[ord("W") - ord("A")] == "PENDIENTE"
+    assert row[ord("X") - ord("A")] == "B4320001"
+    assert row[ord("Y") - ord("A")] == "Abrazadera"
 
 
 def test_sync_records_external_name_without_marking_an_employee_column(

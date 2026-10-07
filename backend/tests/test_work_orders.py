@@ -74,6 +74,79 @@ async def test_create_work_order(client, seed_data, monkeypatch):
     assert latest["ot_sheet_sync_status"] == "PENDING"
 
 
+async def test_admin_can_queue_monthly_material_backfill_without_duplicates(
+    client, seed_data, db_session_factory
+):
+    token = await get_token(client, "admin@test.com")
+
+    async def create_order(title: str, execution_date: str, material_codes: str | None):
+        response = await client.post(
+            "/api/work-orders",
+            json={
+                "title": title,
+                "plant_area": "CEBADA",
+                "area_id": seed_data["area"].id,
+                "equipment_id": seed_data["equipment"].id,
+                "maintenance_type": "CORRECTIVE",
+                "execution_date": execution_date,
+                "material_codes": material_codes,
+            },
+            headers=auth_headers(token),
+        )
+        assert response.status_code == 201, response.text
+        return response.json()["id"]
+
+    eligible_id = await create_order("Con materiales", "2026-10-03", "MAT-001")
+    no_material_id = await create_order("Sin materiales", "2026-10-04", None)
+    other_month_id = await create_order("Otro mes", "2026-09-30", "MAT-002")
+
+    async with db_session_factory() as db:
+        for wo_id in (eligible_id, no_material_id, other_month_id):
+            wo = await db.get(WorkOrder, wo_id)
+            assert wo is not None
+            wo.status = "PENDING"
+        await db.commit()
+
+    response = await client.post(
+        "/api/work-orders/monthly-materials/backfill",
+        json={"year": 2026, "month": 10},
+        headers=auth_headers(token),
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "year": 2026,
+        "month": 10,
+        "matched": 1,
+        "queued": 1,
+        "already_queued": 0,
+    }
+
+    repeated = await client.post(
+        "/api/work-orders/monthly-materials/backfill",
+        json={"year": 2026, "month": 10},
+        headers=auth_headers(token),
+    )
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["queued"] == 0
+    assert repeated.json()["already_queued"] == 1
+
+    async with db_session_factory() as db:
+        jobs = list(
+            (
+                await db.execute(
+                    select(ExternalSyncJob).where(
+                        ExternalSyncJob.work_order_id == eligible_id,
+                        ExternalSyncJob.job_type == "MONTHLY",
+                    )
+                )
+            ).scalars()
+        )
+        assert len(jobs) == 1
+        eligible = await db.get(WorkOrder, eligible_id)
+        assert eligible is not None
+        assert eligible.monthly_sheet_sync_status == "PENDING"
+
+
 async def test_list_work_orders(client, seed_data, monkeypatch):
     """List Work Orders — admin sees all."""
     monkeypatch.setattr(

@@ -77,6 +77,21 @@ def test_resolve_participantes_after_estado():
     assert col["PARTICIPANTES"] == "X"
 
 
+def test_resolve_material_columns_after_participantes():
+    headers = HEADERS_22 + [
+        "ESTADO", "PARTICIPANTES", "CÓDIGOS DE MATERIALES", "MATERIALES"
+    ]
+    col = resolve_monthly_columns(headers)
+    assert col["CODIGOS_MATERIALES"] == "Y"
+    assert col["MATERIALES"] == "Z"
+
+
+def test_resolve_header_in_column_aa():
+    headers = HEADERS_22 + ["ESTADO", "PARTICIPANTES", "OTRA", "OTRA 2", "MATERIALES"]
+    col = resolve_monthly_columns(headers)
+    assert col["MATERIALES"] == "AA"
+
+
 def test_resolve_header_driven_not_position_dependent():
     # Ensure resolution is by header text, not magic index: shuffle isn't tested
     # here (positions must remain), but a header spelling variant is resolved.

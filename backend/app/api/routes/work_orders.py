@@ -42,6 +42,7 @@ from app.models.work_order_participants import work_order_participants
 from app.models.worker_column import WorkerColumn
 from app.models.sync_job import ExternalSyncJob, SyncJobStatus
 from app.models.notification import Notification
+from app.models.material_catalog import MaterialCatalog
 from app.schemas.work_order import (
     WorkOrderCreate,
     HistoricalWorkOrderCreate,
@@ -245,6 +246,21 @@ class ReassignPayload(BaseModel):
 class BatchIssuePayload(BaseModel):
     """Body for issuing multiple DRAFT OTs at once."""
     ids: list[int]
+
+
+class MonthlyMaterialsBackfillPayload(BaseModel):
+    """Month whose material columns must be refreshed in the monthly register."""
+
+    year: int
+    month: int
+
+
+class MonthlyMaterialsBackfillResult(BaseModel):
+    year: int
+    month: int
+    matched: int
+    queued: int
+    already_queued: int
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -622,6 +638,42 @@ def _exec_datetime(wo: WorkOrder) -> datetime:
     return exec_date  # type: ignore
 
 
+def _ordered_material_codes(value: str | None) -> list[str]:
+    """Return distinct material codes in the same order stored on the OT."""
+    codes: list[str] = []
+    seen: set[str] = set()
+    for token in re.split(r"\s*-\s*", value or ""):
+        code = token.strip().upper()
+        if code and code not in seen:
+            seen.add(code)
+            codes.append(code)
+    return codes
+
+
+async def _monthly_material_values(
+    db: AsyncSession, value: str | None
+) -> tuple[str, str]:
+    """Resolve the OT material codes and catalog descriptions for Sheets."""
+    codes = _ordered_material_codes(value)
+    if not codes:
+        return "", ""
+
+    result = await db.execute(
+        select(MaterialCatalog.code, MaterialCatalog.description).where(
+            MaterialCatalog.code.in_(codes)
+        )
+    )
+    descriptions = {
+        str(code).strip().upper(): str(description).strip()
+        for code, description in result.all()
+    }
+    names = [
+        descriptions.get(code) or f"Sin descripción en catálogo ({code})"
+        for code in codes
+    ]
+    return ", ".join(codes), "; ".join(names)
+
+
 def _as_datetime(d: _date) -> datetime:
     """Normalize any date-ish value (date or datetime) to a datetime."""
     if isinstance(d, datetime):
@@ -670,6 +722,9 @@ async def _sync_work_order_to_monthly(
     participant_column_keys = await _monthly_worker_columns(
         db, participant_user_ids or []
     ) if participant_user_ids is not None else None
+    monthly_material_codes, monthly_material_names = await _monthly_material_values(
+        db, wo.material_codes
+    )
 
     # Resolve responsible name
     responsible_name = wo.responsible_user.full_name if wo.responsible_user else ""
@@ -752,6 +807,8 @@ async def _sync_work_order_to_monthly(
             duration_hours=duration_hours,
             status=wo.status,
             actual_duration_minutes=actual_minutes,
+            material_codes=monthly_material_codes,
+            material_names=monthly_material_names,
             spreadsheet_id=target_spreadsheet_id,
         )
         wo.monthly_sheet_sync_status = "SYNCED"
@@ -1764,6 +1821,9 @@ async def _sync_ot_and_monthly(db, wo, area, equipment, payload, user_id):
     participant_column_keys = await _monthly_worker_columns(
         db, participant_user_ids or []
     ) if participant_user_ids is not None else None
+    monthly_material_codes, monthly_material_names = await _monthly_material_values(
+        db, wo.material_codes
+    )
     # Resolving worker columns starts a new read transaction after the
     # initial commit. Release it before the Drive file creation/population so
     # slow Google calls never occupy a PostgreSQL pool slot.
@@ -1873,6 +1933,8 @@ async def _sync_ot_and_monthly(db, wo, area, equipment, payload, user_id):
                     duration_hours=_parse_duration_hours(payload.estimated_time),
                     status=wo.status,
                     actual_duration_minutes=None,
+                    material_codes=monthly_material_codes,
+                    material_names=monthly_material_names,
                     spreadsheet_id=target_spreadsheet_id,
                 )
                 wo.monthly_sheet_sync_status = "SYNCED"
@@ -3324,6 +3386,7 @@ async def update_work_order(
         "status", "title", "description", "area_id", "plant_area", "equipment_id",
         "section_name", "maintenance_type", "estimated_time",
         "execution_date", "participant_names", "responsible_user_id",
+        "material_codes",
         "is_external_work", "external_executor_name", "external_company",
         "external_quote_number", "external_oc_number", "external_invoice_number",
         "external_account_number", "external_oc_amount",
@@ -5054,3 +5117,88 @@ async def sync_monthly(
 
     result2 = await db.execute(_base_query().where(WorkOrder.id == wo.id))
     return _work_order_to_response(result2.scalar_one())
+
+
+@router.post(
+    "/monthly-materials/backfill",
+    response_model=MonthlyMaterialsBackfillResult,
+)
+async def backfill_monthly_materials(
+    payload: MonthlyMaterialsBackfillPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_roles(UserRole.ADMIN)),
+) -> MonthlyMaterialsBackfillResult:
+    """Queue an idempotent monthly refresh for OTs that use materials.
+
+    The Google worker updates each existing row by OT number, so rerunning this
+    action repairs the material columns without inserting duplicate rows.
+    """
+    if payload.year < 2000 or payload.year > 2100:
+        raise HTTPException(status_code=422, detail="El año debe estar entre 2000 y 2100.")
+    if payload.month < 1 or payload.month > 12:
+        raise HTTPException(status_code=422, detail="El mes debe estar entre 1 y 12.")
+
+    date_from = _date(payload.year, payload.month, 1)
+    date_to = (
+        _date(payload.year + 1, 1, 1)
+        if payload.month == 12
+        else _date(payload.year, payload.month + 1, 1)
+    )
+    eligible_result = await db.execute(
+        select(WorkOrder.id)
+        .where(
+            WorkOrder.execution_date >= date_from,
+            WorkOrder.execution_date < date_to,
+            WorkOrder.status != WorkOrderStatus.DRAFT.value,
+            WorkOrder.material_codes.is_not(None),
+            func.trim(WorkOrder.material_codes) != "",
+        )
+        .order_by(WorkOrder.id)
+    )
+    eligible_ids = list(eligible_result.scalars().all())
+
+    active_ids: set[int] = set()
+    if eligible_ids:
+        active_result = await db.execute(
+            select(ExternalSyncJob.work_order_id).where(
+                ExternalSyncJob.work_order_id.in_(eligible_ids),
+                ExternalSyncJob.status.in_(
+                    (SyncJobStatus.PENDING, SyncJobStatus.PROCESSING)
+                ),
+            )
+        )
+        active_ids = set(active_result.scalars().all())
+
+    queued = 0
+    for wo_id in eligible_ids:
+        if wo_id in active_ids:
+            continue
+        wo = await db.get(WorkOrder, wo_id)
+        if wo is None:
+            continue
+        wo.monthly_sheet_sync_status = "PENDING"
+        wo.monthly_sheet_sync_error = None
+        await enqueue_external_sync(
+            db,
+            wo.id,
+            job_type="MONTHLY",
+            actor_user_id=current_user.id,
+        )
+        queued += 1
+
+    result = MonthlyMaterialsBackfillResult(
+        year=payload.year,
+        month=payload.month,
+        matched=len(eligible_ids),
+        queued=queued,
+        already_queued=len(active_ids),
+    )
+    await create_audit_log(
+        db,
+        user_id=current_user.id,
+        action="BACKFILL_MONTHLY_MATERIALS",
+        entity_type="WorkOrderBatch",
+        new_data=result.model_dump(),
+    )
+    await db.commit()
+    return result
