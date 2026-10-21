@@ -18,32 +18,83 @@ function splitCodes(value: string) {
   );
 }
 
+function mergeMaterials(
+  current: MaterialCatalogItem[],
+  incoming: MaterialCatalogItem[],
+) {
+  const merged = new Map(current.map((item) => [item.code, item]));
+  let changed = false;
+  for (const item of incoming) {
+    if (!merged.has(item.code)) {
+      merged.set(item.code, item);
+      changed = true;
+    }
+  }
+  return changed ? Array.from(merged.values()) : current;
+}
+
 /** Catalog-backed multi-select. The OT still stores only CODE-CODE-CODE. */
 export function MaterialCodePicker({ value, onChange, disabled = false }: Props) {
   const [materials, setMaterials] = useState<MaterialCatalogItem[]>([]);
   const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState("");
+  const selectedCodes = useMemo(() => splitCodes(value), [value]);
 
   useEffect(() => {
     let cancelled = false;
-    api
-      .getCached<MaterialCatalogItem[]>("/api/materials?limit=5000", 10 * 60 * 1000)
-      .then((items) => {
-        if (!cancelled) setMaterials(items);
-      })
-      .catch(() => {
-        if (!cancelled) setLoadError("No se pudo cargar el catálogo de materiales.");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    const normalized = query.trim();
+    if (!normalized) {
+      setLoading(false);
+      setLoadError("");
+      return () => { cancelled = true; };
+    }
+
+    setLoading(true);
+    setLoadError("");
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams({ query: normalized, limit: "20" });
+      api
+        .getCached<MaterialCatalogItem[]>(`/api/materials?${params.toString()}`, 10 * 60 * 1000)
+        .then((items) => {
+          if (!cancelled) {
+            setMaterials((current) => mergeMaterials(current, items));
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setLoadError("No se pudo buscar en el catálogo de materiales.");
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    }, 250);
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, []);
+  }, [query]);
 
-  const selectedCodes = useMemo(() => splitCodes(value), [value]);
+  // Resolve descriptions for codes already saved on an OT without downloading
+  // the full catalog. The API caps this lookup to 50 exact codes.
+  useEffect(() => {
+    let cancelled = false;
+    const missing = selectedCodes.filter((code) => !materials.some((item) => item.code === code));
+    if (!missing.length) return () => { cancelled = true; };
+
+    const params = new URLSearchParams();
+    params.set("limit", "50");
+    for (const code of missing.slice(0, 50)) params.append("codes", code);
+    api
+      .getCached<MaterialCatalogItem[]>(`/api/materials?${params.toString()}`, 10 * 60 * 1000)
+      .then((items) => {
+        if (!cancelled) setMaterials((current) => mergeMaterials(current, items));
+      })
+      .catch(() => {
+        if (!cancelled) setLoadError("No se pudieron cargar los nombres de los códigos guardados.");
+      });
+    return () => { cancelled = true; };
+  }, [selectedCodes, materials]);
+
   const available = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     if (!normalized) return [];

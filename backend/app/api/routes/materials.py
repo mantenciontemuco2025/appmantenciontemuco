@@ -89,23 +89,34 @@ def _normalize_text(value: str, label: str) -> str:
 @router.get("", response_model=list[MaterialItemOut])
 async def list_active_materials(
     query: str = Query(default="", max_length=100),
+    codes: list[str] = Query(default=[]),
     family: str | None = Query(default=None, max_length=180),
-    limit: int = Query(default=2500, ge=1, le=5000),
+    limit: int = Query(default=20, ge=1, le=50),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> list[MaterialCatalog]:
     """Search active materials for OT forms."""
     statement = select(MaterialCatalog).where(MaterialCatalog.active.is_(True))
     query = query.strip()
+    normalized_codes = list(dict.fromkeys(code.strip().upper() for code in codes if code.strip()))[:50]
+    search_conditions = []
     if query:
         term = f"%{query}%"
-        statement = statement.where(
+        search_conditions.append(
             or_(
                 MaterialCatalog.code.ilike(term),
                 MaterialCatalog.description.ilike(term),
                 MaterialCatalog.family.ilike(term),
             )
         )
+    if normalized_codes:
+        search_conditions.append(MaterialCatalog.code.in_(normalized_codes))
+    if search_conditions:
+        statement = statement.where(or_(*search_conditions))
+    else:
+        # Never return the entire catalog on an empty search: OT forms query
+        # this endpoint interactively and only need a small result page.
+        return []
     if family:
         statement = statement.where(MaterialCatalog.family == family.strip())
     result = await db.execute(

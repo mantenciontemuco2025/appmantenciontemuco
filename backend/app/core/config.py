@@ -22,8 +22,10 @@ class Settings(BaseSettings):
     )
     # Async SQLAlchemy pool. Keep these below the database provider's maximum
     # connection limit; the values are intentionally configurable per VPS.
-    DB_POOL_SIZE: int = 10
-    DB_MAX_OVERFLOW: int = 10
+    # Render runs a single API process on small instances; keep the DB pool
+    # bounded so idle connections do not consume unnecessary resources.
+    DB_POOL_SIZE: int = 3
+    DB_MAX_OVERFLOW: int = 2
     DB_POOL_TIMEOUT: int = 30
     DB_POOL_RECYCLE: int = 1800
 

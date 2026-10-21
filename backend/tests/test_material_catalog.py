@@ -19,6 +19,25 @@ async def test_admin_can_import_and_manage_material_catalog(client, seed_data):
     assert imported.status_code == 200
     assert imported.json()["created"] == 2
 
+    # Interactive OT search must not return the entire catalog on an empty
+    # query, and exact-code lookups preserve labels for codes already saved.
+    empty_search = await client.get("/api/materials", headers=auth_headers(worker_token))
+    assert empty_search.status_code == 200
+    assert empty_search.json() == []
+
+    selected_codes = await client.get(
+        "/api/materials?codes=B4320001&codes=B4340001&limit=50",
+        headers=auth_headers(worker_token),
+    )
+    assert selected_codes.status_code == 200
+    assert {item["code"] for item in selected_codes.json()} == {"B4320001", "B4340001"}
+
+    too_many_results = await client.get(
+        "/api/materials?query=B&limit=5000",
+        headers=auth_headers(worker_token),
+    )
+    assert too_many_results.status_code == 422
+
     visible = await client.get(
         "/api/materials?query=abrazadera",
         headers=auth_headers(worker_token),
