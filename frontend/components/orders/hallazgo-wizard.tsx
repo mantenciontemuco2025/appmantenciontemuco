@@ -11,6 +11,7 @@ import { VoiceDictation } from "@/components/maintenance/voice-dictation";
 import { MaterialCodePicker } from "@/components/orders/material-code-picker";
 import { usePlantAreaOptions } from "@/lib/use-plant-area-options";
 import { MAX_EVIDENCE_PHOTOS_PER_USER } from "@/lib/evidence";
+import { prepareEvidencePhoto } from "@/lib/prepare-evidence-photo";
 
 type HallazgoKind = "COMPLETED" | "REQUIRES_ATTENTION";
 type TimeMode = "RANGE" | "MANUAL";
@@ -67,6 +68,7 @@ export function HallazgoWizard() {
   });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [preparingPhotos, setPreparingPhotos] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -117,24 +119,43 @@ export function HallazgoWizard() {
     setError("");
   }
 
-  function choosePhotos(files: FileList | null) {
+  async function choosePhotos(files: FileList | null) {
     if (!files?.length) return;
-    const available = Math.max(0, MAX_EVIDENCE_PHOTOS_PER_USER - photos.length);
-    const selected = Array.from(files).filter((file) => file.type.startsWith("image/")).slice(0, available);
-    setPhotos((current) => [...current, ...selected.map((file) => ({
-      id: `${Date.now()}-${Math.random()}`,
-      file,
-      previewUrl: URL.createObjectURL(file),
-    }))]);
-    if (photoInputRef.current) photoInputRef.current.value = "";
+    const selectedFiles = Array.from(files);
+    const available = Math.max(0, MAX_EVIDENCE_PHOTOS_PER_USER - photosRef.current.length);
+    const selected = selectedFiles.slice(0, available);
+    const messages: string[] = [];
+    if (selected.length < selectedFiles.length) messages.push(`Puedes adjuntar hasta ${MAX_EVIDENCE_PHOTOS_PER_USER} fotos.`);
+    setPreparingPhotos(true);
+    setError("");
+    try {
+      for (const file of selected) {
+        try {
+          const prepared = await prepareEvidencePhoto(file);
+          const next = [...photosRef.current, {
+            id: `${Date.now()}-${Math.random()}`,
+            file: prepared,
+            previewUrl: URL.createObjectURL(prepared),
+          }];
+          photosRef.current = next;
+          setPhotos(next);
+        } catch (error) {
+          messages.push(error instanceof Error ? `${file.name}: ${error.message}` : `${file.name}: no se pudo preparar.`);
+        }
+      }
+      if (messages.length) setError(messages.join(" "));
+    } finally {
+      setPreparingPhotos(false);
+      if (photoInputRef.current) photoInputRef.current.value = "";
+    }
   }
 
   function removePhoto(id: string) {
-    setPhotos((current) => {
-      const photo = current.find((item) => item.id === id);
-      if (photo) URL.revokeObjectURL(photo.previewUrl);
-      return current.filter((item) => item.id !== id);
-    });
+    const photo = photosRef.current.find((item) => item.id === id);
+    if (photo) URL.revokeObjectURL(photo.previewUrl);
+    const next = photosRef.current.filter((item) => item.id !== id);
+    photosRef.current = next;
+    setPhotos(next);
   }
 
   async function uploadPhotos(workOrderId: number) {
@@ -236,9 +257,9 @@ export function HallazgoWizard() {
 
       <div className="grid gap-4 md:grid-cols-2"><div><label className="block text-sm font-medium">Riesgos e identificación de peligros</label><textarea className="mt-1 min-h-20 w-full rounded-md border bg-background px-3 py-2" value={form.risks} onChange={(e) => setField("risks", e.target.value)} /><VoiceDictation onTranscript={(text) => appendField("risks", text)} /></div><div><label className="block text-sm font-medium">Observaciones</label><textarea className="mt-1 min-h-20 w-full rounded-md border bg-background px-3 py-2" value={form.observations} onChange={(e) => setField("observations", e.target.value)} /><VoiceDictation onTranscript={(text) => appendField("observations", text)} /></div></div>
 
-      <div className="rounded-lg border border-sky-200 bg-sky-50/50 p-4"><div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-semibold">Evidencia fotográfica</h3><p className="text-xs text-muted-foreground">Hasta {MAX_EVIDENCE_PHOTOS_PER_USER} fotos. Puedes tomar una foto directamente desde el teléfono.</p></div><Button type="button" variant="outline" onClick={() => photoInputRef.current?.click()} disabled={photos.length >= MAX_EVIDENCE_PHOTOS_PER_USER}><Camera className="mr-1 h-4 w-4" />Tomar / elegir foto</Button></div><input ref={photoInputRef} type="file" accept="image/*" capture="environment" multiple className="hidden" onChange={(e) => choosePhotos(e.target.files)} />{photos.length > 0 && <div className="mt-3 grid grid-cols-2 gap-3">{photos.map((photo) => <div key={photo.id} className="relative"><img src={photo.previewUrl} alt="Vista previa" className="h-28 w-full rounded-md object-cover" /><button type="button" onClick={() => removePhoto(photo.id)} className="absolute right-1 top-1 rounded-full bg-red-600 p-1 text-white" aria-label="Eliminar foto"><Trash2 className="h-4 w-4" /></button></div>)}</div>}</div>
+      <div className="rounded-lg border border-sky-200 bg-sky-50/50 p-4"><div className="flex items-center justify-between gap-3"><div><h3 className="text-sm font-semibold">Evidencia fotográfica</h3><p className="text-xs text-muted-foreground">Hasta {MAX_EVIDENCE_PHOTOS_PER_USER} fotos. Se reducen automáticamente antes de enviarlas.</p></div><Button type="button" variant="outline" onClick={() => photoInputRef.current?.click()} disabled={preparingPhotos || photos.length >= MAX_EVIDENCE_PHOTOS_PER_USER}><Camera className="mr-1 h-4 w-4" />{preparingPhotos ? "Preparando fotos…" : "Tomar / elegir foto"}</Button></div><input ref={photoInputRef} type="file" accept="image/*,.heic,.heif" capture="environment" multiple className="hidden" onChange={(e) => void choosePhotos(e.target.files)} />{preparingPhotos && <p className="mt-2 text-xs text-muted-foreground" role="status">Convirtiendo y comprimiendo las fotos…</p>}{photos.length > 0 && <div className="mt-3 grid grid-cols-2 gap-3">{photos.map((photo) => <div key={photo.id} className="relative"><img src={photo.previewUrl} alt="Vista previa" className="h-28 w-full rounded-md object-cover" /><button type="button" onClick={() => removePhoto(photo.id)} className="absolute right-1 top-1 rounded-full bg-red-600 p-1 text-white" aria-label="Eliminar foto"><Trash2 className="h-4 w-4" /></button></div>)}</div>}</div>
 
-      <div className="flex justify-end"><Button disabled={saving}><Save className="mr-2 h-4 w-4" />{saving ? "Enviando..." : completed ? "Enviar trabajo realizado" : "Enviar solicitud de atención"}</Button></div>
+      <div className="flex justify-end"><Button disabled={saving || preparingPhotos}><Save className="mr-2 h-4 w-4" />{preparingPhotos ? "Preparando fotos…" : saving ? "Enviando..." : completed ? "Enviar trabajo realizado" : "Enviar solicitud de atención"}</Button></div>
     </form>
   );
 }

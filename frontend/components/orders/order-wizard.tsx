@@ -16,6 +16,7 @@ import { MaterialCodePicker } from "@/components/orders/material-code-picker";
 import { todayDateInputValue } from "@/lib/utils";
 import { usePlantAreaOptions } from "@/lib/use-plant-area-options";
 import { MAX_EVIDENCE_PHOTOS_PER_USER } from "@/lib/evidence";
+import { prepareEvidencePhoto } from "@/lib/prepare-evidence-photo";
 
 interface WorkerOption {
   id: number;
@@ -56,8 +57,6 @@ interface PendingEvidence {
   file: File;
   previewUrl: string;
 }
-
-const EVIDENCE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 function emptyForm(): Form {
   return {
@@ -112,6 +111,7 @@ export function OrderWizard() {
   const [pendingEvidence, setPendingEvidence] = useState<PendingEvidence[]>([]);
   const pendingEvidenceRef = useRef<PendingEvidence[]>([]);
   const [evidenceMessage, setEvidenceMessage] = useState("");
+  const [preparingEvidence, setPreparingEvidence] = useState(false);
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
 
   const draftKey = user ? `mantencion:order-draft:${user.id}` : null;
@@ -220,32 +220,41 @@ export function OrderWizard() {
     setPendingEvidence(next);
   }
 
-  function handlePendingEvidenceFiles(files: FileList | null, input: HTMLInputElement) {
+  async function handlePendingEvidenceFiles(files: FileList | null, input: HTMLInputElement) {
     if (!files?.length) return;
 
     const selectedFiles = Array.from(files);
-    const validFiles = selectedFiles.filter((file) => EVIDENCE_IMAGE_TYPES.has(file.type));
     const available = Math.max(0, MAX_EVIDENCE_PHOTOS_PER_USER - pendingEvidenceRef.current.length);
-    const selected = validFiles.slice(0, available);
+    const selected = selectedFiles.slice(0, available);
     const messages: string[] = [];
 
-    if (validFiles.length < selectedFiles.length) {
-      messages.push("Solo se aceptan imágenes JPG, PNG o WEBP.");
-    }
-    if (selected.length < validFiles.length) {
+    if (selected.length < selectedFiles.length) {
       messages.push(`Puedes adjuntar hasta ${MAX_EVIDENCE_PHOTOS_PER_USER} fotos de emisión por OT.`);
     }
 
-    const additions = selected.map((file) => ({
-      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-      file,
-      previewUrl: URL.createObjectURL(file),
-    }));
-    const next = [...pendingEvidenceRef.current, ...additions];
-    pendingEvidenceRef.current = next;
-    setPendingEvidence(next);
-    setEvidenceMessage(messages.join(" "));
-    input.value = "";
+    setPreparingEvidence(true);
+    setEvidenceMessage("Preparando fotos para subir…");
+    try {
+      for (const file of selected) {
+        try {
+          const prepared = await prepareEvidencePhoto(file);
+          const addition = {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            file: prepared,
+            previewUrl: URL.createObjectURL(prepared),
+          };
+          const next = [...pendingEvidenceRef.current, addition];
+          pendingEvidenceRef.current = next;
+          setPendingEvidence(next);
+        } catch (error) {
+          messages.push(error instanceof Error ? `${file.name}: ${error.message}` : `${file.name}: no se pudo preparar.`);
+        }
+      }
+      setEvidenceMessage(messages.join(" ") || `${selected.length} foto(s) listas. Se comprimen antes de subir.`);
+    } finally {
+      setPreparingEvidence(false);
+      input.value = "";
+    }
   }
 
   async function uploadPendingEvidence(woId: number) {
@@ -876,27 +885,27 @@ export function OrderWizard() {
               <label className="inline-flex cursor-pointer">
                 <input
                   type="file"
-                  accept="image/jpeg,image/png,image/webp"
+                  accept="image/*,.heic,.heif"
                   capture="environment"
                   className="sr-only"
-                  disabled={submitting !== null || pendingEvidence.length >= MAX_EVIDENCE_PHOTOS_PER_USER || createdOrderId !== null}
-                  onChange={(event) => handlePendingEvidenceFiles(event.currentTarget.files, event.currentTarget)}
+                  disabled={preparingEvidence || submitting !== null || pendingEvidence.length >= MAX_EVIDENCE_PHOTOS_PER_USER || createdOrderId !== null}
+                  onChange={(event) => void handlePendingEvidenceFiles(event.currentTarget.files, event.currentTarget)}
                 />
                 <span className="inline-flex h-9 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60">
-                  <Camera className="mr-2 h-4 w-4" /> Tomar foto
+                  {preparingEvidence ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Camera className="mr-2 h-4 w-4" />} {preparingEvidence ? "Preparando…" : "Tomar foto"}
                 </span>
               </label>
               <label className="inline-flex cursor-pointer">
                 <input
                   type="file"
-                  accept="image/jpeg,image/png,image/webp"
+                  accept="image/*,.heic,.heif"
                   multiple
                   className="sr-only"
-                  disabled={submitting !== null || pendingEvidence.length >= MAX_EVIDENCE_PHOTOS_PER_USER || createdOrderId !== null}
-                  onChange={(event) => handlePendingEvidenceFiles(event.currentTarget.files, event.currentTarget)}
+                  disabled={preparingEvidence || submitting !== null || pendingEvidence.length >= MAX_EVIDENCE_PHOTOS_PER_USER || createdOrderId !== null}
+                  onChange={(event) => void handlePendingEvidenceFiles(event.currentTarget.files, event.currentTarget)}
                 />
                 <span className="inline-flex h-9 items-center rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent">
-                  <ImagePlus className="mr-2 h-4 w-4" /> Elegir foto ({MAX_EVIDENCE_PHOTOS_PER_USER - pendingEvidence.length})
+                  {preparingEvidence ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ImagePlus className="mr-2 h-4 w-4" />} {preparingEvidence ? "Preparando…" : `Elegir foto (${MAX_EVIDENCE_PHOTOS_PER_USER - pendingEvidence.length})`}
                 </span>
               </label>
             </div>
@@ -954,7 +963,7 @@ export function OrderWizard() {
             size="lg"
             className="flex-1"
             onClick={() => submit("draft")}
-            disabled={submitting !== null || !formValid}
+            disabled={preparingEvidence || submitting !== null || !formValid}
           >
             {submitting === "draft" ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -967,7 +976,7 @@ export function OrderWizard() {
             size="lg"
             className="flex-1"
             onClick={() => submit("emit")}
-            disabled={submitting !== null || !formValid}
+            disabled={preparingEvidence || submitting !== null || !formValid}
           >
             {submitting === "emit" ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />

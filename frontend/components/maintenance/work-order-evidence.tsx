@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ChevronLeft, ChevronRight, Expand, ImagePlus, Loader2, Camera, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { MAX_EVIDENCE_PHOTOS_PER_USER } from "@/lib/evidence";
+import { prepareEvidencePhoto } from "@/lib/prepare-evidence-photo";
 import { Card, CardContent } from "@/components/ui/card";
 
 type EvidenceStage = "ISSUE" | "WORK";
@@ -201,14 +202,28 @@ export function WorkOrderEvidencePanel({
 
     setUploading(true);
     try {
+      let saved = 0;
+      const errors: string[] = [];
       for (const file of selected) {
-        const form = new FormData();
-        form.append("file", file);
-        form.append("stage", stage);
-        const item = await api.upload<EvidenceItem>(`/api/work-orders/${woId}/evidence`, form, 120000);
-        setItems((current) => [...current, item]);
+        setMessage(`Preparando ${file.name}…`);
+        try {
+          const prepared = await prepareEvidencePhoto(file);
+          setMessage(`Subiendo ${file.name}…`);
+          const form = new FormData();
+          form.append("file", prepared);
+          form.append("stage", stage);
+          const item = await api.upload<EvidenceItem>(`/api/work-orders/${woId}/evidence`, form, 120000);
+          setItems((current) => [...current, item]);
+          saved += 1;
+        } catch (error) {
+          errors.push(error instanceof Error ? `${file.name}: ${error.message}` : `${file.name}: no se pudo procesar.`);
+        }
       }
-      setMessage("Foto guardada en Google Drive.");
+      if (errors.length) {
+        setMessage(`${saved ? `${saved} foto(s) guardada(s). ` : ""}${errors.join(" ")}`);
+      } else {
+        setMessage(`${saved} foto(s) guardada(s) en Google Drive.`);
+      }
     } catch (error) {
       await loadEvidence();
       setMessage(error instanceof Error ? error.message : "No se pudo guardar la foto.");
@@ -260,7 +275,7 @@ export function WorkOrderEvidencePanel({
               <label className="inline-flex cursor-pointer">
                 <input
                   type="file"
-                  accept="image/jpeg,image/png,image/webp"
+                  accept="image/*,.heic,.heif"
                   capture="environment"
                   className="sr-only"
                   disabled={loading || uploading}
@@ -274,7 +289,7 @@ export function WorkOrderEvidencePanel({
               <label className="inline-flex cursor-pointer">
                 <input
                   type="file"
-                  accept="image/jpeg,image/png,image/webp"
+                  accept="image/*,.heic,.heif"
                   multiple
                   className="sr-only"
                   disabled={loading || uploading}
