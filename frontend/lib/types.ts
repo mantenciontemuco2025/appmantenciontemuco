@@ -104,6 +104,32 @@ export interface EquipmentLifeDetail extends EquipmentLifeSummary {
   records: EquipmentLifeRecord[];
 }
 
+export interface EquipmentLifeWorkOrderView {
+  work_order_id: number;
+  equipment_id: number;
+  ot_number: string;
+  original_ot_number: string | null;
+  event_date: string | null;
+  title: string;
+  description: string | null;
+  plant_area_name: string | null;
+  section_name: string | null;
+  equipment_name: string;
+  performed_by: string | null;
+  participants: string[];
+  observations: string | null;
+  completion_notes: string | null;
+  resources_required: string | null;
+  risks: string | null;
+  material_codes: string | null;
+  maintenance_type: string;
+  status: string;
+  worked_duration_minutes: number | null;
+  folio: string | null;
+  voucher_number: string | null;
+  voucher_date: string | null;
+}
+
 export interface EquipmentLifeBackfillResult {
   equipment_total: number;
   equipment_with_work_orders: number;

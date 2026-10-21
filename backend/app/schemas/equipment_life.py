@@ -34,6 +34,34 @@ class EquipmentLifeDetail(EquipmentLifeSummary):
     records: list[EquipmentLifeRecord]
 
 
+class EquipmentLifeWorkOrderView(BaseModel):
+    """Read-only OT fields exposed from the equipment life history."""
+
+    work_order_id: int
+    equipment_id: int
+    ot_number: str
+    original_ot_number: str | None = None
+    event_date: date | None = None
+    title: str
+    description: str | None = None
+    plant_area_name: str | None = None
+    section_name: str | None = None
+    equipment_name: str
+    performed_by: str | None = None
+    participants: list[str] = []
+    observations: str | None = None
+    completion_notes: str | None = None
+    resources_required: str | None = None
+    risks: str | None = None
+    material_codes: str | None = None
+    maintenance_type: str
+    status: str
+    worked_duration_minutes: int | None = None
+    folio: str | None = None
+    voucher_number: str | None = None
+    voucher_date: date | None = None
+
+
 class EquipmentLifeBackfillPayload(BaseModel):
     include_drafts: bool = False
 

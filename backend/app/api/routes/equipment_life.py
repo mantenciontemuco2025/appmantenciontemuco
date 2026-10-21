@@ -23,6 +23,7 @@ from app.schemas.equipment_life import (
     EquipmentLifeDetail,
     EquipmentLifeRecord,
     EquipmentLifeSummary,
+    EquipmentLifeWorkOrderView,
 )
 from app.services import equipment_life as life_service
 
@@ -224,6 +225,72 @@ async def get_equipment_life(
     )
     # Release the read transaction before FastAPI serializes the potentially
     # large OT history response.
+    await db.commit()
+    return response
+
+
+@router.get(
+    "/equipment/{equipment_id}/work-orders/{work_order_id}",
+    response_model=EquipmentLifeWorkOrderView,
+)
+async def get_equipment_life_work_order(
+    equipment_id: int,
+    work_order_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> EquipmentLifeWorkOrderView:
+    """Return a read-only OT view only through its linked equipment history.
+
+    Workers may inspect issued OTs associated with equipment, while the normal
+    `/api/work-orders/{id}` access rules and fulfillment workflow stay intact.
+    """
+    result = await db.execute(
+        select(WorkOrder)
+        .options(
+            selectinload(WorkOrder.equipment).selectinload(Equipment.area),
+            selectinload(WorkOrder.equipment).selectinload(Equipment.plant_area),
+            selectinload(WorkOrder.completed_by_user),
+            selectinload(WorkOrder.responsible_user),
+            selectinload(WorkOrder.participants),
+        )
+        .where(
+            WorkOrder.id == work_order_id,
+            WorkOrder.equipment_id == equipment_id,
+        )
+    )
+    wo = result.scalar_one_or_none()
+    if wo is None or not _eligible_work_order(wo):
+        # A 404 avoids confirming that an unrelated or draft OT exists.
+        raise HTTPException(status_code=404, detail="OT no disponible en la hoja de vida de este equipo")
+
+    equipment = wo.equipment
+    response = EquipmentLifeWorkOrderView(
+        work_order_id=wo.id,
+        equipment_id=equipment.id,
+        ot_number=wo.ot_number,
+        original_ot_number=wo.original_ot_number,
+        event_date=_work_order_event_date(wo),
+        title=wo.title,
+        description=wo.description,
+        plant_area_name=equipment.plant_area.name if equipment.plant_area else wo.plant_area,
+        section_name=equipment.area.name if equipment.area else wo.section_name,
+        equipment_name=equipment.name,
+        performed_by=_performer_name(wo),
+        participants=[person.full_name for person in (wo.participants or [])],
+        observations=wo.observations,
+        completion_notes=wo.completion_notes,
+        resources_required=wo.resources_required,
+        risks=wo.risks,
+        material_codes=wo.material_codes,
+        maintenance_type=life_service._maintenance_text(wo.maintenance_type),
+        status=life_service._status_text(wo.status),
+        worked_duration_minutes=wo.worked_duration_minutes or (
+            int(wo.actual_duration_minutes) if wo.actual_duration_minutes else None
+        ),
+        folio=wo.folio,
+        voucher_number=wo.voucher_number,
+        voucher_date=wo.voucher_date,
+    )
     await db.commit()
     return response
 
