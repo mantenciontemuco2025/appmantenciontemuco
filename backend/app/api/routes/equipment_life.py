@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -15,17 +15,20 @@ from app.db.session import async_session, get_db
 from app.models.equipment import Equipment
 from app.models.user import User, UserRole
 from app.models.work_order import WorkOrder, WorkOrderStatus
+from app.models.work_order_evidence import WorkOrderEvidence
 from app.schemas.equipment_life import (
     EquipmentLifeBackfillAccepted,
     EquipmentLifeBackfillPayload,
     EquipmentLifeBackfillResult,
     EquipmentLifeBackfillStatus,
     EquipmentLifeDetail,
+    EquipmentLifeEvidence,
     EquipmentLifeRecord,
     EquipmentLifeSummary,
     EquipmentLifeWorkOrderView,
 )
 from app.services import equipment_life as life_service
+from app.services import google_drive as drive_service
 
 
 router = APIRouter(prefix="/api/equipment-life", tags=["equipment-life"])
@@ -249,8 +252,14 @@ async def get_equipment_life_work_order(
         .options(
             selectinload(WorkOrder.equipment).selectinload(Equipment.area),
             selectinload(WorkOrder.equipment).selectinload(Equipment.plant_area),
+            selectinload(WorkOrder.area),
+            selectinload(WorkOrder.created_by),
+            selectinload(WorkOrder.started_by_user),
             selectinload(WorkOrder.completed_by_user),
+            selectinload(WorkOrder.approved_by_user),
             selectinload(WorkOrder.responsible_user),
+            selectinload(WorkOrder.supervisor_validator),
+            selectinload(WorkOrder.hallazgo_reviewed_by),
             selectinload(WorkOrder.participants),
         )
         .where(
@@ -263,36 +272,180 @@ async def get_equipment_life_work_order(
         # A 404 avoids confirming that an unrelated or draft OT exists.
         raise HTTPException(status_code=404, detail="OT no disponible en la hoja de vida de este equipo")
 
+    evidence_result = await db.execute(
+        select(WorkOrderEvidence)
+        .where(WorkOrderEvidence.work_order_id == wo.id)
+        .order_by(WorkOrderEvidence.uploaded_at, WorkOrderEvidence.id)
+    )
+    evidence = [
+        EquipmentLifeEvidence(
+            id=item.id,
+            filename=item.filename,
+            mime_type=item.mime_type,
+            stage=item.stage,
+            uploaded_by_name=item.uploaded_by_name,
+            uploaded_at=item.uploaded_at,
+        )
+        for item in evidence_result.scalars().all()
+    ]
     equipment = wo.equipment
     response = EquipmentLifeWorkOrderView(
         work_order_id=wo.id,
         equipment_id=equipment.id,
         ot_number=wo.ot_number,
         original_ot_number=wo.original_ot_number,
+        is_historical=wo.is_historical,
+        hallazgo_folio=wo.hallazgo_folio,
+        hallazgo_kind=wo.hallazgo_kind,
+        hallazgo_priority=wo.hallazgo_priority,
+        hallazgo_status=wo.hallazgo_status,
+        hallazgo_review_notes=wo.hallazgo_review_notes,
+        hallazgo_reviewed_at=wo.hallazgo_reviewed_at,
+        hallazgo_reviewed_by_name=wo.hallazgo_reviewed_by.full_name if wo.hallazgo_reviewed_by else None,
         event_date=_work_order_event_date(wo),
         title=wo.title,
         description=wo.description,
+        request_date=wo.request_date,
+        execution_date=wo.execution_date,
+        scheduled_date=wo.scheduled_date,
+        due_date=wo.due_date,
         plant_area_name=equipment.plant_area.name if equipment.plant_area else wo.plant_area,
         section_name=equipment.area.name if equipment.area else wo.section_name,
         equipment_name=equipment.name,
+        area_name=wo.area.name if wo.area else None,
+        requested_by=wo.requested_by,
+        approved_by=wo.approved_by,
         performed_by=_performer_name(wo),
+        responsible_user=wo.responsible_user.full_name if wo.responsible_user else None,
         participants=[person.full_name for person in (wo.participants or [])],
+        participant_names=[name.strip() for name in (wo.participant_names or "").split(",") if name.strip()],
         observations=wo.observations,
         completion_notes=wo.completion_notes,
         resources_required=wo.resources_required,
         risks=wo.risks,
         material_codes=wo.material_codes,
         maintenance_type=life_service._maintenance_text(wo.maintenance_type),
+        estimated_time=wo.estimated_time,
+        loto_status=wo.loto_status,
+        loto_controls=wo.loto_controls or [],
         status=life_service._status_text(wo.status),
+        is_planned=wo.is_planned,
+        submitted_for_review=wo.submitted_for_review,
+        is_external_work=wo.is_external_work,
+        external_executor_name=wo.external_executor_name,
+        external_company=wo.external_company,
+        external_quote_number=wo.external_quote_number,
+        external_oc_number=wo.external_oc_number,
+        external_invoice_number=wo.external_invoice_number,
+        external_account_number=wo.external_account_number,
+        work_time_mode=wo.work_time_mode,
+        work_start_time=wo.work_start_time,
+        work_end_time=wo.work_end_time,
         worked_duration_minutes=wo.worked_duration_minutes or (
             int(wo.actual_duration_minutes) if wo.actual_duration_minutes else None
         ),
+        actual_duration_minutes=wo.actual_duration_minutes,
         folio=wo.folio,
         voucher_number=wo.voucher_number,
         voucher_date=wo.voucher_date,
+        requested_signature=wo.requested_signature,
+        approved_signature=wo.approved_signature,
+        created_by=wo.created_by.full_name if wo.created_by else None,
+        created_at=wo.created_at,
+        updated_at=wo.updated_at,
+        started_at=wo.started_at,
+        started_by=wo.started_by_user.full_name if wo.started_by_user else None,
+        completed_at=wo.completed_at,
+        completed_by=wo.completed_by_user.full_name if wo.completed_by_user else None,
+        approved_at=wo.approved_at,
+        approved_by_user=wo.approved_by_user.full_name if wo.approved_by_user else None,
+        requires_supervisor_validation=wo.requires_supervisor_validation,
+        supervisor_review_status=wo.supervisor_review_status,
+        supervisor_reviewed_at=wo.supervisor_reviewed_at,
+        supervisor_review_notes=wo.supervisor_review_notes,
+        supervisor_validator=wo.supervisor_validator.full_name if wo.supervisor_validator else None,
+        cancellation_reason=wo.cancellation_reason,
+        returned_at=wo.returned_at,
+        return_reason=wo.return_reason,
+        evidence=evidence,
     )
     await db.commit()
     return response
+
+
+@router.get(
+    "/equipment/{equipment_id}/work-orders/{work_order_id}/evidence",
+    response_model=list[EquipmentLifeEvidence],
+)
+async def list_equipment_life_work_order_evidence(
+    equipment_id: int,
+    work_order_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """List photos for an issued OT through its read-only equipment history."""
+    wo = await db.scalar(
+        select(WorkOrder).where(
+            WorkOrder.id == work_order_id,
+            WorkOrder.equipment_id == equipment_id,
+        )
+    )
+    if wo is None or not _eligible_work_order(wo):
+        raise HTTPException(status_code=404, detail="OT no disponible en la hoja de vida de este equipo")
+    result = await db.scalars(
+        select(WorkOrderEvidence)
+        .where(WorkOrderEvidence.work_order_id == work_order_id)
+        .order_by(WorkOrderEvidence.uploaded_at, WorkOrderEvidence.id)
+    )
+    return [
+        EquipmentLifeEvidence(
+            id=item.id,
+            filename=item.filename,
+            mime_type=item.mime_type,
+            stage=item.stage,
+            uploaded_by_name=item.uploaded_by_name,
+            uploaded_at=item.uploaded_at,
+        )
+        for item in result.all()
+    ]
+
+
+@router.get(
+    "/equipment/{equipment_id}/work-orders/{work_order_id}/evidence/{evidence_id}/content"
+)
+async def get_equipment_life_work_order_evidence_content(
+    equipment_id: int,
+    work_order_id: int,
+    evidence_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """Read private Drive evidence without granting OT edit permissions."""
+    wo = await db.scalar(
+        select(WorkOrder).where(
+            WorkOrder.id == work_order_id,
+            WorkOrder.equipment_id == equipment_id,
+        )
+    )
+    if wo is None or not _eligible_work_order(wo):
+        raise HTTPException(status_code=404, detail="OT no disponible en la hoja de vida de este equipo")
+    evidence = await db.scalar(
+        select(WorkOrderEvidence).where(
+            WorkOrderEvidence.id == evidence_id,
+            WorkOrderEvidence.work_order_id == work_order_id,
+        )
+    )
+    if evidence is None:
+        raise HTTPException(status_code=404, detail="Foto de evidencia no encontrada")
+    drive_file_id = evidence.drive_file_id
+    mime_type = evidence.mime_type
+    await db.commit()
+    try:
+        contents = await asyncio.to_thread(drive_service.download_ot_evidence, drive_file_id)
+    except Exception as exc:
+        logger.exception("No se pudo leer evidencia %s desde hoja de vida", evidence_id)
+        raise HTTPException(status_code=502, detail="No se pudo cargar la foto desde Google Drive") from exc
+    return Response(contents, media_type=mime_type, headers={"Cache-Control": "private, max-age=300"})
 
 
 async def _run_equipment_life_backfill(

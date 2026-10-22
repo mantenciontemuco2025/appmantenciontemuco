@@ -74,6 +74,83 @@ async def test_create_work_order(client, seed_data, monkeypatch):
     assert latest["ot_sheet_sync_status"] == "PENDING"
 
 
+async def test_equipment_life_shows_full_readonly_ot_and_evidence_to_other_workers(
+    client, seed_data, db_session_factory, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.api.routes.work_orders.drive_service.create_ot_file",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Drive mocked")),
+    )
+    admin = auth_headers(await get_token(client, "admin@test.com"))
+    worker = auth_headers(await get_token(client, "valdes@test.com"))
+    created = await client.post(
+        "/api/work-orders",
+        json={
+            "title": "Reparación completa de filtro",
+            "plant_area": "CEBADA",
+            "area_id": seed_data["area"].id,
+            "equipment_id": seed_data["equipment"].id,
+            "maintenance_type": "CORRECTIVE",
+            "description": "Descripción íntegra",
+            "request_date": "2026-05-01",
+            "execution_date": "2026-05-02",
+            "requested_by": "Jefatura",
+            "resources_required": "Rodamientos y herramientas",
+            "risks": "Aislar energía",
+            "material_codes": "M-101, M-202",
+            "external_oc_number": "OC-778",
+            "external_oc_amount": "125000",
+            "is_external_work": True,
+            "external_executor_name": "Contratista de prueba",
+            "emit": True,
+        },
+        headers=admin,
+    )
+    assert created.status_code == 201, created.text
+    work_order_id = created.json()["id"]
+
+    async with db_session_factory() as db:
+        db.add(WorkOrderEvidence(
+            work_order_id=work_order_id,
+            drive_file_id="evidence-readonly-test",
+            filename="reparacion.jpg",
+            mime_type="image/jpeg",
+            stage="WORK",
+            uploaded_by_user_id=seed_data["admin"].id,
+            uploaded_by_name="Admin",
+        ))
+        await db.commit()
+
+    # The regular OT detail remains permission-scoped; the life-sheet route is
+    # intentionally read-only and available to any signed-in worker.
+    restricted = await client.get(f"/api/work-orders/{work_order_id}", headers=worker)
+    assert restricted.status_code == 403
+
+    detail = await client.get(
+        f"/api/equipment-life/equipment/{seed_data['equipment'].id}/work-orders/{work_order_id}",
+        headers=worker,
+    )
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["description"] == "Descripción íntegra"
+    assert body["resources_required"] == "Rodamientos y herramientas"
+    assert body["risks"] == "Aislar energía"
+    assert body["material_codes"] == "M-101, M-202"
+    assert body["external_oc_number"] == "OC-778"
+    assert "external_oc_amount" not in body
+    assert body["evidence"][0]["filename"] == "reparacion.jpg"
+
+    from app.api.routes import equipment_life
+
+    monkeypatch.setattr(equipment_life.drive_service, "download_ot_evidence", lambda *_args: b"image")
+    photo = await client.get(
+        f"/api/equipment-life/equipment/{seed_data['equipment'].id}/work-orders/{work_order_id}/evidence/{body['evidence'][0]['id']}/content",
+        headers=worker,
+    )
+    assert photo.status_code == 200
+    assert photo.content == b"image"
+
+
 async def test_admin_can_queue_monthly_material_backfill_without_duplicates(
     client, seed_data, db_session_factory
 ):
