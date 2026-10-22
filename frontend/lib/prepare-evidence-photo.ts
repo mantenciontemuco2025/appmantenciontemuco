@@ -1,6 +1,8 @@
 const MAX_EDGE = 1920;
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const MAX_SOURCE_PIXELS = 100_000_000;
+const MAX_DIRECT_UPLOAD_BYTES = 12 * 1024 * 1024;
+const DIRECT_UPLOAD_MIMES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 function isHeif(file: File) {
   return /\.(heic|heif)$/i.test(file.name) || /image\/(heic|heif)/i.test(file.type);
@@ -52,6 +54,13 @@ function canvasBlob(canvas: HTMLCanvasElement, quality: number) {
 export async function prepareEvidencePhoto(file: File): Promise<File> {
   if (!file.type.startsWith("image/") && !isHeif(file)) {
     throw new Error("El archivo seleccionado no parece ser una imagen.");
+  }
+
+  // Keep the previous upload path for ordinary photos and screenshots. The API
+  // already validates and normalizes these formats, while decoding every image
+  // in the phone's PWA can fail or consume excessive memory on Android.
+  if (DIRECT_UPLOAD_MIMES.has(file.type) && file.size <= MAX_DIRECT_UPLOAD_BYTES) {
+    return file;
   }
 
   let source: Blob = file;
