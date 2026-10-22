@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { Wrench, LayoutDashboard, ClipboardList, ClipboardCheck, Users, LogOut, PenLine, Droplets, Siren, History } from "lucide-react";
+import { Wrench, LayoutDashboard, ClipboardList, ClipboardCheck, Users, LogOut, PenLine, Droplets, Siren, History, Biohazard } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NotificationBell } from "@/components/notifications/bell";
 import { getAuthUser } from "@/lib/auth";
@@ -16,6 +16,7 @@ interface NavItem {
   adminOnly?: boolean;
   managerOnly?: boolean;
   waterRegisterOnly?: boolean;
+  hazardousWasteOnly?: boolean;
   hallazgoOnly?: boolean;
 }
 
@@ -27,6 +28,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/ordenes", label: "Órdenes", icon: <ClipboardList className="h-4 w-4" />, managerOnly: true },
   { href: "/perfil", label: "Mi perfil", icon: <PenLine className="h-4 w-4" /> },
   { href: "/registro-agua", label: "Planta de RILES", icon: <Droplets className="h-4 w-4" />, waterRegisterOnly: true },
+  { href: "/residuos-peligrosos", label: "Residuos peligrosos", icon: <Biohazard className="h-4 w-4" />, hazardousWasteOnly: true },
   { href: "/admin", label: "Admin", icon: <Users className="h-4 w-4" />, adminOnly: true },
 ];
 
@@ -124,6 +126,7 @@ export function Shell({
                 (!item.managerOnly || role === "ADMIN" || role === "SUPERVISOR") &&
                 (!item.hallazgoOnly || role === "ADMIN" || role === "WORKER") &&
                 (!item.waterRegisterOnly || canAccessWater)
+                && (!item.hazardousWasteOnly || role === "ADMIN")
             ).map((item) => (
               <Link
                 key={item.href}

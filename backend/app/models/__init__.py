@@ -20,6 +20,7 @@ from app.models.water_register import (
     WaterRegisterRecord,
     WaterMeterReading,
 )
+from app.models.hazardous_waste import HazardousWasteRecord, HazardousWasteSettings
 
 __all__ = [
     "User",
@@ -45,4 +46,6 @@ __all__ = [
     "WaterRegisterRecord",
     "WaterMeterReading",
     "WaterDqoSample",
+    "HazardousWasteRecord",
+    "HazardousWasteSettings",
 ]

@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
-from app.api.routes import auth, users, catalogs, maintenance, audit, admin, materials, work_orders, notifications, push_subscriptions, kpis, water_register, equipment_life
+from app.api.routes import auth, users, catalogs, maintenance, audit, admin, materials, work_orders, notifications, push_subscriptions, kpis, water_register, equipment_life, hazardous_waste
 from app.services import email_service, push_service
 
 logger = logging.getLogger(__name__)
@@ -19,6 +19,7 @@ async def lifespan(app: FastAPI):
     push_worker = asyncio.create_task(push_service.worker())
     email_worker = asyncio.create_task(email_service.worker())
     water_register_worker = asyncio.create_task(water_register.water_register_sync_worker())
+    hazardous_waste_worker = asyncio.create_task(hazardous_waste.hazardous_waste_sync_worker())
     try:
         yield
     finally:
@@ -26,8 +27,10 @@ async def lifespan(app: FastAPI):
         push_worker.cancel()
         email_worker.cancel()
         water_register_worker.cancel()
+        hazardous_waste_worker.cancel()
         await asyncio.gather(
-            sync_worker, push_worker, email_worker, water_register_worker, return_exceptions=True
+            sync_worker, push_worker, email_worker, water_register_worker,
+            hazardous_waste_worker, return_exceptions=True
         )
 
 
@@ -61,6 +64,7 @@ app.include_router(admin.router)
 app.include_router(kpis.router)
 app.include_router(water_register.router)
 app.include_router(equipment_life.router)
+app.include_router(hazardous_waste.router)
 
 @app.get("/health", tags=["health"])
 async def health():

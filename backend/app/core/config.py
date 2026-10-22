@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     GOOGLE_WATER_REGISTER_SPREADSHEET_ID: str = ""
     GOOGLE_WATER_REGISTER_SHEET_NAME: str = "base de datos"
 
+    # Hazardous-waste register. When set, this environment-specific ID is the
+    # only spreadsheet the module may connect to (Render/local can differ).
+    GOOGLE_HAZARDOUS_WASTE_SPREADSHEET_ID: str = ""
+
     # Google Drive — Work Order integration
     GOOGLE_OT_TEMPLATE_FILE_ID: str = ""
     # Optional dedicated template for contractor/external work orders.
