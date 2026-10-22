@@ -275,7 +275,7 @@ export function WorkOrderEvidencePanel({
               <label className="inline-flex cursor-pointer">
                 <input
                   type="file"
-                  accept="image/*,.heic,.heif"
+                  accept="image/jpeg,image/png,image/webp"
                   capture="environment"
                   className="sr-only"
                   disabled={loading || uploading}
@@ -289,7 +289,7 @@ export function WorkOrderEvidencePanel({
               <label className="inline-flex cursor-pointer">
                 <input
                   type="file"
-                  accept="image/*,.heic,.heif"
+                  accept="image/jpeg,image/png,image/webp"
                   multiple
                   className="sr-only"
                   disabled={loading || uploading}

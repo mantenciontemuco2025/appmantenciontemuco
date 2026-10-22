@@ -885,7 +885,7 @@ export function OrderWizard() {
               <label className="inline-flex cursor-pointer">
                 <input
                   type="file"
-                  accept="image/*,.heic,.heif"
+                  accept="image/jpeg,image/png,image/webp"
                   capture="environment"
                   className="sr-only"
                   disabled={preparingEvidence || submitting !== null || pendingEvidence.length >= MAX_EVIDENCE_PHOTOS_PER_USER || createdOrderId !== null}
@@ -898,7 +898,7 @@ export function OrderWizard() {
               <label className="inline-flex cursor-pointer">
                 <input
                   type="file"
-                  accept="image/*,.heic,.heif"
+                  accept="image/jpeg,image/png,image/webp"
                   multiple
                   className="sr-only"
                   disabled={preparingEvidence || submitting !== null || pendingEvidence.length >= MAX_EVIDENCE_PHOTOS_PER_USER || createdOrderId !== null}
