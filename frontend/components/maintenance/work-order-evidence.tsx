@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Expand, ImagePlus, Loader2, Camera, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { MAX_EVIDENCE_PHOTOS_PER_USER } from "@/lib/evidence";
@@ -130,6 +130,8 @@ export function WorkOrderEvidencePanel({
   const [message, setMessage] = useState<string | null>(null);
   const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({});
   const [viewerItemId, setViewerItemId] = useState<number | null>(null);
+  const cameraEvidenceInputRef = useRef<HTMLInputElement>(null);
+  const galleryEvidenceInputRef = useRef<HTMLInputElement>(null);
 
   const registerPhotoUrl = useCallback((itemId: number, url: string | null) => {
     setPhotoUrls((current) => {
@@ -272,34 +274,42 @@ export function WorkOrderEvidencePanel({
           </div>
           {canUpload && available > 0 && (
             <div className="flex flex-wrap gap-2">
-              <label className="inline-flex cursor-pointer">
-                <input
-                  type="file"
-                  accept="image/*,.heic,.heif"
-                  capture="environment"
-                  className="sr-only"
-                  disabled={loading || uploading}
-                  onChange={(event) => void handleFiles(event.currentTarget.files, event.currentTarget)}
-                />
-                <span className="inline-flex h-9 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90">
-                  {uploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Camera className="mr-2 h-4 w-4" />}
-                  {uploading ? "Subiendo…" : "Tomar foto"}
-                </span>
-              </label>
-              <label className="inline-flex cursor-pointer">
-                <input
-                  type="file"
-                  accept="image/*,.heic,.heif"
-                  multiple
-                  className="sr-only"
-                  disabled={loading || uploading}
-                  onChange={(event) => void handleFiles(event.currentTarget.files, event.currentTarget)}
-                />
-                <span className="inline-flex h-9 items-center rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent">
-                  {uploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ImagePlus className="mr-2 h-4 w-4" />}
-                  {uploading ? "Subiendo…" : `Elegir foto (${available} disponible${available === 1 ? "" : "s"})`}
-                </span>
-              </label>
+              <input
+                ref={cameraEvidenceInputRef}
+                type="file"
+                accept="image/*,.heic,.heif"
+                capture="environment"
+                className="hidden"
+                disabled={loading || uploading}
+                onChange={(event) => void handleFiles(event.currentTarget.files, event.currentTarget)}
+              />
+              <input
+                ref={galleryEvidenceInputRef}
+                type="file"
+                accept="image/*,.heic,.heif"
+                multiple
+                className="hidden"
+                disabled={loading || uploading}
+                onChange={(event) => void handleFiles(event.currentTarget.files, event.currentTarget)}
+              />
+              <button
+                type="button"
+                className="inline-flex h-9 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+                disabled={loading || uploading}
+                onClick={() => cameraEvidenceInputRef.current?.click()}
+              >
+                {uploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Camera className="mr-2 h-4 w-4" />}
+                {uploading ? "Subiendo…" : "Tomar foto"}
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-9 items-center rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent disabled:opacity-60"
+                disabled={loading || uploading}
+                onClick={() => galleryEvidenceInputRef.current?.click()}
+              >
+                {uploading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ImagePlus className="mr-2 h-4 w-4" />}
+                {uploading ? "Subiendo…" : `Elegir foto (${available} disponible${available === 1 ? "" : "s"})`}
+              </button>
             </div>
           )}
         </div>

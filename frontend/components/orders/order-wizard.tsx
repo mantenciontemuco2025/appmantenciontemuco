@@ -110,6 +110,8 @@ export function OrderWizard() {
   const [form, setForm] = useState<Form>(() => emptyForm());
   const [pendingEvidence, setPendingEvidence] = useState<PendingEvidence[]>([]);
   const pendingEvidenceRef = useRef<PendingEvidence[]>([]);
+  const cameraEvidenceInputRef = useRef<HTMLInputElement>(null);
+  const galleryEvidenceInputRef = useRef<HTMLInputElement>(null);
   const [evidenceMessage, setEvidenceMessage] = useState("");
   const [preparingEvidence, setPreparingEvidence] = useState(false);
   const [createdOrderId, setCreatedOrderId] = useState<number | null>(null);
@@ -882,32 +884,40 @@ export function OrderWizard() {
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <label className="inline-flex cursor-pointer">
-                <input
-                  type="file"
-                  accept="image/*,.heic,.heif"
-                  capture="environment"
-                  className="sr-only"
-                  disabled={preparingEvidence || submitting !== null || pendingEvidence.length >= MAX_EVIDENCE_PHOTOS_PER_USER || createdOrderId !== null}
-                  onChange={(event) => void handlePendingEvidenceFiles(event.currentTarget.files, event.currentTarget)}
-                />
-                <span className="inline-flex h-9 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60">
-                  {preparingEvidence ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Camera className="mr-2 h-4 w-4" />} {preparingEvidence ? "Preparando…" : "Tomar foto"}
-                </span>
-              </label>
-              <label className="inline-flex cursor-pointer">
-                <input
-                  type="file"
-                  accept="image/*,.heic,.heif"
-                  multiple
-                  className="sr-only"
-                  disabled={preparingEvidence || submitting !== null || pendingEvidence.length >= MAX_EVIDENCE_PHOTOS_PER_USER || createdOrderId !== null}
-                  onChange={(event) => void handlePendingEvidenceFiles(event.currentTarget.files, event.currentTarget)}
-                />
-                <span className="inline-flex h-9 items-center rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent">
-                  {preparingEvidence ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ImagePlus className="mr-2 h-4 w-4" />} {preparingEvidence ? "Preparando…" : `Elegir foto (${MAX_EVIDENCE_PHOTOS_PER_USER - pendingEvidence.length})`}
-                </span>
-              </label>
+              <input
+                ref={cameraEvidenceInputRef}
+                type="file"
+                accept="image/*,.heic,.heif"
+                capture="environment"
+                className="hidden"
+                disabled={preparingEvidence || submitting !== null || pendingEvidence.length >= MAX_EVIDENCE_PHOTOS_PER_USER || createdOrderId !== null}
+                onChange={(event) => void handlePendingEvidenceFiles(event.currentTarget.files, event.currentTarget)}
+              />
+              <input
+                ref={galleryEvidenceInputRef}
+                type="file"
+                accept="image/*,.heic,.heif"
+                multiple
+                className="hidden"
+                disabled={preparingEvidence || submitting !== null || pendingEvidence.length >= MAX_EVIDENCE_PHOTOS_PER_USER || createdOrderId !== null}
+                onChange={(event) => void handlePendingEvidenceFiles(event.currentTarget.files, event.currentTarget)}
+              />
+              <button
+                type="button"
+                className="inline-flex h-9 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+                disabled={preparingEvidence || submitting !== null || pendingEvidence.length >= MAX_EVIDENCE_PHOTOS_PER_USER || createdOrderId !== null}
+                onClick={() => cameraEvidenceInputRef.current?.click()}
+              >
+                {preparingEvidence ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Camera className="mr-2 h-4 w-4" />} {preparingEvidence ? "Preparando…" : "Tomar foto"}
+              </button>
+              <button
+                type="button"
+                className="inline-flex h-9 items-center rounded-md border border-input bg-background px-3 text-sm font-medium hover:bg-accent disabled:opacity-60"
+                disabled={preparingEvidence || submitting !== null || pendingEvidence.length >= MAX_EVIDENCE_PHOTOS_PER_USER || createdOrderId !== null}
+                onClick={() => galleryEvidenceInputRef.current?.click()}
+              >
+                {preparingEvidence ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <ImagePlus className="mr-2 h-4 w-4" />} {preparingEvidence ? "Preparando…" : `Elegir foto (${MAX_EVIDENCE_PHOTOS_PER_USER - pendingEvidence.length})`}
+              </button>
             </div>
           </div>
 
