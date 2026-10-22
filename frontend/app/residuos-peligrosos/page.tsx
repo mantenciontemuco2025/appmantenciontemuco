@@ -55,11 +55,14 @@ export default function HazardousWastePage() {
   const [disposing, setDisposing] = useState<RecordRow | null>(null);
   const [disposalDate, setDisposalDate] = useState("");
   const [disposalManager, setDisposalManager] = useState("LOGISAMB");
+  const [bulkDisposalOpen, setBulkDisposalOpen] = useState(false);
+  const [serverStoredCount, setServerStoredCount] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const status = await api.get<{ configured: boolean; environment_configured?: boolean; configuration_error?: string | null; spreadsheet_url?: string | null }>("/api/hazardous-waste/status");
+      const status = await api.get<{ configured: boolean; environment_configured?: boolean; configuration_error?: string | null; spreadsheet_url?: string | null; stored_records?: number }>("/api/hazardous-waste/status");
       setConfigured(status.configured);
+      setServerStoredCount(typeof status.stored_records === "number" ? status.stored_records : null);
       setEnvironmentConfigured(Boolean(status.environment_configured));
       setConfigurationError(status.configuration_error || "");
       if (status.spreadsheet_url) setSheetUrl(status.spreadsheet_url);
@@ -82,7 +85,7 @@ export default function HazardousWastePage() {
     const timer = window.setInterval(() => { void load(); }, 4000);
     return () => window.clearInterval(timer);
   }, [records, load]);
-  const storedCount = useMemo(() => records.filter((r) => !r.disposal_date).length, [records]);
+  const storedCount = useMemo(() => serverStoredCount ?? records.filter((r) => !r.disposal_date).length, [records, serverStoredCount]);
   const visibleRecords = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("es");
     return records.filter((row) => {
@@ -151,6 +154,31 @@ export default function HazardousWastePage() {
     finally { setBusy(false); }
   }
 
+  function beginBulkDisposal() {
+    const now = new Date();
+    const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+    setDisposalDate(localDate);
+    setDisposalManager("LOGISAMB");
+    setBulkDisposalOpen(true);
+    setDisposing(null);
+    setError("");
+    setMessage("");
+  }
+
+  async function registerBulkDisposal(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true); setError(""); setMessage("");
+    try {
+      const result = await api.post<{ updated: number; disposal_date: string; manager: string }>("/api/hazardous-waste/dispose-all", {
+        disposal_date: disposalDate, manager: disposalManager.trim(),
+      });
+      setMessage(`Retiro masivo registrado: ${result.updated} ingresos quedaron como retirados por ${result.manager} el ${dateText(result.disposal_date)}. El stock se recalculó y se sincronizará con Google Sheets.`);
+      setBulkDisposalOpen(false);
+      await load();
+    } catch (e) { setError(e instanceof Error ? e.message : "No se pudo registrar el retiro masivo."); }
+    finally { setBusy(false); }
+  }
+
   if (loading || !user) return <PageLoading message={loading ? "Validando sesión…" : "Redirigiendo al inicio de sesión…"} />;
   if (user.role !== "ADMIN") return <Shell fullName={user.full_name} role={user.role} onLogout={logout}><Card className="p-6">Este módulo está disponible solo para administradores.</Card></Shell>;
 
@@ -182,7 +210,8 @@ export default function HazardousWastePage() {
         </form>
       </Card>
 
-      <Card className="p-4 sm:p-5"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Historial</h2><p className="text-sm text-muted-foreground">{storedCount} ingresos sin disposición registrada.</p></div><div className="flex flex-wrap gap-2"><Input className="w-56" placeholder="Buscar residuo, código u origen" value={search} onChange={(e) => setSearch(e.target.value)} /><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={storedOnly} onChange={(e) => setStoredOnly(e.target.checked)} />Solo almacenados</label><Button variant="outline" onClick={() => void load()}><RefreshCw className="mr-2 h-4 w-4" />Actualizar</Button></div></div>
+      <Card className="p-4 sm:p-5"><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">Historial</h2><p className="text-sm text-muted-foreground">{storedCount} ingresos sin disposición registrada.</p></div><div className="flex flex-wrap gap-2"><Input className="w-56" placeholder="Buscar residuo, código u origen" value={search} onChange={(e) => setSearch(e.target.value)} /><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={storedOnly} onChange={(e) => setStoredOnly(e.target.checked)} />Solo almacenados</label><Button variant="outline" onClick={() => void load()}><RefreshCw className="mr-2 h-4 w-4" />Actualizar</Button>{storedCount > 0 && <Button variant="outline" className="border-amber-300 text-amber-900 hover:bg-amber-50" onClick={beginBulkDisposal}>Retirar todos ({storedCount})</Button>}</div></div>
+        {bulkDisposalOpen && <form onSubmit={registerBulkDisposal} className="mb-4 rounded-lg border border-red-300 bg-red-50 p-4"><h3 className="font-semibold text-red-900">Retirar todos los residuos almacenados</h3><p className="mb-3 mt-1 text-sm text-red-900">Esta acción marcará como retirados los {storedCount} ingresos actualmente almacenados, en todos los años y sin importar la búsqueda o los filtros. Se recalculará el acumulado y los cambios quedarán en cola para Google Sheets. Confirma que el retiro físico de todos ya ocurrió.</p><div className="flex flex-wrap items-end gap-3"><label className="text-sm">Fecha de retiro<Input className="mt-1" type="date" value={disposalDate} onChange={(e) => setDisposalDate(e.target.value)} required /></label><label className="text-sm">Gestor<Input className="mt-1" list="hazardous-waste-people" value={disposalManager} onChange={(e) => setDisposalManager(e.target.value)} required /></label><Button disabled={busy || !disposalManager.trim()} className="bg-red-700 hover:bg-red-800">{busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}{busy ? "Registrando retiros…" : `Confirmar retiro de ${storedCount}`}</Button><Button type="button" variant="outline" disabled={busy} onClick={() => setBulkDisposalOpen(false)}>Cancelar</Button></div></form>}
         {disposing && <form onSubmit={registerDisposal} className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4"><h3 className="font-semibold">Registrar retiro de {disposing.waste_name}</h3><p className="mb-3 mt-1 text-sm text-muted-foreground">Se marcarán como retirados todos los ingresos de este residuo que sigan almacenados hasta la fecha indicada. El acumulado se reiniciará para los ingresos posteriores.</p><div className="flex flex-wrap items-end gap-3"><label className="text-sm">Fecha de retiro<Input className="mt-1" type="date" min={disposing.entry_date} value={disposalDate} onChange={(e) => setDisposalDate(e.target.value)} required /></label><label className="text-sm">Gestor<Input className="mt-1" list="hazardous-waste-people" value={disposalManager} onChange={(e) => setDisposalManager(e.target.value)} required /></label><Button disabled={busy || !disposalManager.trim()}>{busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}{busy ? "Guardando retiro…" : "Confirmar retiro"}</Button><Button type="button" variant="outline" disabled={busy} onClick={() => setDisposing(null)}>Cancelar</Button></div></form>}
         {!visibleRecords.length ? <p className="p-8 text-center text-muted-foreground">No hay ingresos para mostrar.</p> : <div className="overflow-x-auto"><table className="w-full min-w-[1050px] text-left text-sm"><thead><tr className="border-b text-muted-foreground">{["Ingreso", "N° / Residuo", "Peligrosidad / origen", "Unidades ingresadas", "Unidades almacenadas", "Entrega", "Disposición / gestor", "Drive", ""].map((h) => <th key={h} className="px-3 py-3 font-medium">{h}</th>)}</tr></thead><tbody>{visibleRecords.map((row) => <tr key={row.id} className="border-b last:border-0"><td className="px-3 py-3">{dateText(row.entry_date)}</td><td className="px-3 py-3"><div className="font-medium">{row.respel_code || "—"}</div><div>{row.waste_name}</div></td><td className="px-3 py-3">{row.hazard || "—"}<div className="text-xs text-muted-foreground">{row.origin || "—"}</div></td><td className="px-3 py-3">{amount(row.quantity, "UNIDADES")}</td><td className="px-3 py-3 font-medium">{amount(row.accumulated_quantity, "UNIDADES")}</td><td className="px-3 py-3">{row.delivered_by || "—"}</td><td className="px-3 py-3">{row.disposal_date ? dateText(row.disposal_date) : <span className="text-amber-700">Almacenado</span>}<div className="text-xs text-muted-foreground">{row.manager || "—"}</div></td><td className="px-3 py-3"><span className={`inline-flex items-center gap-1 ${row.sync_status === "SYNCED" ? "text-emerald-700" : row.sync_status === "FAILED" ? "text-red-700" : "text-amber-700"}`}>{row.sync_status === "SYNCED" ? <Check className="h-3 w-3" /> : row.sync_status === "FAILED" ? <AlertCircle className="h-3 w-3" /> : <Loader2 className="h-3 w-3 animate-spin" />}{row.sync_status === "SYNCED" ? "Sincronizado" : row.sync_status === "FAILED" ? "Error" : "Pendiente"}</span>{row.sync_error && <div className="max-w-40 text-xs text-red-600">{row.sync_error}</div>}</td><td className="px-3 py-3"><div className="flex gap-1"><Button type="button" size="sm" variant="outline" onClick={() => editRecord(row)}>Editar</Button>{!row.disposal_date && <Button type="button" size="sm" variant="outline" onClick={() => beginDisposal(row)}>Registrar retiro</Button>}{row.sync_status === "FAILED" && <Button type="button" size="sm" variant="outline" aria-label="Reintentar" onClick={() => void retry(row.id)}><RefreshCw className="h-3.5 w-3.5" /></Button>}</div></td></tr>)}</tbody></table></div>}
       </Card>

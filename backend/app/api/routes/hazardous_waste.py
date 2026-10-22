@@ -96,14 +96,18 @@ async def _recalculate(db: AsyncSession, identities: set[tuple[str, str, str]] |
 async def status(_user: User = Depends(admin_only), db: AsyncSession = Depends(get_db)):
     config = await db.get(HazardousWasteSettings, 1)
     environment_id = _environment_sheet_id()
+    total_records = int(await db.scalar(select(func.count(HazardousWasteRecord.id))) or 0)
+    stored_records = int(await db.scalar(
+        select(func.count(HazardousWasteRecord.id)).where(HazardousWasteRecord.disposal_date.is_(None))
+    ) or 0)
     if config and environment_id and config.spreadsheet_id != environment_id:
-        count = int(await db.scalar(select(func.count(HazardousWasteRecord.id))) or 0)
         return {
             "configured": False,
             "environment_configured": True,
             "configuration_error": "El ID de Render no coincide con la planilla conectada en la base de datos. Se bloqueó la sincronización para evitar escribir en un archivo equivocado.",
             "spreadsheet_url": f"https://docs.google.com/spreadsheets/d/{environment_id}/edit",
-            "records": count,
+            "records": total_records,
+            "stored_records": stored_records,
         }
     if config is None:
         return {
@@ -114,15 +118,16 @@ async def status(_user: User = Depends(admin_only), db: AsyncSession = Depends(g
                 f"https://docs.google.com/spreadsheets/d/{environment_id}/edit"
                 if environment_id else None
             ),
-            "records": 0,
+            "records": total_records,
+            "stored_records": stored_records,
         }
-    count = int(await db.scalar(select(func.count(HazardousWasteRecord.id))) or 0)
     return {
         "configured": True,
         "environment_configured": environment_id is not None,
         "configuration_error": None,
         "spreadsheet_url": config.spreadsheet_url,
-        "records": count,
+        "records": total_records,
+        "stored_records": stored_records,
     }
 
 
@@ -301,6 +306,53 @@ async def dispose_stock(
         "disposal_date": body.disposal_date,
         "manager": body.manager.strip().upper(),
         "message": "Retiro registrado; el acumulado comienza nuevamente después de la fecha de disposición.",
+    }
+
+
+@router.post("/dispose-all")
+async def dispose_all_stored(
+    body: HazardousWasteDisposalInput,
+    current_user: User = Depends(admin_only),
+    db: AsyncSession = Depends(get_db),
+):
+    manager = body.manager.strip().upper()
+    if not manager:
+        raise HTTPException(status_code=422, detail="Indica el nombre del gestor.")
+
+    stored = list((await db.scalars(
+        select(HazardousWasteRecord)
+        .where(HazardousWasteRecord.disposal_date.is_(None))
+        .order_by(HazardousWasteRecord.entry_date, HazardousWasteRecord.id)
+        .with_for_update()
+    )).all())
+    if not stored:
+        raise HTTPException(status_code=409, detail="No hay residuos almacenados pendientes de retiro.")
+
+    latest_entry = max(record.entry_date for record in stored)
+    if body.disposal_date < latest_entry:
+        raise HTTPException(
+            status_code=422,
+            detail=f"La fecha de retiro debe ser igual o posterior al último ingreso almacenado ({latest_entry.isoformat()}).",
+        )
+
+    identities: set[tuple[str, str, str]] = set()
+    for record in stored:
+        record.disposal_date = body.disposal_date
+        record.manager = manager
+        record.updated_by_user_id = current_user.id
+        record.sync_status = "PENDING"
+        record.sync_version += 1
+        record.sync_error = None
+        record.sync_next_attempt_at = None
+        identities.add(_identity(record))
+
+    await _recalculate(db, identities)
+    await db.commit()
+    return {
+        "updated": len(stored),
+        "disposal_date": body.disposal_date,
+        "manager": manager,
+        "message": "Retiro registrado para todos los residuos almacenados.",
     }
 
 

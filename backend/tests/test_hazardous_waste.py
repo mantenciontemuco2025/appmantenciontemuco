@@ -181,3 +181,23 @@ async def test_setup_imports_annual_records_and_new_entries_accumulate_after_dis
     )
     assert after_disposal.status_code == 200, after_disposal.text
     assert after_disposal.json()["accumulated_quantity"] == "2.000"
+
+    too_early = await client.post(
+        "/api/hazardous-waste/dispose-all",
+        json={"disposal_date": "2026-04-21", "manager": "Logisamb"},
+        headers=admin,
+    )
+    assert too_early.status_code == 422
+
+    bulk_disposal = await client.post(
+        "/api/hazardous-waste/dispose-all",
+        json={"disposal_date": "2026-04-22", "manager": "Logisamb"},
+        headers=admin,
+    )
+    assert bulk_disposal.status_code == 200, bulk_disposal.text
+    assert bulk_disposal.json()["updated"] == 1
+    assert bulk_disposal.json()["manager"] == "LOGISAMB"
+
+    status = await client.get("/api/hazardous-waste/status", headers=admin)
+    assert status.status_code == 200
+    assert status.json()["stored_records"] == 0
