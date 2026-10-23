@@ -203,6 +203,13 @@ async def create_user(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(admin_only),
 ):
+    if payload.can_manage_equipment_inventory and (
+        payload.role != UserRole.WORKER or not payload.is_active
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El permiso de inventario solo se puede asignar a un trabajador activo.",
+        )
     existing = await db.execute(select(User).where(User.email == payload.email.lower()))
     if existing.scalar_one_or_none():
         raise HTTPException(
@@ -239,7 +246,23 @@ async def create_user(
             requested=payload.water_register_access,
             legacy_enabled=payload.can_manage_water_register,
         ).value,
+        can_manage_equipment_inventory=payload.can_manage_equipment_inventory,
     )
+    if payload.can_manage_equipment_inventory:
+        assigned_result = await db.execute(
+            select(User).where(User.can_manage_equipment_inventory == True)  # noqa: E712
+        )
+        for assigned_user in assigned_result.scalars().all():
+            assigned_user.can_manage_equipment_inventory = False
+            await create_audit_log(
+                db,
+                user_id=current_user.id,
+                action="UPDATE",
+                entity_type="User",
+                entity_id=assigned_user.id,
+                previous_data={"can_manage_equipment_inventory": True},
+                new_data={"can_manage_equipment_inventory": False},
+            )
     user.supervised_areas = assigned_areas
     db.add(user)
     await db.flush()
@@ -257,6 +280,7 @@ async def create_user(
             "area_ids": assigned_area_ids,
             "can_manage_water_register": user.can_manage_water_register,
             "water_register_access": user.water_register_access,
+            "can_manage_equipment_inventory": user.can_manage_equipment_inventory,
         },
     )
     await db.refresh(user)
@@ -311,6 +335,7 @@ async def update_user(
         "is_active": user.is_active,
         "can_manage_water_register": user.can_manage_water_register,
         "water_register_access": user.water_register_access,
+        "can_manage_equipment_inventory": user.can_manage_equipment_inventory,
         "signature": user.signature,
         "area_id": user.area_id,
         "area_ids": user.area_ids,
@@ -354,6 +379,20 @@ async def update_user(
             )
 
     next_role = payload.role or user.role
+    next_active = payload.is_active if payload.is_active is not None else user.is_active
+    requested_inventory_access = payload.can_manage_equipment_inventory
+    next_inventory_access = (
+        payload.can_manage_equipment_inventory
+        if payload.can_manage_equipment_inventory is not None
+        else user.can_manage_equipment_inventory
+    )
+    if requested_inventory_access is True and (next_role != UserRole.WORKER or not next_active):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El permiso de inventario solo se puede asignar a un trabajador activo.",
+        )
+    if next_role != UserRole.WORKER or not next_active:
+        next_inventory_access = False
     if payload.area_ids is not None:
         requested_area_ids = payload.area_ids
     elif payload.area_id is not None:
@@ -380,6 +419,25 @@ async def update_user(
     user.supervised_areas = [area_by_id[area_id] for area_id in next_area_ids]
     if payload.is_active is not None:
         user.is_active = payload.is_active
+    if next_inventory_access:
+        assigned_result = await db.execute(
+            select(User).where(
+                User.can_manage_equipment_inventory == True,  # noqa: E712
+                User.id != user.id,
+            )
+        )
+        for assigned_user in assigned_result.scalars().all():
+            assigned_user.can_manage_equipment_inventory = False
+            await create_audit_log(
+                db,
+                user_id=current_user.id,
+                action="UPDATE",
+                entity_type="User",
+                entity_id=assigned_user.id,
+                previous_data={"can_manage_equipment_inventory": True},
+                new_data={"can_manage_equipment_inventory": False},
+            )
+    user.can_manage_equipment_inventory = next_inventory_access
     if payload.water_register_access is not None:
         user.water_register_access = payload.water_register_access.value
         user.can_manage_water_register = payload.water_register_access == WaterRegisterPermission.EDIT
@@ -406,6 +464,7 @@ async def update_user(
             "is_active": user.is_active,
             "can_manage_water_register": user.can_manage_water_register,
             "water_register_access": user.water_register_access,
+            "can_manage_equipment_inventory": user.can_manage_equipment_inventory,
             "signature": user.signature,
             "area_id": user.area_id,
             "area_ids": next_area_ids,

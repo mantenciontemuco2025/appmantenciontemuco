@@ -22,6 +22,7 @@ export interface User {
   is_active: boolean;
   can_manage_water_register: boolean;
   water_register_access: WaterRegisterAccess;
+  can_manage_equipment_inventory: boolean;
   signature: string | null;
 }
 

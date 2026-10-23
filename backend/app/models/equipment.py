@@ -1,6 +1,6 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import String, ForeignKey, DateTime
+from sqlalchemy import String, ForeignKey, DateTime, Date, Numeric, Text, JSON
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -21,6 +21,34 @@ class Equipment(Base):
     category: Mapped[str | None] = mapped_column(String(180), nullable=True)
     location: Mapped[str | None] = mapped_column(String(250), nullable=True)
     operational_status: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    dimensions: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    weight: Mapped[float | None] = mapped_column(Numeric(14, 3), nullable=True)
+    unit: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    purchase_receipt_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    purchased_from: Mapped[str | None] = mapped_column(String(250), nullable=True)
+    warranty_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    web1: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    initial_value: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    impeller_diameter: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    flow_rate: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    total_manometric_head: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    rotation_speed: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    npsh: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    last_maintenance_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    general_spare_parts: Mapped[str | None] = mapped_column(Text, nullable=True)
+    observations: Mapped[str | None] = mapped_column(Text, nullable=True)
+    power_hp: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    power_kw: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    voltage: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    current: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    revolutions: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    efficiency: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    capacity: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    custom_attributes: Mapped[list[dict[str, str]]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
     # Google Drive hoja de vida. La OT y sus datos siguen siendo la fuente de
     # verdad; estos campos solo guardan la referencia de la copia creada desde
     # la plantilla maestra.

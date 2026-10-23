@@ -44,6 +44,10 @@ class User(Base):
         String(10), default=WaterRegisterPermission.NONE.value,
         server_default=WaterRegisterPermission.NONE.value, nullable=False
     )
+    # Solo un trabajador a la vez puede editar las fichas del inventario.
+    can_manage_equipment_inventory: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     # URL de Drive de la firma manuscrita del usuario (cargada una vez, en su
     # perfil). Se usa para pegarla como imagen en el documento de la OT y para
     # mostrarla en la app. NULL si el usuario aún no ha subido su firma.

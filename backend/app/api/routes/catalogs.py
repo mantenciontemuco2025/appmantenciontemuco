@@ -10,6 +10,7 @@ Section is NOT part of the catalog — it is free text on each record.
 import unicodedata
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -35,6 +36,8 @@ from app.schemas.catalog import (
     EquipmentCreate,
     EquipmentResponse,
     EquipmentUpdate,
+    EquipmentInventoryUpdate,
+    EquipmentInventoryResponse,
     InventoryImportPayload,
     InventoryImportResult,
     HierarchyEquipment,
@@ -448,6 +451,101 @@ async def list_equipment(
 ):
     result = await db.execute(select(Equipment).order_by(Equipment.name))
     return result.scalars().all()
+
+
+@router.get("/equipment-inventory", response_model=list[EquipmentInventoryResponse])
+async def list_equipment_inventory(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    result = await db.execute(
+        select(Equipment, Area.name, PlantArea.name)
+        .outerjoin(Area, Equipment.area_id == Area.id)
+        .outerjoin(PlantArea, Equipment.plant_area_id == PlantArea.id)
+        .order_by(Equipment.name, Equipment.id)
+    )
+    rows = []
+    for equipment, area_name, plant_area_name in result.all():
+        item = EquipmentInventoryResponse(
+            **{
+                field: getattr(equipment, field)
+                for field in EquipmentInventoryResponse.model_fields
+                if field not in {"area_name", "plant_area_name"}
+            },
+            area_name=area_name,
+            plant_area_name=plant_area_name,
+        )
+        if current_user.role != UserRole.ADMIN:
+            item.initial_value = None
+        rows.append(item)
+    return rows
+
+
+@router.patch("/equipment/{equipment_id}/inventory", response_model=EquipmentInventoryResponse)
+async def update_equipment_inventory(
+    equipment_id: int,
+    payload: EquipmentInventoryUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    can_edit_inventory = current_user.role == UserRole.ADMIN or (
+        current_user.role == UserRole.WORKER
+        and current_user.can_manage_equipment_inventory
+    )
+    if not can_edit_inventory:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para editar el inventario de equipos.",
+        )
+    if (
+        current_user.role != UserRole.ADMIN
+        and "initial_value" in payload.model_fields_set
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo un administrador puede modificar el valor inicial.",
+        )
+    result = await db.execute(
+        select(Equipment, Area.name, PlantArea.name)
+        .outerjoin(Area, Equipment.area_id == Area.id)
+        .outerjoin(PlantArea, Equipment.plant_area_id == PlantArea.id)
+        .where(Equipment.id == equipment_id)
+    )
+    row = result.one_or_none()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Equipo no encontrado")
+    equipment, area_name, plant_area_name = row
+    changes = payload.model_dump(exclude_unset=True, mode="json")
+    previous = {
+        key: (getattr(equipment, key).isoformat() if hasattr(getattr(equipment, key), "isoformat") else getattr(equipment, key))
+        for key in changes
+    }
+    for key, value in payload.model_dump(exclude_unset=True).items():
+        if isinstance(value, str):
+            value = value.strip() or None
+        setattr(equipment, key, value)
+    await create_audit_log(
+        db,
+        user_id=current_user.id,
+        action="UPDATE",
+        entity_type="EquipmentInventory",
+        entity_id=equipment.id,
+        previous_data=jsonable_encoder(previous),
+        new_data=changes,
+    )
+    await db.flush()
+    response = EquipmentInventoryResponse(
+        **{
+            field: getattr(equipment, field)
+            for field in EquipmentInventoryResponse.model_fields
+            if field not in {"area_name", "plant_area_name"}
+        },
+        area_name=area_name,
+        plant_area_name=plant_area_name,
+    )
+    if current_user.role != UserRole.ADMIN:
+        response.initial_value = None
+    return response
 
 
 @router.post("/equipment", response_model=EquipmentResponse, status_code=status.HTTP_201_CREATED)

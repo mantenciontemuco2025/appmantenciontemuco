@@ -62,6 +62,7 @@ export function UserManager() {
   const [editEmail, setEditEmail] = useState("");
   const [editRole, setEditRole] = useState("WORKER");
   const [editWaterRegisterAccess, setEditWaterRegisterAccess] = useState<WaterRegisterAccess>("NONE");
+  const [editInventoryAccess, setEditInventoryAccess] = useState(false);
   const [editAreaId, setEditAreaId] = useState("");
   const [editAreaIds, setEditAreaIds] = useState<string[]>([]);
   const [editPassword, setEditPassword] = useState("");
@@ -144,6 +145,7 @@ export function UserManager() {
     setEditEmail(user.email);
     setEditRole(user.role);
     setEditWaterRegisterAccess(waterAccessOf(user));
+    setEditInventoryAccess(user.can_manage_equipment_inventory ?? false);
     setEditAreaId(user.area_id ? String(user.area_id) : "");
     setEditAreaIds((user.area_ids?.length ? user.area_ids : user.area_id ? [user.area_id] : []).map(String));
     setEditPassword("");
@@ -180,6 +182,7 @@ export function UserManager() {
         email: editEmail,
         role: editRole,
         water_register_access: editWaterRegisterAccess,
+        can_manage_equipment_inventory: editRole === "WORKER" && editInventoryAccess,
         area_id: editRole === "SUPERVISOR" && editAreaId ? Number(editAreaId) : null,
         area_ids: editRole === "SUPERVISOR" ? Array.from(new Set([editAreaId, ...editAreaIds].filter(Boolean))).map(Number) : [],
       };
@@ -346,7 +349,10 @@ export function UserManager() {
             label="Rol"
             options={ROLE_OPTIONS}
             value={editRole}
-            onChange={(e) => setEditRole(e.target.value)}
+            onChange={(e) => {
+              setEditRole(e.target.value);
+              if (e.target.value !== "WORKER") setEditInventoryAccess(false);
+            }}
             disabled={editSaving}
           />
           {editRole === "SUPERVISOR" && (
@@ -386,6 +392,23 @@ export function UserManager() {
             onChange={(e) => setEditWaterRegisterAccess(e.target.value as WaterRegisterAccess)}
             disabled={editSaving}
           />
+          {editRole === "WORKER" && (
+            <label className="flex items-start gap-2 rounded-md border p-3 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5 h-4 w-4"
+                checked={editInventoryAccess}
+                onChange={(event) => setEditInventoryAccess(event.target.checked)}
+                disabled={editSaving || !editingUser?.is_active}
+              />
+              <span>
+                <span className="block font-medium">Puede editar el inventario de equipos</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Solo un trabajador puede tener este permiso. Si se asigna a otra persona, se moverá automáticamente.
+                </span>
+              </span>
+            </label>
+          )}
           <div className="space-y-1.5">
             <label className="text-sm font-medium block">
               Restablecer contraseña{" "}
@@ -443,6 +466,9 @@ export function UserManager() {
                       <div className="text-xs text-blue-700">
                         Secciones asignadas: {u.area_names?.length ? u.area_names.join(", ") : "Sin asignar"}
                       </div>
+                    )}
+                    {u.can_manage_equipment_inventory && (
+                      <div className="text-xs font-medium text-emerald-700">Puede editar inventario</div>
                     )}
                   </div>
                   <span className={`hidden sm:inline-flex shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium ${roleBadge}`}>

@@ -13,6 +13,7 @@ class UserBase(BaseModel):
     is_active: bool = True
     can_manage_water_register: bool = False
     water_register_access: WaterRegisterPermission = WaterRegisterPermission.NONE
+    can_manage_equipment_inventory: bool = False
 
 
 class UserCreate(UserBase):
@@ -28,6 +29,7 @@ class UserUpdate(BaseModel):
     is_active: bool | None = None
     can_manage_water_register: bool | None = None
     water_register_access: WaterRegisterPermission | None = None
+    can_manage_equipment_inventory: bool | None = None
     password: str | None = None
 
     @field_validator("password")
