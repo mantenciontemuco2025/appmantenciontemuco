@@ -126,7 +126,7 @@ export function MaterialCodePicker({ value, onChange, disabled = false }: Props)
       <div className="relative">
         <Input
           value={query}
-          disabled={disabled || loading}
+          disabled={disabled}
           onChange={(event) => setQuery(event.target.value)}
           placeholder={loading ? "Cargando catálogo..." : "Ej. B4320001 o abrazadera"}
         />
