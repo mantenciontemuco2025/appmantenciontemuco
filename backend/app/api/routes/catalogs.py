@@ -49,6 +49,24 @@ from app.services.audit_service import create_audit_log
 
 router = APIRouter(prefix="/api/catalogs", tags=["catalogs"])
 
+
+async def _section_parent_areas(
+    db: AsyncSession, section_ids: set[int]
+) -> dict[int, list[tuple[int, str]]]:
+    """Map sections to linked parent areas for legacy equipment without a parent id."""
+    if not section_ids:
+        return {}
+    result = await db.execute(
+        select(plant_area_sections.c.section_id, PlantArea.id, PlantArea.name)
+        .join(PlantArea, PlantArea.id == plant_area_sections.c.plant_area_id)
+        .where(plant_area_sections.c.section_id.in_(section_ids))
+        .order_by(PlantArea.name)
+    )
+    parents: dict[int, list[tuple[int, str]]] = {}
+    for section_id, plant_area_id, plant_area_name in result.all():
+        parents.setdefault(section_id, []).append((plant_area_id, plant_area_name))
+    return parents
+
 admin_only = require_roles(UserRole.ADMIN)
 catalog_writer = require_roles(UserRole.ADMIN, UserRole.SUPERVISOR)
 
@@ -661,13 +679,15 @@ async def list_equipment_inventory(
     current_user: User = Depends(get_current_user),
 ):
     result = await db.execute(
-        select(Equipment, Area.name, PlantArea.name)
+        select(Equipment, Area.id, Area.name, PlantArea.id, PlantArea.name)
         .outerjoin(Area, Equipment.area_id == Area.id)
         .outerjoin(PlantArea, Equipment.plant_area_id == PlantArea.id)
         .order_by(Equipment.name, Equipment.id)
     )
     equipment_rows = result.all()
-    equipment_ids = [equipment.id for equipment, _, _ in equipment_rows]
+    equipment_ids = [equipment.id for equipment, *_ in equipment_rows]
+    section_ids = {equipment.area_id for equipment, *_ in equipment_rows}
+    parent_areas = await _section_parent_areas(db, section_ids)
     latest_work_order_dates: dict[int, object] = {}
     if equipment_ids:
         execution_date = func.coalesce(
@@ -687,13 +707,22 @@ async def list_equipment_inventory(
         latest_work_order_dates = dict(latest_result.all())
 
     rows = []
-    for equipment, area_name, plant_area_name in equipment_rows:
+    for equipment, area_id, area_name, plant_area_id, plant_area_name in equipment_rows:
+        # Older catalog equipment may only have the legacy section (area_id).
+        # If that section belongs to one parent area, display it in that area;
+        # when the section belongs to several, keep it explicitly unassigned.
+        if plant_area_id is None:
+            candidates = parent_areas.get(equipment.area_id, [])
+            if len(candidates) == 1:
+                plant_area_id, plant_area_name = candidates[0]
         item = EquipmentInventoryResponse(
             **{
                 field: getattr(equipment, field)
                 for field in EquipmentInventoryResponse.model_fields
-                if field not in {"area_name", "plant_area_name"}
+                if field not in {"area_id", "plant_area_id", "area_name", "plant_area_name"}
             },
+            area_id=area_id,
+            plant_area_id=plant_area_id,
             area_name=area_name,
             plant_area_name=plant_area_name,
         )
@@ -729,7 +758,7 @@ async def update_equipment_inventory(
             detail="Solo un administrador puede modificar el valor inicial.",
         )
     result = await db.execute(
-        select(Equipment, Area.name, PlantArea.name)
+        select(Equipment, Area.id, Area.name, PlantArea.id, PlantArea.name)
         .outerjoin(Area, Equipment.area_id == Area.id)
         .outerjoin(PlantArea, Equipment.plant_area_id == PlantArea.id)
         .where(Equipment.id == equipment_id)
@@ -737,7 +766,13 @@ async def update_equipment_inventory(
     row = result.one_or_none()
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Equipo no encontrado")
-    equipment, area_name, plant_area_name = row
+    equipment, area_id, area_name, plant_area_id, plant_area_name = row
+    if plant_area_id is None:
+        candidates = (await _section_parent_areas(db, {equipment.area_id})).get(
+            equipment.area_id, []
+        )
+        if len(candidates) == 1:
+            plant_area_id, plant_area_name = candidates[0]
     changes = payload.model_dump(exclude_unset=True, mode="json")
     previous = {
         key: (getattr(equipment, key).isoformat() if hasattr(getattr(equipment, key), "isoformat") else getattr(equipment, key))
@@ -761,8 +796,10 @@ async def update_equipment_inventory(
         **{
             field: getattr(equipment, field)
             for field in EquipmentInventoryResponse.model_fields
-            if field not in {"area_name", "plant_area_name"}
+            if field not in {"area_id", "plant_area_id", "area_name", "plant_area_name"}
         },
+        area_id=area_id,
+        plant_area_id=plant_area_id,
         area_name=area_name,
         plant_area_name=plant_area_name,
     )

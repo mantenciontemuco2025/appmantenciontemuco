@@ -9,8 +9,14 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 type CustomAttribute = { label: string; value: string };
+type InventoryHierarchy = {
+  id: number;
+  name: string;
+  is_active: boolean;
+  sections: { id: number; name: string }[];
+};
 type EquipmentInventory = {
-  id: number; name: string; inventory_code: string | null; area_name: string | null;
+  id: number; name: string; inventory_code: string | null; area_id: number | null; plant_area_id: number | null; area_name: string | null;
   plant_area_name: string | null; category: string | null; model: string | null;
   dimensions: string | null; weight: string | number | null; unit: string | null;
   description: string | null; location: string | null; purchase_receipt_date: string | null;
@@ -67,6 +73,10 @@ export default function EquipmentInventoryPage() {
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<EquipmentInventory | null>(null);
+  const [hierarchy, setHierarchy] = useState<InventoryHierarchy[]>([]);
+  const [editingLocation, setEditingLocation] = useState(false);
+  const [locationAreaId, setLocationAreaId] = useState("");
+  const [locationSectionId, setLocationSectionId] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ error: boolean; text: string } | null>(null);
   const isAdmin = user?.role === "ADMIN";
@@ -86,7 +96,21 @@ export default function EquipmentInventoryPage() {
     }
   }
 
-  useEffect(() => { if (user) void load(); }, [user]);
+  async function loadHierarchy() {
+    try {
+      const areas = await api.get<InventoryHierarchy[]>("/api/catalogs/hierarchy?include_inactive=true");
+      setHierarchy(areas);
+    } catch (error) {
+      setMessage({ error: true, text: error instanceof Error ? error.message : "No se pudo cargar la jerarquía de áreas y secciones." });
+    }
+  }
+
+  useEffect(() => {
+    if (user) {
+      void load();
+      if (user.role === "ADMIN") void loadHierarchy();
+    }
+  }, [user]);
 
   const filtered = useMemo(() => {
     const query = search.trim().toLocaleLowerCase("es");
@@ -94,6 +118,34 @@ export default function EquipmentInventoryPage() {
     return items.filter((item) => [item.name, item.inventory_code, item.category, item.model, item.location, item.area_name, item.plant_area_name]
       .some((value) => value?.toLocaleLowerCase("es").includes(query)));
   }, [items, search]);
+  const groupedItems = useMemo(() => {
+    const areas = new Map<string, { name: string; sections: Map<string, { name: string; items: EquipmentInventory[] }> }>();
+    for (const item of filtered) {
+      const areaName = item.plant_area_name?.trim() || "SIN ÁREA ASIGNADA";
+      const sectionName = item.area_name?.trim() || "SIN SECCIÓN";
+      const areaKey = item.plant_area_id == null ? "unassigned" : `area-${item.plant_area_id}`;
+      const sectionKey = item.area_id == null ? "unassigned" : `section-${item.area_id}`;
+      let area = areas.get(areaKey);
+      if (!area) {
+        area = { name: areaName, sections: new Map() };
+        areas.set(areaKey, area);
+      }
+      let section = area.sections.get(sectionKey);
+      if (!section) {
+        section = { name: sectionName, items: [] };
+        area.sections.set(sectionKey, section);
+      }
+      section.items.push(item);
+    }
+    return [...areas.values()]
+      .sort((a, b) => a.name.localeCompare(b.name, "es"))
+      .map((area) => ({
+        ...area,
+        sections: [...area.sections.entries()]
+          .sort((a, b) => a[1].name.localeCompare(b[1].name, "es"))
+          .map(([id, section]) => ({ ...section, id })),
+      }));
+  }, [filtered]);
   const selected = items.find((item) => item.id === selectedId) ?? null;
 
   function beginEdit(item: EquipmentInventory) {
@@ -102,13 +154,49 @@ export default function EquipmentInventoryPage() {
     setMessage(null);
   }
 
+  function beginLocationEdit(item: EquipmentInventory) {
+    setLocationAreaId(item.plant_area_id == null ? "" : String(item.plant_area_id));
+    setLocationSectionId(item.area_id == null ? "" : String(item.area_id));
+    setEditingLocation(true);
+    setMessage(null);
+  }
+
+  async function saveLocation() {
+    if (!selected || !locationAreaId || !locationSectionId) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      await api.patch(`/api/catalogs/equipment/${selected.id}`, {
+        plant_area_id: Number(locationAreaId),
+        area_id: Number(locationSectionId),
+      });
+      setEditingLocation(false);
+      const selectedArea = hierarchy.find((area) => area.id === Number(locationAreaId));
+      const selectedSection = selectedArea?.sections.find((section) => section.id === Number(locationSectionId));
+      if (selectedArea && selectedSection) {
+        setItems((current) => current.map((item) => item.id === selected.id
+          ? { ...item, plant_area_id: selectedArea.id, plant_area_name: selectedArea.name, area_id: selectedSection.id, area_name: selectedSection.name }
+          : item));
+      }
+      setMessage({ error: false, text: "Área y sección actualizadas. Las OTs históricas se mantienen sin cambios." });
+    } catch (error) {
+      setMessage({ error: true, text: error instanceof Error ? error.message : "No se pudo actualizar el área y la sección." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const locationSections = hierarchy.find((area) => String(area.id) === locationAreaId)?.sections ?? [];
+
   async function save() {
     if (!draft) return;
     setBusy(true);
     setMessage(null);
     try {
       const saved = await api.patch<EquipmentInventory>(`/api/catalogs/equipment/${draft.id}/inventory`, {
-        ...Object.fromEntries(fields.map(({ key }) => [key, draft[key] === "" ? null : draft[key]])),
+        ...Object.fromEntries(fields
+          .filter(({ adminOnly }) => !adminOnly || isAdmin)
+          .map(({ key }) => [key, draft[key] === "" ? null : draft[key]])),
         custom_attributes: draft.custom_attributes,
       });
       setItems((current) => current.map((item) => item.id === saved.id ? saved : item));
@@ -136,12 +224,31 @@ export default function EquipmentInventoryPage() {
       <div className="grid gap-5 lg:grid-cols-[minmax(240px,0.8fr)_minmax(0,1.6fr)]">
         <section className="rounded-xl border bg-card p-4">
           <div className="relative mb-3"><Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><input className="h-10 w-full rounded-md border bg-background pl-9 pr-3 text-sm" placeholder="Buscar equipo, código o ubicación..." value={search} onChange={(event) => setSearch(event.target.value)} /></div>
-          {busy && !items.length ? <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Cargando equipos...</div> : <div className="max-h-[70vh] space-y-2 overflow-auto">{filtered.map((item) => <button type="button" key={item.id} onClick={() => { setSelectedId(item.id); setEditing(false); setDraft(null); setMessage(null); }} className={`w-full rounded-lg border p-3 text-left hover:border-primary ${selectedId === item.id ? "border-primary bg-primary/5" : ""}`}><div className="font-semibold">{item.name}</div><div className="mt-1 text-xs text-muted-foreground">{item.inventory_code || "Sin código"}{item.category ? ` · ${item.category}` : ""}</div><div className="mt-1 text-xs text-muted-foreground">{item.area_name || "Sin sección"}{item.plant_area_name ? ` · ${item.plant_area_name}` : ""}</div></button>)}{!filtered.length && <p className="py-8 text-center text-sm text-muted-foreground">No hay equipos que coincidan.</p>}</div>}
+          {busy && !items.length ? <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Cargando equipos...</div> : <div className="max-h-[70vh] space-y-2 overflow-auto">{groupedItems.map((area, areaIndex) => {
+            const areaCount = area.sections.reduce((total, section) => total + section.items.length, 0);
+            const containsSelection = area.sections.some((section) => section.items.some((item) => item.id === selectedId));
+            return <details key={`${area.name}-${areaIndex}`} open={Boolean(search.trim()) || areaIndex === 0 || containsSelection} className="rounded-lg border bg-background">
+              <summary className="cursor-pointer list-none px-3 py-3 font-semibold hover:bg-muted/50">{area.name}<span className="ml-2 rounded-full bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground">{areaCount}</span></summary>
+              <div className="space-y-2 border-t p-2">{area.sections.map((section) => <details key={section.id} open={Boolean(search.trim()) || section.items.some((item) => item.id === selectedId)} className="rounded-md bg-muted/30">
+                <summary className="cursor-pointer list-none px-3 py-2 text-sm font-medium hover:bg-muted/60">{section.name}<span className="ml-2 text-xs font-normal text-muted-foreground">{section.items.length} equipos</span></summary>
+                <div className="space-y-1 px-2 pb-2">{section.items.map((item) => <button type="button" key={item.id} onClick={() => { setSelectedId(item.id); setEditing(false); setDraft(null); setEditingLocation(false); setMessage(null); }} className={`w-full rounded-lg border p-3 text-left hover:border-primary ${selectedId === item.id ? "border-primary bg-primary/5" : "border-transparent bg-background"}`}><div className="font-semibold">{item.name}</div><div className="mt-1 text-xs text-muted-foreground">{item.inventory_code || "Sin código"}{item.category ? ` · ${item.category}` : ""}</div></button>)}</div>
+              </details>)}</div>
+            </details>;
+          })}{!filtered.length && <p className="py-8 text-center text-sm text-muted-foreground">No hay equipos que coincidan.</p>}</div>}
         </section>
 
         <section className="min-w-0 rounded-xl border bg-card p-4 sm:p-6">
           {!selected ? <div className="py-16 text-center text-sm text-muted-foreground">{items.length ? "Selecciona un equipo para ver su ficha." : "Todavía no hay equipos registrados en el catálogo."}</div> : <>
-            <div className="mb-5 flex flex-wrap items-start justify-between gap-3 border-b pb-4"><div><h2 className="text-xl font-semibold">{selected.name}</h2><p className="mt-1 text-sm text-muted-foreground">Código: {selected.inventory_code || "—"} · {selected.area_name || "Sin sección"}{selected.plant_area_name ? ` · ${selected.plant_area_name}` : ""}</p></div>{editing && <div className="flex gap-2"><Button variant="outline" onClick={() => { setEditing(false); setDraft(null); }} disabled={busy}><X className="mr-1 h-4 w-4" />Cancelar</Button><Button onClick={() => void save()} disabled={busy}>{busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}Guardar</Button></div>}</div>
+            <div className="mb-5 flex flex-wrap items-start justify-between gap-3 border-b pb-4"><div><h2 className="text-xl font-semibold">{selected.name}</h2><p className="mt-1 text-sm text-muted-foreground">Código: {selected.inventory_code || "—"} · {selected.area_name || "Sin sección"}{selected.plant_area_name ? ` · ${selected.plant_area_name}` : ""}</p></div><div className="flex flex-wrap gap-2">{isAdmin && !editingLocation && !editing && <Button variant="outline" onClick={() => beginLocationEdit(selected)}><Pencil className="mr-2 h-4 w-4" />Cambiar área/sección</Button>}{editing && <><Button variant="outline" onClick={() => { setEditing(false); setDraft(null); }} disabled={busy}><X className="mr-1 h-4 w-4" />Cancelar</Button><Button onClick={() => void save()} disabled={busy}>{busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}Guardar</Button></>}</div></div>
+            {editingLocation && isAdmin && <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50/50 p-4">
+              <h3 className="font-semibold">Asignar equipo a un área y sección</h3>
+              <p className="mt-1 text-sm text-muted-foreground">Esto cambia la ubicación del equipo en el catálogo. Las órdenes de trabajo anteriores conservan sus datos.</p>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <label className="text-sm font-medium">Área general<select className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal" value={locationAreaId} onChange={(event) => { setLocationAreaId(event.target.value); setLocationSectionId(""); }}><option value="">Selecciona un área</option>{hierarchy.map((area) => <option key={area.id} value={area.id}>{area.name}{area.is_active ? "" : " (Inactiva)"}</option>)}</select></label>
+                <label className="text-sm font-medium">Sección<select className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal" value={locationSectionId} onChange={(event) => setLocationSectionId(event.target.value)} disabled={!locationAreaId}><option value="">Selecciona una sección</option>{locationSections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}</select></label>
+              </div>
+              <div className="mt-3 flex gap-2"><Button onClick={() => void saveLocation()} disabled={busy || !locationAreaId || !locationSectionId}>{busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}Guardar ubicación</Button><Button variant="outline" onClick={() => setEditingLocation(false)} disabled={busy}>Cancelar</Button></div>
+            </div>}
             {editing && draft ? <div className="space-y-7">
               <div className="rounded-lg border bg-muted/30 px-3 py-2"><div className="text-xs font-medium text-muted-foreground">Fecha última mantención</div><div className="mt-1 text-sm">{dateLabel(selected.last_maintenance_date) || "Sin OT completada asociada"}</div><p className="mt-1 text-xs text-muted-foreground">Se calcula automáticamente desde la OT terminada más reciente y no se edita desde la ficha.</p></div>
               <div className="grid gap-4 sm:grid-cols-2">{fields.filter(({ adminOnly }) => !adminOnly || isAdmin).map(({ key, label, type, multiline }) => <label key={key} className={`block text-sm font-medium ${multiline ? "sm:col-span-2" : ""}`}>{label}{multiline ? <textarea className="mt-1 min-h-24 w-full rounded-md border bg-background px-3 py-2 font-normal" value={String(draft[key] ?? "")} onChange={(event) => setDraft({ ...draft, [key]: event.target.value })} /> : <input className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal" type={type || "text"} step={type === "number" ? "any" : undefined} value={String(draft[key] ?? "")} onChange={(event) => setDraft({ ...draft, [key]: event.target.value })} />}</label>)}</div>
