@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Camera, Check, ImagePlus, Loader2, Plus, Save, Send, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import type { AreaNode, WorkOrderRecord } from "@/lib/types";
+import type { PlantAreaNode, WorkOrderRecord } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -14,7 +14,6 @@ import { Card, CardContent } from "@/components/ui/card";
 import { VoiceDictation } from "@/components/maintenance/voice-dictation";
 import { MaterialCodePicker } from "@/components/orders/material-code-picker";
 import { todayDateInputValue } from "@/lib/utils";
-import { usePlantAreaOptions } from "@/lib/use-plant-area-options";
 import { MAX_EVIDENCE_PHOTOS_PER_USER } from "@/lib/evidence";
 import { prepareEvidencePhoto } from "@/lib/prepare-evidence-photo";
 
@@ -103,9 +102,8 @@ export function OrderWizard() {
   const [creatingEquipment, setCreatingEquipment] = useState(false);
   const [equipmentError, setEquipmentError] = useState("");
 
-  const [areas, setAreas] = useState<AreaNode[]>([]);
+  const [plantAreas, setPlantAreas] = useState<PlantAreaNode[]>([]);
   const [workers, setWorkers] = useState<WorkerOption[]>([]);
-  const plantAreaCatalog = usePlantAreaOptions();
 
   const [form, setForm] = useState<Form>(() => emptyForm());
   const [pendingEvidence, setPendingEvidence] = useState<PendingEvidence[]>([]);
@@ -164,25 +162,41 @@ export function OrderWizard() {
   useEffect(() => {
     async function load() {
       try {
-        const [tree, users] = await Promise.all([
-          api.getCached<AreaNode[]>("/api/catalogs/tree", 5 * 60 * 1000),
+        const [hierarchy, users] = await Promise.all([
+          api.getCached<PlantAreaNode[]>("/api/catalogs/hierarchy", 5 * 60 * 1000),
           api.getCached<WorkerOption[]>("/api/users/workers", 60 * 1000),
         ]);
         const supervisorAreaIds =
           user?.role === "SUPERVISOR"
             ? (user.area_ids?.length ? user.area_ids : user.area_id ? [user.area_id] : [])
             : [];
-        const visibleAreas =
+        const visiblePlantAreas =
           user?.role === "SUPERVISOR"
-            ? tree.filter((area) => supervisorAreaIds.includes(area.id))
-            : tree;
-        setAreas(visibleAreas);
-        if (user?.role === "SUPERVISOR" && supervisorAreaIds.length) {
+            ? hierarchy
+                .map((plantArea) => ({
+                  ...plantArea,
+                  sections: plantArea.sections.filter((section) => supervisorAreaIds.includes(section.id)),
+                }))
+                .filter((plantArea) => plantArea.sections.length > 0)
+            : hierarchy;
+        setPlantAreas(visiblePlantAreas);
+        const currentPlantAreaExists = visiblePlantAreas.some((area) => area.name === form.plant_area);
+        if (!currentPlantAreaExists && visiblePlantAreas.length) {
+          const defaultPlantArea = visiblePlantAreas[0];
           setForm((current) => ({
             ...current,
-            area_id: supervisorAreaIds.includes(current.area_id || -1)
+            plant_area: defaultPlantArea.name,
+            area_id: defaultPlantArea.sections[0]?.id ?? null,
+            equipment_id: null,
+          }));
+        } else if (user?.role === "SUPERVISOR" && supervisorAreaIds.length) {
+          const currentPlantArea = visiblePlantAreas.find((area) => area.name === form.plant_area);
+          setForm((current) => ({
+            ...current,
+            area_id: currentPlantArea?.sections.some((section) => section.id === current.area_id)
               ? current.area_id
-              : supervisorAreaIds[0],
+              : currentPlantArea?.sections[0]?.id ?? null,
+            equipment_id: null,
           }));
         }
         setWorkers(users);
@@ -195,10 +209,11 @@ export function OrderWizard() {
     load();
   }, [user]);
 
-  const availableSections = areas;
+  const selectedPlantArea = plantAreas.find((area) => area.name === form.plant_area) || null;
+  const availableSections = selectedPlantArea?.sections || [];
   const selectedSection = availableSections.find((a) => a.id === form.area_id) || null;
   const filteredEquipment = selectedSection?.equipment || [];
-  const plantAreaOptions = plantAreaCatalog.map((area) => ({ value: area.name, label: area.name }));
+  const plantAreaOptions = plantAreas.map((area) => ({ value: area.name, label: area.name }));
   const supervisorAreaIds =
     user?.role === "SUPERVISOR"
       ? (user.area_ids?.length ? user.area_ids : user.area_id ? [user.area_id] : [])
@@ -308,20 +323,14 @@ export function OrderWizard() {
     setCreatingEquipment(true);
     setEquipmentError("");
     try {
+      if (!selectedPlantArea) throw new Error("Selecciona un área general vinculada.");
       const created = await api.post<{ id: number; name: string; area_id: number }>(
         "/api/catalogs/equipment",
-        { name, area_id: form.area_id }
+        { name, area_id: form.area_id, plant_area_id: selectedPlantArea.id }
       );
-      setAreas((current) => current.map((area) =>
-        area.id === created.area_id
-          ? {
-              ...area,
-              equipment: [...area.equipment, { id: created.id, name: created.name }]
-                .sort((a, b) => a.name.localeCompare(b.name, "es")),
-            }
-          : area
-      ));
-      api.invalidateCache("/api/catalogs/tree");
+      api.invalidateCache("/api/catalogs/hierarchy");
+      const refreshed = await api.get<PlantAreaNode[]>("/api/catalogs/hierarchy");
+      setPlantAreas(refreshed);
       set("equipment_id", created.id);
       setNewEquipmentName("");
       setShowNewEquipment(false);
@@ -464,7 +473,15 @@ export function OrderWizard() {
               label="Área"
               options={plantAreaOptions}
               value={form.plant_area}
-              onChange={(e) => setForm((current) => ({ ...current, plant_area: e.target.value, area_id: null, equipment_id: null }))}
+              onChange={(e) => {
+                const selected = plantAreas.find((area) => area.name === e.target.value);
+                setForm((current) => ({
+                  ...current,
+                  plant_area: e.target.value,
+                  area_id: selected?.sections[0]?.id ?? null,
+                  equipment_id: null,
+                }));
+              }}
             />
             <SearchableSelect
               label="Sección"

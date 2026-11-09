@@ -4,6 +4,7 @@ import re
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 from starlette.concurrency import run_in_threadpool
 
 from app.api.dependencies import get_current_user, require_roles
@@ -11,6 +12,7 @@ from app.core.security import hash_password, verify_password
 from app.db.session import get_db
 from app.models.user import User, UserRole, WaterRegisterPermission
 from app.models.area import Area
+from app.models.plant_area import PlantArea, plant_area_sections
 from app.models.audit_log import AuditLog
 from app.models.work_order import WorkOrder
 from app.schemas.user import PasswordChange, UserCreate, UserResponse, UserUpdate
@@ -23,52 +25,75 @@ logger = logging.getLogger(__name__)
 admin_only = require_roles(UserRole.ADMIN)
 
 
-async def _legacy_validated_area_id(
-    db: AsyncSession, *, role: UserRole, area_id: int | None
-) -> int | None:
-    """Supervisors must belong to one existing plant area."""
-    if role != UserRole.SUPERVISOR:
-        return None
-    if area_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Un supervisor debe tener un área asignada.",
-        )
-    if await db.get(Area, area_id) is None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="El área asignada no existe.",
-        )
-    return area_id
-
-
-async def _validated_area_ids(
+async def _validated_supervisor_scope(
     db: AsyncSession,
     *,
     role: UserRole,
-    area_ids: list[int] | None = None,
-    legacy_area_id: int | None = None,
-) -> list[int]:
-    """Validate one or more areas assigned to a supervisor."""
-    requested = list(area_ids or [])
-    if not requested and legacy_area_id is not None:
-        requested = [legacy_area_id]
-    requested = list(dict.fromkeys(requested))
+    plant_area_ids: list[int] | None,
+    excluded_section_ids: list[int] | None,
+    legacy_section_ids: list[int] | None,
+) -> tuple[list[PlantArea], list[Area], list[Area]]:
     if role != UserRole.SUPERVISOR:
-        return []
-    if not requested:
+        return [], [], []
+
+    requested_plant_ids = list(dict.fromkeys(plant_area_ids or []))
+    requested_exclusions = list(dict.fromkeys(excluded_section_ids or []))
+    requested_legacy_ids = list(dict.fromkeys(legacy_section_ids or []))
+    if not requested_plant_ids and not requested_legacy_ids:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Un supervisor debe tener al menos un area asignada.",
+            detail="Asigna al supervisor al menos un área o una sección sin área general.",
         )
-    result = await db.execute(select(Area.id).where(Area.id.in_(requested)))
-    existing = {row[0] for row in result.all()}
-    if existing != set(requested):
+
+    plant_result = await db.execute(
+        select(PlantArea)
+        .options(selectinload(PlantArea.sections))
+        .where(PlantArea.id.in_(requested_plant_ids))
+    ) if requested_plant_ids else None
+    plants_by_id = {area.id: area for area in plant_result.scalars().all()} if plant_result else {}
+    if set(plants_by_id) != set(requested_plant_ids):
+        raise HTTPException(status_code=400, detail="Una de las áreas asignadas no existe.")
+
+    linked_section_ids: set[int] = set()
+    if requested_plant_ids:
+        links = await db.execute(
+            select(plant_area_sections.c.section_id).where(
+                plant_area_sections.c.plant_area_id.in_(requested_plant_ids)
+            )
+        )
+        linked_section_ids = {row[0] for row in links.all()}
+    if not set(requested_exclusions).issubset(linked_section_ids):
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Una de las areas asignadas no existe.",
+            status_code=400,
+            detail="Las secciones excluidas deben pertenecer a un área asignada.",
         )
-    return requested
+
+    section_result = await db.execute(
+        select(Area).where(Area.id.in_(requested_legacy_ids + requested_exclusions))
+    ) if requested_legacy_ids or requested_exclusions else None
+    sections_by_id = {section.id: section for section in section_result.scalars().all()} if section_result else {}
+    if set(sections_by_id) != set(requested_legacy_ids + requested_exclusions):
+        raise HTTPException(status_code=400, detail="Una de las secciones asignadas no existe.")
+    if not ((linked_section_ids - set(requested_exclusions)) | set(requested_legacy_ids)):
+        raise HTTPException(
+            status_code=400,
+            detail="Deja al menos una sección habilitada para el supervisor.",
+        )
+    legacy_sections = [sections_by_id[section_id] for section_id in requested_legacy_ids]
+    excluded_sections = [sections_by_id[section_id] for section_id in requested_exclusions]
+    return (
+        [plants_by_id[area_id] for area_id in requested_plant_ids],
+        excluded_sections,
+        legacy_sections,
+    )
+
+
+def _user_scope_options():
+    return (
+        selectinload(User.supervised_areas),
+        selectinload(User.supervised_plant_areas).selectinload(PlantArea.sections),
+        selectinload(User.excluded_supervised_sections),
+    )
 
 
 def _detected_image_mime(contents: bytes) -> str | None:
@@ -172,6 +197,7 @@ async def list_workers(
     authenticated user."""
     result = await db.execute(
         select(User)
+        .options(*_user_scope_options())
         .where(
             User.role == UserRole.WORKER,
             User.is_active == True,  # noqa: E712
@@ -188,7 +214,7 @@ async def list_users(
     limit: int | None = Query(default=None, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
-    query = select(User).order_by(User.full_name)
+    query = select(User).options(*_user_scope_options()).order_by(User.full_name)
     if offset:
         query = query.offset(offset)
     if limit:
@@ -216,25 +242,27 @@ async def create_user(
             status_code=status.HTTP_409_CONFLICT,
             detail="Ya existe un usuario con ese email",
         )
-    assigned_area_ids = await _validated_area_ids(
+    uses_new_scope = "plant_area_ids" in payload.model_fields_set
+    legacy_section_ids = (
+        payload.area_ids
+        if uses_new_scope
+        else (payload.area_ids or ([payload.area_id] if payload.area_id else []))
+    )
+    assigned_plant_areas, excluded_sections, assigned_legacy_sections = await _validated_supervisor_scope(
         db,
         role=payload.role,
-        area_ids=payload.area_ids,
-        legacy_area_id=payload.area_id,
+        plant_area_ids=payload.plant_area_ids if uses_new_scope else [],
+        excluded_section_ids=payload.excluded_section_ids if uses_new_scope else [],
+        legacy_section_ids=legacy_section_ids,
     )
-    assigned_areas = []
-    if assigned_area_ids:
-        area_result = await db.execute(
-            select(Area).where(Area.id.in_(assigned_area_ids))
-        )
-        by_id = {area.id: area for area in area_result.scalars().all()}
-        assigned_areas = [by_id[area_id] for area_id in assigned_area_ids]
+    assigned_plant_area_ids = [area.id for area in assigned_plant_areas]
+    assigned_legacy_section_ids = [section.id for section in assigned_legacy_sections]
     user = User(
         full_name=payload.full_name,
         email=payload.email.lower(),
         password_hash=hash_password(payload.password),
         role=payload.role,
-        area_id=assigned_area_ids[0] if assigned_area_ids else None,
+        area_id=assigned_legacy_section_ids[0] if assigned_legacy_section_ids else None,
         is_active=payload.is_active,
         can_manage_water_register=(
             _effective_water_permission(
@@ -263,7 +291,9 @@ async def create_user(
                 previous_data={"can_manage_equipment_inventory": True},
                 new_data={"can_manage_equipment_inventory": False},
             )
-    user.supervised_areas = assigned_areas
+    user.supervised_areas = assigned_legacy_sections
+    user.supervised_plant_areas = assigned_plant_areas
+    user.excluded_supervised_sections = excluded_sections
     db.add(user)
     await db.flush()
 
@@ -277,14 +307,21 @@ async def create_user(
             "full_name": user.full_name,
             "email": user.email,
             "role": user.role.value,
-            "area_ids": assigned_area_ids,
+            "plant_area_ids": assigned_plant_area_ids,
+            "excluded_section_ids": [section.id for section in excluded_sections],
+            "legacy_section_ids": assigned_legacy_section_ids,
             "can_manage_water_register": user.can_manage_water_register,
             "water_register_access": user.water_register_access,
             "can_manage_equipment_inventory": user.can_manage_equipment_inventory,
         },
     )
-    await db.refresh(user)
-    return user
+    refreshed = await db.execute(
+        select(User)
+        .options(*_user_scope_options())
+        .where(User.id == user.id)
+        .execution_options(populate_existing=True)
+    )
+    return refreshed.scalar_one()
 
 
 @router.post("/me/password", status_code=status.HTTP_204_NO_CONTENT)
@@ -323,7 +360,9 @@ async def update_user(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(admin_only),
 ):
-    result = await db.execute(select(User).where(User.id == user_id))
+    result = await db.execute(
+        select(User).options(*_user_scope_options()).where(User.id == user_id)
+    )
     user = result.scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
@@ -339,6 +378,8 @@ async def update_user(
         "signature": user.signature,
         "area_id": user.area_id,
         "area_ids": user.area_ids,
+        "plant_area_ids": user.plant_area_ids,
+        "excluded_section_ids": user.excluded_section_ids,
     }
 
     # ── Protecciones para no dejar el sistema sin acceso administrativo ──────
@@ -393,21 +434,36 @@ async def update_user(
         )
     if next_role != UserRole.WORKER or not next_active:
         next_inventory_access = False
-    if payload.area_ids is not None:
-        requested_area_ids = payload.area_ids
-    elif payload.area_id is not None:
-        requested_area_ids = [payload.area_id]
+    uses_new_scope = "plant_area_ids" in payload.model_fields_set
+    if uses_new_scope:
+        requested_plant_area_ids = payload.plant_area_ids or []
+        requested_excluded_section_ids = (
+            payload.excluded_section_ids
+            if payload.excluded_section_ids is not None
+            else user.excluded_section_ids
+        )
+        requested_legacy_section_ids = (
+            payload.area_ids
+            if payload.area_ids is not None
+            else user.legacy_section_ids
+        )
+    elif payload.area_ids is not None or payload.area_id is not None:
+        requested_plant_area_ids = []
+        requested_excluded_section_ids = []
+        requested_legacy_section_ids = payload.area_ids or ([payload.area_id] if payload.area_id else [])
     else:
-        requested_area_ids = user.area_ids
-    next_area_ids = await _validated_area_ids(
+        requested_plant_area_ids = user.plant_area_ids
+        requested_excluded_section_ids = user.excluded_section_ids
+        requested_legacy_section_ids = user.legacy_section_ids
+    next_plant_areas, next_excluded_sections, next_legacy_sections = await _validated_supervisor_scope(
         db,
         role=next_role,
-        area_ids=requested_area_ids,
+        plant_area_ids=requested_plant_area_ids,
+        excluded_section_ids=requested_excluded_section_ids,
+        legacy_section_ids=requested_legacy_section_ids,
     )
-    area_result = await db.execute(
-        select(Area).where(Area.id.in_(next_area_ids))
-    ) if next_area_ids else None
-    area_by_id = {area.id: area for area in area_result.scalars().all()} if area_result else {}
+    next_plant_area_ids = [area.id for area in next_plant_areas]
+    next_legacy_section_ids = [section.id for section in next_legacy_sections]
 
     if payload.full_name is not None:
         user.full_name = payload.full_name
@@ -415,8 +471,10 @@ async def update_user(
         user.email = payload.email.lower()
     if payload.role is not None:
         user.role = payload.role
-    user.area_id = next_area_ids[0] if next_area_ids else None
-    user.supervised_areas = [area_by_id[area_id] for area_id in next_area_ids]
+    user.area_id = next_legacy_section_ids[0] if next_legacy_section_ids else None
+    user.supervised_areas = next_legacy_sections
+    user.supervised_plant_areas = next_plant_areas
+    user.excluded_supervised_sections = next_excluded_sections
     if payload.is_active is not None:
         user.is_active = payload.is_active
     if next_inventory_access:
@@ -467,11 +525,18 @@ async def update_user(
             "can_manage_equipment_inventory": user.can_manage_equipment_inventory,
             "signature": user.signature,
             "area_id": user.area_id,
-            "area_ids": next_area_ids,
+            "plant_area_ids": next_plant_area_ids,
+            "excluded_section_ids": [section.id for section in next_excluded_sections],
+            "legacy_section_ids": next_legacy_section_ids,
         },
     )
-    await db.refresh(user)
-    return user
+    refreshed = await db.execute(
+        select(User)
+        .options(*_user_scope_options())
+        .where(User.id == user.id)
+        .execution_options(populate_existing=True)
+    )
+    return refreshed.scalar_one()
 
 
 @router.post("/me/signature", response_model=dict)

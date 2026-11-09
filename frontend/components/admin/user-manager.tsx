@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronDown, Loader2, Pencil, Plus, UserPlus, Users, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import type { AreaNode, User, WaterRegisterAccess } from "@/lib/types";
+import type { AreaNode, PlantAreaNode, User, WaterRegisterAccess } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -25,6 +25,87 @@ const WATER_ACCESS_OPTIONS = [
   { value: "VIEW", label: "Solo consulta" },
   { value: "EDIT", label: "Registrar y editar" },
 ];
+
+type SupervisorScopePickerProps = {
+  plantAreas: PlantAreaNode[];
+  unassignedSections: AreaNode[];
+  plantAreaIds: string[];
+  excludedSectionIds: string[];
+  legacySectionIds: string[];
+  disabled: boolean;
+  onTogglePlantArea: (id: number) => void;
+  onToggleSectionExclusion: (id: number) => void;
+  onToggleLegacySection: (id: number) => void;
+};
+
+function SupervisorScopePicker({
+  plantAreas, unassignedSections, plantAreaIds, excludedSectionIds, legacySectionIds,
+  disabled, onTogglePlantArea, onToggleSectionExclusion, onToggleLegacySection,
+}: SupervisorScopePickerProps) {
+  const visibleAreas = plantAreas.filter((area) => area.is_active || plantAreaIds.includes(String(area.id)));
+  return (
+    <div className="space-y-3 rounded-md border p-3">
+      <div>
+        <p className="text-sm font-medium">Áreas generales asignadas</p>
+        <p className="text-xs text-muted-foreground">Al marcar un área, se incluyen sus secciones. Puedes desmarcar secciones específicas.</p>
+      </div>
+      <div className="max-h-80 space-y-2 overflow-y-auto pr-1">
+        {visibleAreas.map((area) => {
+          const selected = plantAreaIds.includes(String(area.id));
+          const includedCount = area.sections.filter((section) => !excludedSectionIds.includes(String(section.id))).length;
+          return (
+            <div key={area.id} className="rounded-md bg-muted/30 p-2">
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  disabled={disabled || (!area.is_active && !selected)}
+                  onChange={() => onTogglePlantArea(area.id)}
+                />
+                <span className="flex-1">{area.name}{!area.is_active ? " · Inactiva" : ""}</span>
+                <span className="text-xs font-normal text-muted-foreground">{selected ? includedCount : 0}/{area.sections.length} secciones</span>
+              </label>
+              {selected && area.sections.length > 0 && (
+                <div className="mt-2 grid gap-x-3 gap-y-1 border-l pl-6 sm:grid-cols-2">
+                  {area.sections.map((section) => (
+                    <label key={section.id} className="flex items-center gap-2 text-xs">
+                      <input
+                        type="checkbox"
+                        checked={!excludedSectionIds.includes(String(section.id))}
+                        disabled={disabled}
+                        onChange={() => onToggleSectionExclusion(section.id)}
+                      />
+                      <span className="truncate" title={section.name}>{section.name}</span>
+                    </label>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {!visibleAreas.length && <p className="text-sm text-muted-foreground">No hay áreas generales disponibles.</p>}
+      </div>
+      {!!unassignedSections.length && (
+        <details>
+          <summary className="cursor-pointer text-sm font-medium">Secciones sin área general ({legacySectionIds.length} asignadas)</summary>
+          <div className="mt-2 grid max-h-40 gap-1 overflow-y-auto rounded-md border p-2 sm:grid-cols-2">
+            {unassignedSections.map((section) => (
+              <label key={section.id} className="flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={legacySectionIds.includes(String(section.id))}
+                  disabled={disabled}
+                  onChange={() => onToggleLegacySection(section.id)}
+                />
+                <span className="truncate" title={section.name}>{section.name}</span>
+              </label>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
 
 function waterAccessOf(user: User): WaterRegisterAccess {
   if (user.water_register_access === "NONE") return "NONE";
@@ -52,9 +133,11 @@ export function UserManager() {
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("WORKER");
   const [waterRegisterAccess, setWaterRegisterAccess] = useState<WaterRegisterAccess>("NONE");
-  const [areaId, setAreaId] = useState("");
-  const [areaIds, setAreaIds] = useState<string[]>([]);
+  const [plantAreaIds, setPlantAreaIds] = useState<string[]>([]);
+  const [excludedSectionIds, setExcludedSectionIds] = useState<string[]>([]);
+  const [legacySectionIds, setLegacySectionIds] = useState<string[]>([]);
   const [areas, setAreas] = useState<AreaNode[]>([]);
+  const [plantAreas, setPlantAreas] = useState<PlantAreaNode[]>([]);
 
   // edit form
   const [editingUser, setEditingUser] = useState<User | null>(null);
@@ -63,8 +146,9 @@ export function UserManager() {
   const [editRole, setEditRole] = useState("WORKER");
   const [editWaterRegisterAccess, setEditWaterRegisterAccess] = useState<WaterRegisterAccess>("NONE");
   const [editInventoryAccess, setEditInventoryAccess] = useState(false);
-  const [editAreaId, setEditAreaId] = useState("");
-  const [editAreaIds, setEditAreaIds] = useState<string[]>([]);
+  const [editPlantAreaIds, setEditPlantAreaIds] = useState<string[]>([]);
+  const [editExcludedSectionIds, setEditExcludedSectionIds] = useState<string[]>([]);
+  const [editLegacySectionIds, setEditLegacySectionIds] = useState<string[]>([]);
   const [editPassword, setEditPassword] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const editFormRef = useRef<HTMLFormElement>(null);
@@ -76,8 +160,20 @@ export function UserManager() {
     });
 
   useEffect(() => {
-    api.getCached<AreaNode[]>("/api/catalogs/tree", 5 * 60 * 1000).then(setAreas).catch(() => setAreas([]));
+    Promise.all([
+      api.getCached<AreaNode[]>("/api/catalogs/tree", 5 * 60 * 1000),
+      api.getCached<PlantAreaNode[]>("/api/catalogs/hierarchy?include_inactive=true", 5 * 60 * 1000),
+    ]).then(([sectionTree, hierarchy]) => {
+      setAreas(sectionTree);
+      setPlantAreas(hierarchy);
+    }).catch(() => {
+      setAreas([]);
+      setPlantAreas([]);
+    });
   }, []);
+
+  const assignedSectionIds = new Set(plantAreas.flatMap((area) => area.sections.map((section) => section.id)));
+  const unassignedSections = areas.filter((section) => !assignedSectionIds.has(section.id));
 
   const filtered = users.filter((u) => {
     if (!search.trim()) return true;
@@ -109,8 +205,10 @@ export function UserManager() {
         password,
         role,
         water_register_access: waterRegisterAccess,
-        area_id: role === "SUPERVISOR" && areaId ? Number(areaId) : null,
-        area_ids: role === "SUPERVISOR" ? Array.from(new Set([areaId, ...areaIds].filter(Boolean))).map(Number) : [],
+        area_id: null,
+        area_ids: role === "SUPERVISOR" ? legacySectionIds.map(Number) : [],
+        plant_area_ids: role === "SUPERVISOR" ? plantAreaIds.map(Number) : [],
+        excluded_section_ids: role === "SUPERVISOR" ? excludedSectionIds.map(Number) : [],
       });
       setShowForm(false);
       setFullName("");
@@ -118,8 +216,9 @@ export function UserManager() {
       setPassword("");
       setRole("WORKER");
       setWaterRegisterAccess("NONE");
-      setAreaId("");
-      setAreaIds([]);
+      setPlantAreaIds([]);
+      setExcludedSectionIds([]);
+      setLegacySectionIds([]);
       api.invalidateCache("/api/users/workers");
       await reload();
     } catch (err) {
@@ -146,8 +245,9 @@ export function UserManager() {
     setEditRole(user.role);
     setEditWaterRegisterAccess(waterAccessOf(user));
     setEditInventoryAccess(user.can_manage_equipment_inventory ?? false);
-    setEditAreaId(user.area_id ? String(user.area_id) : "");
-    setEditAreaIds((user.area_ids?.length ? user.area_ids : user.area_id ? [user.area_id] : []).map(String));
+    setEditPlantAreaIds((user.plant_area_ids || []).map(String));
+    setEditExcludedSectionIds((user.excluded_section_ids || []).map(String));
+    setEditLegacySectionIds((user.legacy_section_ids || []).map(String));
     setEditPassword("");
     setError("");
   }
@@ -183,8 +283,10 @@ export function UserManager() {
         role: editRole,
         water_register_access: editWaterRegisterAccess,
         can_manage_equipment_inventory: editRole === "WORKER" && editInventoryAccess,
-        area_id: editRole === "SUPERVISOR" && editAreaId ? Number(editAreaId) : null,
-        area_ids: editRole === "SUPERVISOR" ? Array.from(new Set([editAreaId, ...editAreaIds].filter(Boolean))).map(Number) : [],
+        area_id: null,
+        area_ids: editRole === "SUPERVISOR" ? editLegacySectionIds.map(Number) : [],
+        plant_area_ids: editRole === "SUPERVISOR" ? editPlantAreaIds.map(Number) : [],
+        excluded_section_ids: editRole === "SUPERVISOR" ? editExcludedSectionIds.map(Number) : [],
       };
       // Si el admin escribió una nueva contraseña, se envía; si la dejó vacía, no.
       if (editPassword.trim()) body.password = editPassword;
@@ -255,34 +357,27 @@ export function UserManager() {
             onChange={(e) => setRole(e.target.value)}
           />
           {role === "SUPERVISOR" && (
-            <>
-            <Select
-              label="Sección principal supervisada"
-              options={areas.map((area) => ({ value: String(area.id), label: area.name }))}
-              value={areaId}
-              onChange={(e) => {
-                setAreaId(e.target.value);
-                setAreaIds((current) => e.target.value && !current.includes(e.target.value) ? [e.target.value, ...current] : current);
-              }}
+            <SupervisorScopePicker
+              plantAreas={plantAreas}
+              unassignedSections={unassignedSections}
+              plantAreaIds={plantAreaIds}
+              excludedSectionIds={excludedSectionIds}
+              legacySectionIds={legacySectionIds}
               disabled={saving}
-              required
+              onTogglePlantArea={(id) => {
+                const idString = String(id);
+                const children = plantAreas.find((area) => area.id === id)?.sections.map((section) => String(section.id)) || [];
+                if (plantAreaIds.includes(idString)) {
+                  setPlantAreaIds((current) => current.filter((item) => item !== idString));
+                  setExcludedSectionIds((current) => current.filter((item) => !children.includes(item)));
+                } else {
+                  setPlantAreaIds((current) => [...current, idString]);
+                  setExcludedSectionIds((current) => current.filter((item) => !children.includes(item)));
+                }
+              }}
+              onToggleSectionExclusion={(id) => setExcludedSectionIds((current) => current.includes(String(id)) ? current.filter((item) => item !== String(id)) : [...current, String(id)])}
+              onToggleLegacySection={(id) => setLegacySectionIds((current) => current.includes(String(id)) ? current.filter((item) => item !== String(id)) : [...current, String(id)])}
             />
-            <div className="rounded-md border p-2">
-              <p className="mb-1 text-xs font-medium text-muted-foreground">Otras secciones supervisadas</p>
-              <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
-                {areas.map((area) => (
-                  <label key={area.id} className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={areaIds.includes(String(area.id))}
-                      onChange={() => setAreaIds((current) => current.includes(String(area.id)) ? current.filter((id) => id !== String(area.id)) : [...current, String(area.id)])}
-                    />
-                    {area.name}
-                  </label>
-                ))}
-              </div>
-            </div>
-            </>
           )}
           <Select
             label="Permiso de Planta de RILES"
@@ -291,7 +386,7 @@ export function UserManager() {
             onChange={(e) => setWaterRegisterAccess(e.target.value as WaterRegisterAccess)}
             disabled={saving}
           />
-          <Button type="submit" size="lg" className="w-full" disabled={saving || (role === "SUPERVISOR" && !areaId)}>
+          <Button type="submit" size="lg" className="w-full" disabled={saving || (role === "SUPERVISOR" && !plantAreaIds.length && !legacySectionIds.length)}>
             {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
             Crear usuario
           </Button>
@@ -356,34 +451,27 @@ export function UserManager() {
             disabled={editSaving}
           />
           {editRole === "SUPERVISOR" && (
-            <>
-            <Select
-              label="Sección principal supervisada"
-              options={areas.map((area) => ({ value: String(area.id), label: area.name }))}
-              value={editAreaId}
-              onChange={(e) => {
-                setEditAreaId(e.target.value);
-                setEditAreaIds((current) => e.target.value && !current.includes(e.target.value) ? [e.target.value, ...current] : current);
-              }}
+            <SupervisorScopePicker
+              plantAreas={plantAreas}
+              unassignedSections={unassignedSections}
+              plantAreaIds={editPlantAreaIds}
+              excludedSectionIds={editExcludedSectionIds}
+              legacySectionIds={editLegacySectionIds}
               disabled={editSaving}
-              required
+              onTogglePlantArea={(id) => {
+                const idString = String(id);
+                const children = plantAreas.find((area) => area.id === id)?.sections.map((section) => String(section.id)) || [];
+                if (editPlantAreaIds.includes(idString)) {
+                  setEditPlantAreaIds((current) => current.filter((item) => item !== idString));
+                  setEditExcludedSectionIds((current) => current.filter((item) => !children.includes(item)));
+                } else {
+                  setEditPlantAreaIds((current) => [...current, idString]);
+                  setEditExcludedSectionIds((current) => current.filter((item) => !children.includes(item)));
+                }
+              }}
+              onToggleSectionExclusion={(id) => setEditExcludedSectionIds((current) => current.includes(String(id)) ? current.filter((item) => item !== String(id)) : [...current, String(id)])}
+              onToggleLegacySection={(id) => setEditLegacySectionIds((current) => current.includes(String(id)) ? current.filter((item) => item !== String(id)) : [...current, String(id)])}
             />
-            <div className="rounded-md border p-2">
-              <p className="mb-1 text-xs font-medium text-muted-foreground">Otras secciones supervisadas</p>
-              <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
-                {areas.map((area) => (
-                  <label key={area.id} className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={editAreaIds.includes(String(area.id))}
-                      onChange={() => setEditAreaIds((current) => current.includes(String(area.id)) ? current.filter((id) => id !== String(area.id)) : [...current, String(area.id)])}
-                    />
-                    {area.name}
-                  </label>
-                ))}
-              </div>
-            </div>
-            </>
           )}
           <Select
             label="Permiso de Planta de RILES"
@@ -425,7 +513,7 @@ export function UserManager() {
             <p className="text-xs text-muted-foreground">Mínimo 6 caracteres. Si la deja vacía, la contraseña actual se conserva.</p>
           </div>
           <div className="flex gap-2">
-            <Button type="submit" size="lg" className="flex-1" disabled={editSaving || (editRole === "SUPERVISOR" && !editAreaId)}>
+            <Button type="submit" size="lg" className="flex-1" disabled={editSaving || (editRole === "SUPERVISOR" && !editPlantAreaIds.length && !editLegacySectionIds.length)}>
               {editSaving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Pencil className="mr-2 h-4 w-4" />}
               Guardar cambios
             </Button>
@@ -464,7 +552,7 @@ export function UserManager() {
                     <div className="text-xs text-muted-foreground truncate">{u.email}</div>
                     {u.role === "SUPERVISOR" && (
                       <div className="text-xs text-blue-700">
-                        Secciones asignadas: {u.area_names?.length ? u.area_names.join(", ") : "Sin asignar"}
+                        Áreas asignadas: {u.area_names?.length ? u.area_names.join(", ") : "Sin asignar"}
                       </div>
                     )}
                     {u.can_manage_equipment_inventory && (

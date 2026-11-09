@@ -6,7 +6,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.notification import Notification
 from app.models.user import User, UserRole
 from app.models.work_order import WorkOrder
-from app.models.supervisor_area import supervisor_areas
+from app.models.supervisor_area import (
+    supervisor_areas,
+    supervisor_plant_areas,
+    supervisor_area_section_exclusions,
+)
+from app.models.plant_area import plant_area_sections
 
 
 async def create_notification(
@@ -196,6 +201,22 @@ async def notify_supervisor_validation_pending(
                         User.id.in_(
                             select(supervisor_areas.c.supervisor_id).where(
                                 supervisor_areas.c.area_id == wo.area_id
+                            )
+                        ),
+                        User.id.in_(
+                            select(supervisor_plant_areas.c.supervisor_id)
+                            .join(
+                                plant_area_sections,
+                                plant_area_sections.c.plant_area_id == supervisor_plant_areas.c.plant_area_id,
+                            )
+                            .where(
+                                plant_area_sections.c.section_id == wo.area_id,
+                                ~select(supervisor_area_section_exclusions.c.section_id)
+                                .where(
+                                    supervisor_area_section_exclusions.c.supervisor_id == supervisor_plant_areas.c.supervisor_id,
+                                    supervisor_area_section_exclusions.c.section_id == wo.area_id,
+                                )
+                                .exists(),
                             )
                         ),
                     )

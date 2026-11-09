@@ -18,11 +18,13 @@ interface NavItem {
   waterRegisterOnly?: boolean;
   hazardousWasteOnly?: boolean;
   hallazgoOnly?: boolean;
+  supervisorOnly?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: <LayoutDashboard className="h-4 w-4" /> },
   { href: "/hallazgos", label: "Hallazgos", icon: <Siren className="h-4 w-4" />, hallazgoOnly: true },
+  { href: "/hallazgos/nuevo", label: "Reportar hallazgo", icon: <Siren className="h-4 w-4" />, supervisorOnly: true },
   { href: "/mis-ordenes", label: "Mis Órdenes", icon: <ClipboardCheck className="h-4 w-4" /> },
   { href: "/hojas-vida", label: "Hojas de vida", icon: <History className="h-4 w-4" /> },
   { href: "/inventario-equipos", label: "Inventario", icon: <Boxes className="h-4 w-4" /> },
@@ -126,6 +128,7 @@ export function Shell({
                 (!item.adminOnly || role === "ADMIN") &&
                 (!item.managerOnly || role === "ADMIN" || role === "SUPERVISOR") &&
                 (!item.hallazgoOnly || role === "ADMIN" || role === "WORKER") &&
+                (!item.supervisorOnly || role === "SUPERVISOR") &&
                 (!item.waterRegisterOnly || canAccessWater)
                 && (!item.hazardousWasteOnly || role === "ADMIN")
             ).map((item) => (

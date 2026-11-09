@@ -10,6 +10,10 @@ class UserBase(BaseModel):
     role: UserRole = UserRole.WORKER
     area_id: int | None = None
     area_ids: list[int] = []
+    plant_area_ids: list[int] = []
+    plant_area_names: list[str] = []
+    excluded_section_ids: list[int] = []
+    legacy_section_ids: list[int] = []
     is_active: bool = True
     can_manage_water_register: bool = False
     water_register_access: WaterRegisterPermission = WaterRegisterPermission.NONE
@@ -26,6 +30,8 @@ class UserUpdate(BaseModel):
     role: UserRole | None = None
     area_id: int | None = None
     area_ids: list[int] | None = None
+    plant_area_ids: list[int] | None = None
+    excluded_section_ids: list[int] | None = None
     is_active: bool | None = None
     can_manage_water_register: bool | None = None
     water_register_access: WaterRegisterPermission | None = None

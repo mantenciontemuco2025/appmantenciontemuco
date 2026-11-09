@@ -36,6 +36,7 @@ from app.db.session import get_db, async_session
 from app.models.user import User, UserRole
 from app.models.area import Area
 from app.models.equipment import Equipment
+from app.models.plant_area import PlantArea, plant_area_sections
 from app.models.work_order import WorkOrder, WorkOrderStatus, SupervisorReviewStatus
 from app.models.work_order_evidence import WorkOrderEvidence
 from app.models.work_order_participants import work_order_participants
@@ -305,15 +306,66 @@ async def _next_hallazgo_folio(db: AsyncSession) -> str:
 
 
 async def _validate_area_equipment(
-    db: AsyncSession, area_id: int, equipment_id: int | None
+    db: AsyncSession,
+    area_id: int,
+    equipment_id: int | None,
+    plant_area_name: str | None = None,
+    current_user: User | None = None,
 ) -> tuple[Area, Equipment | None]:
     area = await db.get(Area, area_id)
     if area is None:
         raise HTTPException(status_code=400, detail="Área no válida")
+    plant_area = None
+    if plant_area_name is not None:
+        normalized_plant_area = plant_area_name.strip().upper()
+        plant_area = await db.scalar(
+            select(PlantArea).where(
+                func.upper(func.trim(PlantArea.name)) == normalized_plant_area
+            ).limit(1)
+        )
+        if plant_area is None:
+            # Keep installations that have not configured any plant-area catalog
+            # usable during rollout. Once the catalog has at least one entry,
+            # enforce the hierarchy for every new/changed OT location.
+            configured_plant_area_id = await db.scalar(select(PlantArea.id).limit(1))
+            if configured_plant_area_id is not None:
+                raise HTTPException(status_code=400, detail="Selecciona un área general válida")
+            plant_area = None
+        if plant_area is not None:
+            if not plant_area.is_active:
+                raise HTTPException(status_code=400, detail="El área general está desactivada y no se puede usar en una nueva OT")
+            linked = await db.scalar(
+                select(plant_area_sections.c.section_id).where(
+                    plant_area_sections.c.plant_area_id == plant_area.id,
+                    plant_area_sections.c.section_id == area_id,
+                )
+            )
+            if linked is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="La sección no pertenece al área general seleccionada.",
+                )
+    if current_user is not None and current_user.role == UserRole.SUPERVISOR:
+        if plant_area is None:
+            if area_id not in current_user.legacy_section_ids:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Debes seleccionar una de tus áreas generales asignadas.",
+                )
+        elif plant_area.id not in current_user.plant_area_ids or area_id in current_user.excluded_section_ids:
+            raise HTTPException(
+                status_code=403,
+                detail="No tienes permiso para reportar en esta área o sección.",
+            )
     if equipment_id is not None:
         eq = await db.get(Equipment, equipment_id)
         if eq is None or eq.area_id != area_id:
             raise HTTPException(status_code=400, detail="El equipo no pertenece al área seleccionada")
+        if plant_area is not None and eq.plant_area_id != plant_area.id:
+            raise HTTPException(
+                status_code=400,
+                detail="El equipo no está asociado a esa área general y sección.",
+            )
         return area, eq
     return area, None
 
@@ -1239,7 +1291,7 @@ async def create_work_order(
             )
 
     area, equipment = await _validate_area_equipment(
-        db, payload.area_id, payload.equipment_id
+        db, payload.area_id, payload.equipment_id, payload.plant_area, current_user
     )
 
     # Determine initial status
@@ -2211,13 +2263,15 @@ async def create_hallazgo(
     current_user: User = Depends(get_current_user),
 ):
     """Create a worker report without consuming an official OT number."""
-    if current_user.role != UserRole.WORKER:
-        raise HTTPException(status_code=403, detail="Solo los trabajadores pueden crear hallazgos")
+    if current_user.role not in (UserRole.WORKER, UserRole.SUPERVISOR):
+        raise HTTPException(status_code=403, detail="Solo trabajadores y supervisores pueden crear hallazgos")
     area_scope_error = _supervisor_area_error(current_user, payload.area_id)
     if area_scope_error:
         raise HTTPException(status_code=403, detail=area_scope_error)
 
-    area, equipment = await _validate_area_equipment(db, payload.area_id, payload.equipment_id)
+    area, equipment = await _validate_area_equipment(
+        db, payload.area_id, payload.equipment_id, payload.plant_area, current_user
+    )
     folio = await _next_hallazgo_folio(db)
     now = datetime.now(timezone.utc)
     participant_ids = list(dict.fromkeys([current_user.id, *payload.participant_user_ids]))
@@ -2489,20 +2543,33 @@ async def review_hallazgo(
             wo.external_account_number = None
             wo.external_oc_amount = None
             wo.coordinator_user_id = None
-        if "plant_area" in payload.model_fields_set:
-            wo.plant_area = _validate_plant_area(payload.plant_area)
-        if "area_id" in payload.model_fields_set or "equipment_id" in payload.model_fields_set:
-            target_area_id = payload.area_id if payload.area_id is not None else wo.area_id
+        location_requested = any(
+            field in payload.model_fields_set
+            for field in ("plant_area", "area_id", "equipment_id")
+        )
+        target_plant_area = (
+            _validate_plant_area(payload.plant_area)
+            if payload.plant_area is not None
+            else wo.plant_area
+        )
+        target_area_id = payload.area_id if payload.area_id is not None else wo.area_id
+        target_equipment_id = (
+            payload.equipment_id
+            if "equipment_id" in payload.model_fields_set
+            else wo.equipment_id
+        )
+        location_changed = location_requested and (
+            target_plant_area != wo.plant_area
+            or target_area_id != wo.area_id
+            or target_equipment_id != wo.equipment_id
+        )
+        if location_changed:
             if target_area_id is None:
                 raise HTTPException(status_code=400, detail="Selecciona una sección para convertir el hallazgo en OT")
-            target_equipment_id = (
-                payload.equipment_id
-                if "equipment_id" in payload.model_fields_set
-                else wo.equipment_id
-            )
             section, equipment = await _validate_area_equipment(
-                db, target_area_id, target_equipment_id
+                db, target_area_id, target_equipment_id, target_plant_area, current_user
             )
+            wo.plant_area = target_plant_area
             wo.area_id = section.id
             wo.section_name = section.name
             wo.equipment_id = equipment.id if equipment else None
@@ -3240,22 +3307,37 @@ async def update_work_order(
         wo.description = payload.description
     if "original_ot_number" in payload.model_fields_set:
         wo.original_ot_number = payload.original_ot_number.strip() if payload.original_ot_number else None
-    if payload.area_id is not None:
-        if payload.area_id != wo.area_id and payload.equipment_id is None:
+    location_requested = any(
+        field in payload.model_fields_set
+        for field in ("plant_area", "area_id", "equipment_id")
+    )
+    target_plant_area = (
+        _validate_plant_area(payload.plant_area)
+        if payload.plant_area is not None
+        else wo.plant_area
+    )
+    target_area_id = payload.area_id if payload.area_id is not None else wo.area_id
+    target_equipment_id = payload.equipment_id if payload.equipment_id is not None else wo.equipment_id
+    location_changed = location_requested and (
+        target_plant_area != wo.plant_area
+        or target_area_id != wo.area_id
+        or target_equipment_id != wo.equipment_id
+    )
+    if location_changed:
+        if not target_plant_area:
+            raise HTTPException(status_code=400, detail="Selecciona un área de planta")
+        if target_area_id is None:
+            raise HTTPException(status_code=400, detail="Selecciona una sección")
+        if target_area_id != wo.area_id and payload.equipment_id is None:
             raise HTTPException(status_code=400, detail="Selecciona un equipo de la sección elegida")
-        effective_equipment_id = payload.equipment_id or wo.equipment_id
         section, equipment = await _validate_area_equipment(
-            db, payload.area_id, effective_equipment_id
+            db, target_area_id, target_equipment_id, target_plant_area, current_user
         )
-        wo.area_id = payload.area_id
+        wo.plant_area = target_plant_area
+        wo.area_id = section.id
         wo.equipment_id = equipment.id if equipment else None
-        if wo.plant_area:
+        if wo.section_name is not None:
             wo.section_name = section.name
-    elif payload.equipment_id is not None:
-        await _validate_area_equipment(db, wo.area_id, payload.equipment_id)
-        wo.equipment_id = payload.equipment_id
-    if payload.plant_area is not None:
-        wo.plant_area = _validate_plant_area(payload.plant_area)
     if payload.section_name is not None:
         wo.section_name = payload.section_name
     if payload.maintenance_type is not None:
@@ -3492,21 +3574,36 @@ async def reassign_work_order(
             detail="Indica cambios de asignación o ubicación de la OT",
         )
 
-    if payload.area_id is not None or payload.equipment_id is not None:
-        target_section_id = payload.area_id or wo.area_id
+    location_requested = any(
+        field in payload.model_fields_set
+        for field in ("plant_area", "area_id", "equipment_id")
+    )
+    target_plant_area = (
+        _validate_plant_area(payload.plant_area)
+        if payload.plant_area is not None
+        else wo.plant_area
+    )
+    target_section_id = payload.area_id if payload.area_id is not None else wo.area_id
+    target_equipment_id = payload.equipment_id if payload.equipment_id is not None else wo.equipment_id
+    location_changed = location_requested and (
+        target_plant_area != wo.plant_area
+        or target_section_id != wo.area_id
+        or target_equipment_id != wo.equipment_id
+    )
+    if location_changed:
+        if not target_plant_area:
+            raise HTTPException(status_code=400, detail="Selecciona un área de planta")
         if target_section_id != wo.area_id and payload.equipment_id is None:
             raise HTTPException(status_code=400, detail="Selecciona un equipo de la sección elegida")
-        target_equipment_id = payload.equipment_id or wo.equipment_id
         section, equipment = await _validate_area_equipment(
-            db, target_section_id, target_equipment_id
+            db, target_section_id, target_equipment_id, target_plant_area, current_user
         )
         if equipment is None:
             raise HTTPException(status_code=400, detail="Selecciona un equipo para la OT")
+        wo.plant_area = target_plant_area
         wo.area_id = section.id
         wo.equipment_id = equipment.id
         wo.section_name = section.name
-    if payload.plant_area is not None:
-        wo.plant_area = _validate_plant_area(payload.plant_area)
 
     if "scheduled_date" in payload.model_fields_set:
         wo.scheduled_date = payload.scheduled_date

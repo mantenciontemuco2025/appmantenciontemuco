@@ -1,11 +1,13 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import decode_access_token
 from app.db.session import get_db
 from app.models.user import User, UserRole
+from app.models.plant_area import PlantArea
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
@@ -45,6 +47,18 @@ async def get_current_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Usuario desactivado",
         )
+    if user.role == UserRole.SUPERVISOR:
+        scoped_result = await db.execute(
+            select(User)
+            .options(
+                selectinload(User.supervised_areas),
+                selectinload(User.supervised_plant_areas).selectinload(PlantArea.sections),
+                selectinload(User.excluded_supervised_sections),
+            )
+            .where(User.id == user.id)
+            .execution_options(populate_existing=True)
+        )
+        user = scoped_result.scalar_one()
     return user
 
 

@@ -10,7 +10,11 @@ from app.models.monthly_register import GoogleMonthlyRegister
 from app.models.notification import Notification
 from app.models.sync_job import ExternalSyncJob, SyncJobStatus
 from app.models.push_subscription import PushSubscription
-from app.models.supervisor_area import supervisor_areas
+from app.models.supervisor_area import (
+    supervisor_areas,
+    supervisor_plant_areas,
+    supervisor_area_section_exclusions,
+)
 from app.models.worker_column import WorkerColumn
 from app.models.work_order_evidence import WorkOrderEvidence
 from app.models.material_catalog import MaterialCatalog
@@ -39,6 +43,8 @@ __all__ = [
     "SyncJobStatus",
     "PushSubscription",
     "supervisor_areas",
+    "supervisor_plant_areas",
+    "supervisor_area_section_exclusions",
     "WorkerColumn",
     "WorkOrderEvidence",
     "MaterialCatalog",

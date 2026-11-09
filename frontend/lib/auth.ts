@@ -23,6 +23,10 @@ export interface AuthUser {
   area_name: string | null;
   area_ids: number[];
   area_names: string[];
+  plant_area_ids?: number[];
+  plant_area_names?: string[];
+  excluded_section_ids?: number[];
+  legacy_section_ids?: number[];
   is_active: boolean;
   can_manage_water_register: boolean;
   water_register_access: WaterRegisterAccess;

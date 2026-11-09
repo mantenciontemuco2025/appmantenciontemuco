@@ -88,6 +88,16 @@ class User(Base):
         secondary="supervisor_areas",
         lazy="selectin",
     )
+    supervised_plant_areas = relationship(
+        "PlantArea",
+        secondary="supervisor_plant_areas",
+        lazy="noload",
+    )
+    excluded_supervised_sections = relationship(
+        "Area",
+        secondary="supervisor_area_section_exclusions",
+        lazy="noload",
+    )
     worker_column = relationship(
         "WorkerColumn",
         back_populates="user",
@@ -100,18 +110,46 @@ class User(Base):
 
     @property
     def area_name(self) -> str | None:
+        if self.supervised_plant_areas:
+            return self.supervised_plant_areas[0].name
         return self.supervisor_area.name if self.supervisor_area else None
 
     @property
     def area_ids(self) -> list[int]:
-        ids = [area.id for area in (self.supervised_areas or [])]
-        if ids:
-            return ids
-        return [self.area_id] if self.area_id is not None else []
+        legacy_ids = {area.id for area in (self.supervised_areas or [])}
+        if self.area_id is not None:
+            legacy_ids.add(self.area_id)
+        excluded_ids = {area.id for area in (self.excluded_supervised_sections or [])}
+        inherited_ids = {
+            section.id
+            for plant_area in (self.supervised_plant_areas or [])
+            for section in (plant_area.sections or [])
+        }
+        return sorted(legacy_ids | (inherited_ids - excluded_ids))
+
+    @property
+    def plant_area_ids(self) -> list[int]:
+        return sorted(area.id for area in (self.supervised_plant_areas or []))
+
+    @property
+    def plant_area_names(self) -> list[str]:
+        return [area.name for area in sorted(self.supervised_plant_areas or [], key=lambda item: item.name.casefold())]
+
+    @property
+    def excluded_section_ids(self) -> list[int]:
+        return sorted(area.id for area in (self.excluded_supervised_sections or []))
+
+    @property
+    def legacy_section_ids(self) -> list[int]:
+        ids = {area.id for area in (self.supervised_areas or [])}
+        if self.area_id is not None:
+            ids.add(self.area_id)
+        return sorted(ids)
 
     @property
     def area_names(self) -> list[str]:
-        names = [area.name for area in (self.supervised_areas or [])]
-        if names:
-            return names
-        return [self.area_name] if self.area_name else []
+        names = self.plant_area_names
+        names.extend(area.name for area in sorted(self.supervised_areas or [], key=lambda item: item.name.casefold()))
+        if not names and self.supervisor_area:
+            names.append(self.supervisor_area.name)
+        return names

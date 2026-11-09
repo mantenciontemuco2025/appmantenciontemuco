@@ -35,11 +35,25 @@ class PlantAreaCreate(BaseModel):
 
 class PlantAreaUpdate(BaseModel):
     name: str | None = None
+    is_active: bool | None = None
+
+
+class PlantAreaSectionCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        value = " ".join(value.split())
+        if not value:
+            raise ValueError("El nombre de la sección no puede estar vacío")
+        return value
 
 
 class PlantAreaResponse(BaseModel):
     id: int
     name: str
+    is_active: bool = True
     created_at: datetime
     updated_at: datetime
 
@@ -126,7 +140,6 @@ class EquipmentInventoryUpdate(BaseModel):
     rotation_speed: str | None = Field(default=None, max_length=100)
     npsh: str | None = Field(default=None, max_length=100)
     operational_status: str | None = Field(default=None, max_length=80)
-    last_maintenance_date: date | None = None
     general_spare_parts: str | None = Field(default=None, max_length=10000)
     observations: str | None = Field(default=None, max_length=10000)
     power_hp: str | None = Field(default=None, max_length=80)
@@ -234,6 +247,7 @@ class SectionWithEquipment(BaseModel):
 class PlantAreaWithSections(BaseModel):
     id: int
     name: str
+    is_active: bool = True
     sections: list[SectionWithEquipment]
 
     model_config = {"from_attributes": True}
@@ -247,8 +261,32 @@ class InventoryImportItem(BaseModel):
     section: str = Field(default="", max_length=200)
     equipment: str = Field(default="", max_length=200)
     category: str | None = Field(default=None, max_length=180)
+    model: str | None = Field(default=None, max_length=200)
+    dimensions: str | None = Field(default=None, max_length=200)
+    weight: Decimal | None = Field(default=None, ge=0, le=99999999999)
+    unit: str | None = Field(default=None, max_length=40)
+    description: str | None = Field(default=None, max_length=10000)
     location: str | None = Field(default=None, max_length=250)
+    purchase_receipt_date: date | None = None
+    purchased_from: str | None = Field(default=None, max_length=250)
+    warranty_end: date | None = None
+    web1: str | None = Field(default=None, max_length=500)
+    initial_value: Decimal | None = Field(default=None, ge=0, le=999999999999)
+    impeller_diameter: str | None = Field(default=None, max_length=100)
+    flow_rate: str | None = Field(default=None, max_length=100)
+    total_manometric_head: str | None = Field(default=None, max_length=100)
+    rotation_speed: str | None = Field(default=None, max_length=100)
+    npsh: str | None = Field(default=None, max_length=100)
     operational_status: str | None = Field(default=None, max_length=80)
+    general_spare_parts: str | None = Field(default=None, max_length=10000)
+    observations: str | None = Field(default=None, max_length=10000)
+    power_hp: str | None = Field(default=None, max_length=80)
+    power_kw: str | None = Field(default=None, max_length=80)
+    voltage: str | None = Field(default=None, max_length=80)
+    current: str | None = Field(default=None, max_length=80)
+    revolutions: str | None = Field(default=None, max_length=80)
+    efficiency: str | None = Field(default=None, max_length=80)
+    capacity: str | None = Field(default=None, max_length=120)
 
 
 class InventoryImportPayload(BaseModel):
