@@ -215,6 +215,7 @@ export function CatalogManager() {
   const [catalogSearch, setCatalogSearch] = useState("");
   const [sectionSearch, setSectionSearch] = useState("");
   const [sectionLinkDrafts, setSectionLinkDrafts] = useState<Record<number, string>>({});
+  const [equipmentLocationDrafts, setEquipmentLocationDrafts] = useState<Record<number, { plantAreaId: string; sectionId: string }>>({});
   const [newSectionDrafts, setNewSectionDrafts] = useState<Record<number, string>>({});
   const [newEquipmentDrafts, setNewEquipmentDrafts] = useState<Record<string, string>>({});
   const [plantAreaOrders, setPlantAreaOrders] = useState<Record<number, { id: number; ot_number: string; title: string; status: string; execution_date: string | null }[]>>({});
@@ -425,6 +426,30 @@ export function CatalogManager() {
     }
   }
 
+  async function assignLegacyEquipment(equipment: EquipmentNode, currentSectionId: number) {
+    const draft = equipmentLocationDrafts[equipment.id] || { plantAreaId: "", sectionId: String(currentSectionId) };
+    if (!draft.plantAreaId || !draft.sectionId) return;
+    setBusy(`equipment-location-${equipment.id}`);
+    setError("");
+    try {
+      await api.patch(`/api/catalogs/equipment/${equipment.id}`, {
+        plant_area_id: Number(draft.plantAreaId),
+        area_id: Number(draft.sectionId),
+      });
+      setPlantAreaMessage(`Equipo "${equipment.name}" asignado. Las OTs históricas no se modificaron.`);
+      setEquipmentLocationDrafts((current) => {
+        const next = { ...current };
+        delete next[equipment.id];
+        return next;
+      });
+      await refreshHierarchy();
+    } catch (err) {
+      fail(err, "No se pudo asignar el equipo al área y sección.");
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function addArea() {
     if (!newArea.trim()) return;
     setBusy("create-area");
@@ -560,6 +585,9 @@ export function CatalogManager() {
 
   const assignedSectionIds = new Set(plantAreas.flatMap((plantArea) => plantArea.sections.map((section) => section.id)));
   const unassignedSections = areas.filter((section) => !assignedSectionIds.has(section.id));
+  const unassignedEquipmentSections = areas
+    .map((section) => ({ ...section, equipment: section.equipment.filter((equipment) => equipment.plant_area_id == null) }))
+    .filter((section) => section.equipment.length > 0);
   const sortedPlantAreas = [...plantAreas].sort((a, b) => a.name.localeCompare(b.name, "es"));
   const sortedAreas = [...areas].sort((a, b) => a.name.localeCompare(b.name, "es"));
   const normalizedSectionSearch = normalizeCatalogSearch(sectionSearch);
@@ -622,19 +650,18 @@ export function CatalogManager() {
               legacySectionId: section.id,
             });
           }
-          for (const equipment of section.equipment) {
-            if (!normalizeCatalogSearch(`${equipment.name} ${equipment.inventory_code || ""}`).includes(normalizedCatalogSearch)) continue;
-            results.push({
-              key: `unassigned-equipment-${section.id}-${equipment.id}`,
-              label: equipment.name,
-              kind: "Equipo",
-              path: `Sin área general asignada → ${section.name}${equipment.inventory_code ? ` → ID ${equipment.inventory_code}` : ""}`,
-              targetId: `legacy-equipment-${equipment.id}`,
-              legacySectionId: section.id,
-            });
-          }
           return results;
         }),
+        ...unassignedEquipmentSections.flatMap((section) => section.equipment
+          .filter((equipment) => normalizeCatalogSearch(`${equipment.name} ${equipment.inventory_code || ""}`).includes(normalizedCatalogSearch))
+          .map((equipment) => ({
+            key: `unassigned-equipment-${section.id}-${equipment.id}`,
+            label: equipment.name,
+            kind: "Equipo" as const,
+            path: `Sin área asignada → ${section.name}${equipment.inventory_code ? ` → ID ${equipment.inventory_code}` : ""}`,
+            targetId: `legacy-equipment-${equipment.id}`,
+            legacySectionId: section.id,
+          }))),
       ].slice(0, 40)
     : [];
 
@@ -885,8 +912,8 @@ export function CatalogManager() {
 
       <div className="mb-4 rounded-lg border bg-card p-4">
         <div className="mb-2">
-          <h4 className="font-semibold">Secciones sin área general asignada</h4>
-          <p className="text-sm text-muted-foreground">Vincula estas secciones a un área en la jerarquía superior para que aparezcan al crear nuevas OTs.</p>
+          <h4 className="font-semibold">Secciones y equipos pendientes de asignación</h4>
+          <p className="text-sm text-muted-foreground">Aquí también aparecen equipos antiguos que tienen una sección compartida, pero todavía no tienen un área general. Asígnalos a su área y sección para que queden separados correctamente.</p>
         </div>
         <label className="relative mb-3 block max-w-xl">
           <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -969,22 +996,62 @@ export function CatalogManager() {
                   {visibleEquipment.length === 0 ? (
                     <p className="px-2 py-1 text-sm text-muted-foreground">Sin tipos de equipo todavía.</p>
                   ) : visibleEquipment.map((equipment) => (
-                    <div key={equipment.id} id={`legacy-equipment-${equipment.id}`} className="flex items-center gap-1 rounded px-2 py-1 text-sm">
+                    <div key={equipment.id} id={`legacy-equipment-${equipment.id}`} className="rounded px-2 py-2 text-sm">
                       {editingEquipmentId === equipment.id ? (
-                        <>
+                        <div className="flex items-center gap-1">
                           <Input value={equipmentDraft} onChange={(event) => setEquipmentDraft(event.target.value)} className="h-8 flex-1" />
                           <Button size="icon" variant="ghost" onClick={() => saveEquipment(equipment.id)} disabled={busy === `equipment-${equipment.id}`} aria-label="Guardar equipo">
                             {busy === `equipment-${equipment.id}` ? <Loader2 className="animate-spin" /> : <Check />}
                           </Button>
                           <Button size="icon" variant="ghost" onClick={() => setEditingEquipmentId(null)} aria-label="Cancelar edición"><X /></Button>
-                        </>
+                        </div>
                       ) : (
                         <>
-                          <span className="flex-1">{equipment.name}{equipment.inventory_code ? ` — ID ${equipment.inventory_code}` : ""}</span>
-                          <Button size="icon" variant="ghost" onClick={() => startEquipmentEdit(equipment)} aria-label="Editar tipo de equipo"><Pencil /></Button>
-                          <Button size="icon" variant="ghost" onClick={() => removeEquipment(equipment)} disabled={busy === `delete-equipment-${equipment.id}`} aria-label="Eliminar tipo de equipo">
-                            {busy === `delete-equipment-${equipment.id}` ? <Loader2 className="animate-spin" /> : <Trash2 />}
-                          </Button>
+                          <div className="flex items-center gap-1">
+                            <span className="flex-1">{equipment.name}{equipment.inventory_code ? ` — ID ${equipment.inventory_code}` : ""}</span>
+                            <Button size="icon" variant="ghost" onClick={() => startEquipmentEdit(equipment)} aria-label="Editar tipo de equipo"><Pencil /></Button>
+                            <Button size="icon" variant="ghost" onClick={() => removeEquipment(equipment)} disabled={busy === `delete-equipment-${equipment.id}`} aria-label="Eliminar tipo de equipo">
+                              {busy === `delete-equipment-${equipment.id}` ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                            </Button>
+                          </div>
+                          {equipment.plant_area_id == null && <div className="mt-2 grid gap-2 border-t pt-2 sm:grid-cols-[1fr_1fr_auto]">
+                            <select
+                              className="h-9 min-w-0 rounded-md border bg-background px-2 text-sm"
+                              value={(equipmentLocationDrafts[equipment.id] || { plantAreaId: "", sectionId: String(area.id) }).plantAreaId}
+                              onChange={(event) => {
+                                const plantAreaId = event.target.value;
+                                const targetArea = plantAreas.find((item) => String(item.id) === plantAreaId);
+                                const currentSectionAvailable = targetArea?.sections.some((item) => item.id === area.id) ?? false;
+                                setEquipmentLocationDrafts((current) => ({
+                                  ...current,
+                                  [equipment.id]: { plantAreaId, sectionId: currentSectionAvailable ? String(area.id) : "" },
+                                }));
+                              }}
+                              aria-label={`Área general de ${equipment.name}`}
+                            >
+                              <option value="">Asignar a un área...</option>
+                              {sortedPlantAreas.map((plantArea) => <option key={plantArea.id} value={plantArea.id}>{plantArea.name}</option>)}
+                            </select>
+                            <select
+                              className="h-9 min-w-0 rounded-md border bg-background px-2 text-sm"
+                              value={(equipmentLocationDrafts[equipment.id] || { plantAreaId: "", sectionId: String(area.id) }).sectionId}
+                              onChange={(event) => setEquipmentLocationDrafts((current) => ({
+                                ...current,
+                                [equipment.id]: {
+                                  ...(current[equipment.id] || { plantAreaId: "", sectionId: String(area.id) }),
+                                  sectionId: event.target.value,
+                                },
+                              }))}
+                              disabled={!(equipmentLocationDrafts[equipment.id]?.plantAreaId)}
+                              aria-label={`Sección de ${equipment.name}`}
+                            >
+                              <option value="">Selecciona sección...</option>
+                              {(plantAreas.find((item) => String(item.id) === equipmentLocationDrafts[equipment.id]?.plantAreaId)?.sections || []).map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
+                            </select>
+                            <Button size="sm" variant="outline" onClick={() => void assignLegacyEquipment(equipment, area.id)} disabled={!equipmentLocationDrafts[equipment.id]?.plantAreaId || !equipmentLocationDrafts[equipment.id]?.sectionId || busy === `equipment-location-${equipment.id}`}>
+                              {busy === `equipment-location-${equipment.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : "Asignar"}
+                            </Button>
+                          </div>}
                         </>
                       )}
                     </div>

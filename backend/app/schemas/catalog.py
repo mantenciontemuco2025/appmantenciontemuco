@@ -202,6 +202,7 @@ class EquipmentInventoryResponse(BaseModel):
 class EquipmentBrief(BaseModel):
     id: int
     name: str
+    plant_area_id: int | None = None
     inventory_code: str | None = None
     category: str | None = None
     location: str | None = None

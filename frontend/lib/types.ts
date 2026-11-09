@@ -41,6 +41,7 @@ export interface WorkerColumn {
 export interface EquipmentNode {
   id: number;
   name: string;
+  plant_area_id?: number | null;
   inventory_code?: string | null;
   category?: string | null;
   location?: string | null;
