@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "0047_split_shared_sections_by_area"
+revision = "0047_split_sections"
 down_revision = "0046_supervisor_plant_area_scope"
 branch_labels = None
 depends_on = None
