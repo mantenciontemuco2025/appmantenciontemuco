@@ -215,6 +215,7 @@ class EquipmentBrief(BaseModel):
 class AreaWithEquipment(BaseModel):
     id: int
     name: str
+    plant_area_names: list[str] = Field(default_factory=list)
     equipment: list[EquipmentBrief]
 
     model_config = {"from_attributes": True}

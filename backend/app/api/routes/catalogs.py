@@ -67,6 +67,42 @@ async def _section_parent_areas(
         parents.setdefault(section_id, []).append((plant_area_id, plant_area_name))
     return parents
 
+
+async def _has_area_name_conflict(
+    db: AsyncSession,
+    *,
+    name: str,
+    exclude_section_id: int | None = None,
+    section_id: int | None = None,
+) -> bool:
+    """Prevent duplicate section names within the same area, while allowing
+    identical section names in different plant areas.
+    """
+    normalized_name = name.strip().lower()
+    parent_ids: list[int] = []
+    if section_id is not None:
+        parent_ids = list((await db.execute(
+            select(plant_area_sections.c.plant_area_id).where(
+                plant_area_sections.c.section_id == section_id
+            )
+        )).scalars().all())
+
+    query = select(Area.id).where(
+        func.lower(func.trim(Area.name)) == normalized_name
+    )
+    if exclude_section_id is not None:
+        query = query.where(Area.id != exclude_section_id)
+    if parent_ids:
+        query = query.join(
+            plant_area_sections, plant_area_sections.c.section_id == Area.id
+        ).where(plant_area_sections.c.plant_area_id.in_(parent_ids))
+    else:
+        # For a section without an area, only another unassigned section is a
+        # conflict; same-named sections under plant areas are independent.
+        linked_section_ids = select(plant_area_sections.c.section_id)
+        query = query.where(~Area.id.in_(linked_section_ids))
+    return await db.scalar(query.limit(1)) is not None
+
 admin_only = require_roles(UserRole.ADMIN)
 catalog_writer = require_roles(UserRole.ADMIN, UserRole.SUPERVISOR)
 
@@ -135,7 +171,7 @@ async def create_or_link_plant_area_section(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(admin_only),
 ):
-    """Create a section (or reuse its existing catalog row) under an area.
+    """Create a section row that belongs only to the selected parent area.
 
     OTs store their own area/section/equipment snapshot, so linking catalog
     rows here does not rewrite historical work orders.
@@ -145,23 +181,23 @@ async def create_or_link_plant_area_section(
         raise HTTPException(status_code=404, detail="Área general no encontrada")
 
     name = " ".join(payload.name.split())
-    section = await db.scalar(
-        select(Area).where(func.lower(func.trim(Area.name)) == name.lower()).limit(1)
-    )
-    created = section is None
-    if section is None:
-        section = Area(name=name)
-        db.add(section)
-        await db.flush()
-
-    linked = await db.scalar(
-        select(plant_area_sections.c.section_id).where(
+    existing = await db.scalar(
+        select(Area.id)
+        .join(plant_area_sections, plant_area_sections.c.section_id == Area.id)
+        .where(
             plant_area_sections.c.plant_area_id == plant_area_id,
-            plant_area_sections.c.section_id == section.id,
+            func.lower(func.trim(Area.name)) == name.lower(),
         )
+        .limit(1)
     )
-    if linked is not None:
-        raise HTTPException(status_code=409, detail="La sección ya está asociada a esta área")
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="Ya existe una sección con ese nombre en esta área")
+
+    # A new section row belongs to this plant area only. Identical names in
+    # other areas are valid and must not cause the section to be shared.
+    section = Area(name=name)
+    db.add(section)
+    await db.flush()
 
     await db.execute(
         insert(plant_area_sections).values(
@@ -190,11 +226,11 @@ async def create_or_link_plant_area_section(
             "plant_area_name": plant_area.name,
             "section_id": section.id,
             "section_name": section.name,
-            "created": created,
+            "created": True,
         },
     )
     await db.flush()
-    return {"section_id": section.id, "section_name": section.name, "created": created}
+    return {"section_id": section.id, "section_name": section.name, "created": True}
 
 
 @router.post("/plant-areas/{plant_area_id}/sections/{section_id}", status_code=status.HTTP_201_CREATED)
@@ -216,6 +252,27 @@ async def link_existing_plant_area_section(
     )
     if linked is not None:
         raise HTTPException(status_code=409, detail="La sección ya está asociada a esta área")
+    duplicate_name = await db.scalar(
+        select(Area.id)
+        .join(plant_area_sections, plant_area_sections.c.section_id == Area.id)
+        .where(
+            plant_area_sections.c.plant_area_id == plant_area_id,
+            func.lower(func.trim(Area.name)) == section.name.strip().lower(),
+        )
+        .limit(1)
+    )
+    if duplicate_name is not None:
+        raise HTTPException(status_code=409, detail="Ya existe una sección con ese nombre en esta área")
+    already_scoped = await db.scalar(
+        select(plant_area_sections.c.plant_area_id)
+        .where(plant_area_sections.c.section_id == section_id)
+        .limit(1)
+    )
+    if already_scoped is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Esta sección ya pertenece a un área. Crea una sección nueva para mantenerlas separadas.",
+        )
     await db.execute(
         insert(plant_area_sections).values(
             plant_area_id=plant_area_id,
@@ -397,7 +454,7 @@ async def import_inventory_catalog(
     """Upsert the workbook's physical inventory without rewriting old OTs."""
     seen_codes: set[str] = set()
     plant_areas: dict[str, PlantArea] = {}
-    sections: dict[str, Area] = {}
+    sections: dict[tuple[int, str], Area] = {}
     areas_created = sections_created = links_created = 0
     equipment_created = equipment_updated = skipped = 0
     errors: list[str] = []
@@ -440,31 +497,32 @@ async def import_inventory_catalog(
             plant_areas[plant_key] = plant
 
         section_key = key(section_name)
-        section = sections.get(section_key)
+        section_scope_key = (plant.id, section_key)
+        section = sections.get(section_scope_key)
         if section is None:
-            section_rows = (await db.execute(select(Area))).scalars().all()
-            section = next((row for row in section_rows if key(row.name) == section_key), None)
+            linked_sections = (await db.execute(
+                select(Area)
+                .join(plant_area_sections, plant_area_sections.c.section_id == Area.id)
+                .where(
+                    plant_area_sections.c.plant_area_id == plant.id,
+                    func.lower(func.trim(Area.name)) == section_name.lower(),
+                )
+                .order_by(Area.id)
+            )).scalars().all()
+            section = linked_sections[0] if linked_sections else None
             if section is None:
                 section = Area(name=section_name)
                 db.add(section)
                 await db.flush()
                 sections_created += 1
-            sections[section_key] = section
-
-        linked = await db.scalar(
-            select(plant_area_sections.c.plant_area_id).where(
-                plant_area_sections.c.plant_area_id == plant.id,
-                plant_area_sections.c.section_id == section.id,
-            )
-        )
-        if linked is None:
-            await db.execute(
-                insert(plant_area_sections).values(
-                    plant_area_id=plant.id,
-                    section_id=section.id,
+                await db.execute(
+                    insert(plant_area_sections).values(
+                        plant_area_id=plant.id,
+                        section_id=section.id,
+                    )
                 )
-            )
-            links_created += 1
+                links_created += 1
+            sections[section_scope_key] = section
 
         equipment = await db.scalar(
             select(Equipment).where(Equipment.inventory_code == code)
@@ -559,10 +617,18 @@ async def get_catalog_tree(
 ):
     result = await db.execute(
         select(Area)
-        .options(selectinload(Area.equipment))
+        .options(selectinload(Area.equipment), selectinload(Area.plant_areas))
         .order_by(Area.name)
     )
-    return result.scalars().all()
+    return [
+        {
+            "id": section.id,
+            "name": section.name,
+            "plant_area_names": sorted(area.name for area in section.plant_areas),
+            "equipment": section.equipment,
+        }
+        for section in result.scalars().all()
+    ]
 
 
 # --------------------------------------------------------------------------
@@ -586,8 +652,7 @@ async def create_area(
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="El nombre del área no puede estar vacío")
-    duplicate = await db.scalar(select(Area.id).where(Area.name.ilike(name)).limit(1))
-    if duplicate is not None:
+    if await _has_area_name_conflict(db, name=name):
         raise HTTPException(status_code=409, detail="Ya existe un área con ese nombre")
     area = Area(name=name)
     db.add(area)
@@ -616,11 +681,10 @@ async def update_area(
         name = payload.name.strip()
         if not name:
             raise HTTPException(status_code=400, detail="El nombre del área no puede estar vacío")
-        duplicate = await db.scalar(
-            select(Area.id).where(Area.id != area_id, Area.name.ilike(name)).limit(1)
-        )
-        if duplicate is not None:
-            raise HTTPException(status_code=409, detail="Ya existe un área con ese nombre")
+        if await _has_area_name_conflict(
+            db, name=name, exclude_section_id=area_id, section_id=area_id
+        ):
+            raise HTTPException(status_code=409, detail="Ya existe una sección con ese nombre en esta área")
         area.name = name
     await create_audit_log(
         db, user_id=current_user.id, action="UPDATE",

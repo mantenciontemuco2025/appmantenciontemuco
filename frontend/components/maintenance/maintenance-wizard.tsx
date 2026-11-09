@@ -192,7 +192,7 @@ export function MaintenanceWizard() {
               </div>
               <Select
                 label="Área"
-                options={areas.map((a) => ({ value: String(a.id), label: a.name }))}
+                options={areas.map((a) => ({ value: String(a.id), label: a.plant_area_names?.length ? `${a.plant_area_names.join(" / ")} → ${a.name}` : a.name }))}
                 value={draft.area_id ? String(draft.area_id) : ""}
                 onChange={(e) => {
                   const id = e.target.value ? Number(e.target.value) : null;

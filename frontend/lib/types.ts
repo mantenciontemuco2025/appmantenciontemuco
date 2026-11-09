@@ -52,6 +52,7 @@ export interface EquipmentNode {
 export interface AreaNode {
   id: number;
   name: string;
+  plant_area_names?: string[];
   equipment: EquipmentNode[];
 }
 

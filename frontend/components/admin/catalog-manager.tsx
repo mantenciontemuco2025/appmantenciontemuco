@@ -588,12 +588,16 @@ export function CatalogManager() {
   const unassignedEquipmentSections = areas
     .map((section) => ({ ...section, equipment: section.equipment.filter((equipment) => equipment.plant_area_id == null) }))
     .filter((section) => section.equipment.length > 0);
+  const sectionsLinkableToArea = (plantArea: PlantAreaNode) => unassignedSections.filter((section) =>
+    !plantArea.sections.some((assigned) => normalizeCatalogSearch(assigned.name) === normalizeCatalogSearch(section.name))
+  );
   const sortedPlantAreas = [...plantAreas].sort((a, b) => a.name.localeCompare(b.name, "es"));
   const sortedAreas = [...areas].sort((a, b) => a.name.localeCompare(b.name, "es"));
   const normalizedSectionSearch = normalizeCatalogSearch(sectionSearch);
   const filteredSections = sortedAreas.filter((section) =>
     !normalizedSectionSearch
     || normalizeCatalogSearch(section.name).includes(normalizedSectionSearch)
+    || (section.plant_area_names || []).some((name) => normalizeCatalogSearch(name).includes(normalizedSectionSearch))
     || section.equipment.some((equipment) => normalizeCatalogSearch(`${equipment.name} ${equipment.inventory_code || ""}`).includes(normalizedSectionSearch))
   );
   const normalizedCatalogSearch = normalizeCatalogSearch(catalogSearch);
@@ -618,7 +622,7 @@ export function CatalogManager() {
                 key: `plant-section-${plantArea.id}-${section.id}`,
                 label: section.name,
                 kind: "Sección",
-                path: plantArea.name,
+                path: `${plantArea.name} → ${section.name}`,
                 targetId: sectionTargetId,
                 plantAreaId: plantArea.id,
               });
@@ -843,8 +847,8 @@ export function CatalogManager() {
                           onChange={(event) => setSectionLinkDrafts((current) => ({ ...current, [plantArea.id]: event.target.value }))}
                           aria-label={`Vincular sección existente a ${plantArea.name}`}
                         >
-                          <option value="">{unassignedSections.length ? "Vincular sección sin área asignada..." : "No hay secciones sin área asignada"}</option>
-                          {unassignedSections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
+                          <option value="">{sectionsLinkableToArea(plantArea).length ? "Vincular sección sin área asignada..." : "No hay secciones disponibles para esta área"}</option>
+                          {sectionsLinkableToArea(plantArea).map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
                         </select>
                         <Button size="sm" variant="outline" onClick={() => void linkExistingSection(plantArea.id)} disabled={!sectionLinkDrafts[plantArea.id] || busy === `section-link-${plantArea.id}`}>
                           {busy === `section-link-${plantArea.id}` ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}<span className="sr-only">Vincular sección</span>
@@ -913,7 +917,7 @@ export function CatalogManager() {
       <div className="mb-4 rounded-lg border bg-card p-4">
         <div className="mb-2">
           <h4 className="font-semibold">Secciones y equipos pendientes de asignación</h4>
-          <p className="text-sm text-muted-foreground">Aquí también aparecen equipos antiguos que tienen una sección compartida, pero todavía no tienen un área general. Asígnalos a su área y sección para que queden separados correctamente.</p>
+          <p className="text-sm text-muted-foreground">Aquí aparecen las secciones antiguas y los equipos que aún no tienen área. Asigna cada equipo a su área y sección; las secciones con el mismo nombre quedarán separadas por área.</p>
         </div>
         <label className="relative mb-3 block max-w-xl">
           <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -970,7 +974,12 @@ export function CatalogManager() {
                 </>
               ) : (
                 <button onClick={() => setActiveArea(activeArea === area.id ? null : area.id)} className="flex min-w-0 flex-1 items-center justify-between text-left font-semibold hover:text-primary">
-                  <span>{area.name}</span>
+                  <span className="min-w-0">
+                    <span className="block truncate">{area.name}</span>
+                    <span className="block truncate text-xs font-normal text-muted-foreground">
+                      {area.plant_area_names?.length ? area.plant_area_names.join(" / ") : "Sin área general asignada"}
+                    </span>
+                  </span>
                   <span className="text-xs font-normal text-muted-foreground">{area.equipment.length} tipos de equipo</span>
                 </button>
               )}

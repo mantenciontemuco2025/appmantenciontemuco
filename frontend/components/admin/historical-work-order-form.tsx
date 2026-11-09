@@ -58,7 +58,10 @@ export function HistoricalWorkOrderForm() {
     ]);
   }, []);
 
-  const sections = useMemo(() => legacyAreas, [legacyAreas]);
+  const sections = useMemo(
+    () => legacyAreas.filter((section) => section.plant_area_names?.includes(form.plant_area)),
+    [legacyAreas, form.plant_area]
+  );
   const equipment = useMemo(
     () => sections.find((section) => String(section.id) === form.area_id)?.equipment ?? [],
     [form.area_id, sections]
@@ -158,7 +161,7 @@ export function HistoricalWorkOrderForm() {
 
       <div className="grid gap-4 md:grid-cols-3">
         <Field label="Área de planta *"><select required className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={form.plant_area} onChange={(e) => selectPlantArea(e.target.value)}><option value="">Seleccionar...</option>{plantAreaOptions.map((area) => <option key={area.id} value={area.name}>{area.name}</option>)}</select></Field>
-        <Field label="Sección *"><select required className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={form.area_id} onChange={(e) => selectSection(e.target.value)}><option value="">Seleccionar...</option>{sections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
+        <Field label="Sección *"><select required className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={form.area_id} onChange={(e) => selectSection(e.target.value)} disabled={!form.plant_area}><option value="">Seleccionar...</option>{sections.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
         <Field label="Equipo (opcional)"><select className="h-10 w-full rounded-md border bg-background px-3 text-sm" value={form.equipment_id} onChange={(e) => update("equipment_id", e.target.value)}><option value="">Sin equipo específico</option>{equipment.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></Field>
       </div>
 

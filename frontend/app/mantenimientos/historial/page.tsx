@@ -126,7 +126,7 @@ function HistorialContent() {
         </div>
         <Select
           label="Área"
-          options={areas.map((a) => ({ value: String(a.id), label: a.name }))}
+          options={areas.map((a) => ({ value: String(a.id), label: a.plant_area_names?.length ? `${a.plant_area_names.join(" / ")} → ${a.name}` : a.name }))}
           value={fArea}
           onChange={(e) => setFArea(e.target.value)}
         />

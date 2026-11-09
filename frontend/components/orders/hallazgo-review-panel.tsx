@@ -62,6 +62,10 @@ export function HallazgoReviewPanel({
   }, []);
 
   const selectedSection = areas.find((area) => String(area.id) === sectionId);
+  const sectionsForPlantArea = areas.filter((section) =>
+    section.plant_area_names?.includes(plantArea)
+    || String(section.id) === String(wo.area_id || "")
+  );
 
   async function review(action: "ACCEPT" | "RETURN" | "REJECT") {
     setBusy(true);
@@ -141,15 +145,24 @@ export function HallazgoReviewPanel({
 
       <div className="mt-3 grid gap-3 sm:grid-cols-3">
         <label className="text-sm font-medium">Área general
-          <select className={inputClass} value={plantArea} onChange={(event) => setPlantArea(event.target.value)}>
+          <select className={inputClass} value={plantArea} onChange={(event) => {
+            const nextArea = event.target.value;
+            setPlantArea(nextArea);
+            const currentSectionBelongs = areas.some((section) => section.id === Number(sectionId) && section.plant_area_names?.includes(nextArea));
+            if (!currentSectionBelongs) {
+              const firstSection = areas.find((section) => section.plant_area_names?.includes(nextArea));
+              setSectionId(firstSection ? String(firstSection.id) : "");
+              setEquipmentId("");
+            }
+          }}>
             <option value="">Selecciona un área</option>
             {plantAreaOptions.map((area) => <option key={`${area.id}-${area.name}`} value={area.name}>{area.name}</option>)}
           </select>
         </label>
         <label className="text-sm font-medium">Sección
-          <select className={inputClass} value={sectionId} onChange={(event) => { setSectionId(event.target.value); setEquipmentId(""); }}>
+          <select className={inputClass} value={sectionId} disabled={!plantArea} onChange={(event) => { setSectionId(event.target.value); setEquipmentId(""); }}>
             <option value="">Selecciona una sección</option>
-            {areas.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
+            {sectionsForPlantArea.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
           </select>
         </label>
         <label className="text-sm font-medium">Equipo <span className="font-normal">(opcional)</span>
