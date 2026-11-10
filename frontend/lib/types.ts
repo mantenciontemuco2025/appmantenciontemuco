@@ -438,7 +438,7 @@ export interface WorkOrderRecord {
   hallazgo_folio: string | null;
   hallazgo_kind: "COMPLETED" | "REQUIRES_ATTENTION" | null;
   hallazgo_priority: "NORMAL" | "URGENT" | "EMERGENCY" | null;
-  hallazgo_status: "PENDING_REVIEW" | "RETURNED" | "REJECTED" | "CONVERTED" | null;
+  hallazgo_status: "PENDING_REVIEW" | "RETURNED" | "REJECTED" | "CONVERTED" | "DELETED" | null;
   hallazgo_review_notes: string | null;
   hallazgo_reviewed_at: string | null;
   hallazgo_reviewed_by_user_id: number | null;
@@ -557,7 +557,7 @@ export interface WorkOrderListItem {
   hallazgo_folio?: string | null;
   hallazgo_kind?: "COMPLETED" | "REQUIRES_ATTENTION" | null;
   hallazgo_priority?: "NORMAL" | "URGENT" | "EMERGENCY" | null;
-  hallazgo_status?: "PENDING_REVIEW" | "RETURNED" | "REJECTED" | "CONVERTED" | null;
+  hallazgo_status?: "PENDING_REVIEW" | "RETURNED" | "REJECTED" | "CONVERTED" | "DELETED" | null;
   title: string;
   area_name: string | null;
   plant_area?: string | null;

@@ -307,6 +307,7 @@ class HallazgoReviewPayload(BaseModel):
 class HallazgoUpdate(BaseModel):
     title: str | None = None
     description: str | None = None
+    report_date: date | None = None
     report_kind: Literal["COMPLETED", "REQUIRES_ATTENTION"] | None = None
     priority: Literal["NORMAL", "URGENT", "EMERGENCY"] | None = None
     work_time_mode: Literal["RANGE", "MANUAL"] | None = None
@@ -320,6 +321,18 @@ class HallazgoUpdate(BaseModel):
     risks: str | None = None
     observations: str | None = None
     resubmit: bool = False
+
+
+class HallazgoDeletePayload(BaseModel):
+    reason: str = Field(min_length=8, max_length=2000)
+
+    @field_validator("reason")
+    @classmethod
+    def required_delete_reason(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 8:
+            raise ValueError("Explica el motivo de eliminación con al menos 8 caracteres.")
+        return value
 
 
 class WorkOrderUpdate(BaseModel):

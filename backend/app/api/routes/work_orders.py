@@ -49,6 +49,7 @@ from app.schemas.work_order import (
     HistoricalWorkOrderCreate,
     HistoricalImportRequest,
     HallazgoCreate,
+    HallazgoDeletePayload,
     HallazgoReviewPayload,
     HallazgoUpdate,
     WorkOrderUpdate,
@@ -2031,6 +2032,13 @@ async def list_work_orders(
     offset: int = Query(default=0, ge=0),
 ):
     query = _list_query()
+    query = query.where(
+        or_(
+            WorkOrder.is_hallazgo_report.is_(False),
+            WorkOrder.hallazgo_status.is_(None),
+            WorkOrder.hallazgo_status != "DELETED",
+        )
+    )
 
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=400, detail="La fecha inicial no puede ser posterior a la fecha final")
@@ -2362,7 +2370,10 @@ async def list_hallazgos(
     """List provisional reports for the reporter or administrative reviewers."""
     if current_user.role not in (UserRole.ADMIN, UserRole.WORKER):
         raise HTTPException(status_code=403, detail="Los supervisores no tienen acceso al módulo de hallazgos")
-    query = _list_query().where(WorkOrder.is_hallazgo_report.is_(True))
+    query = _list_query().where(
+        WorkOrder.is_hallazgo_report.is_(True),
+        WorkOrder.hallazgo_status != "DELETED",
+    )
     if current_user.role == UserRole.ADMIN:
         pass
     else:
@@ -2403,7 +2414,7 @@ async def update_hallazgo(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Allow the reporter to correct a returned report and resubmit it."""
+    """Allow the reporter to correct a hallazgo until it becomes an OT."""
     result = await db.execute(_base_query().where(WorkOrder.id == wo_id).with_for_update())
     wo = result.scalar_one_or_none()
     if wo is None or not wo.is_hallazgo_report:
@@ -2412,19 +2423,27 @@ async def update_hallazgo(
         raise HTTPException(status_code=403, detail="No tiene permiso para editar este hallazgo")
     if current_user.role != UserRole.ADMIN and wo.created_by_user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Solo el reportante o el administrador puede editar este hallazgo")
-    if wo.hallazgo_status not in ("PENDING_REVIEW", "RETURNED"):
-        raise HTTPException(status_code=400, detail="Este hallazgo ya fue cerrado")
-    if current_user.role != UserRole.ADMIN and wo.hallazgo_status != "RETURNED":
-        raise HTTPException(status_code=400, detail="Solo puedes editar un hallazgo devuelto")
+    if wo.hallazgo_status == "CONVERTED":
+        raise HTTPException(status_code=409, detail="El hallazgo ya se convirtió en OT y no se puede editar")
+    if wo.hallazgo_status == "DELETED":
+        raise HTTPException(status_code=404, detail="Hallazgo no encontrado")
 
+    changed_fields: list[str] = []
     for field in ("title", "description", "hallazgo_priority", "work_time_mode", "work_start_time", "work_end_time", "worked_duration_minutes", "folio", "voucher_number", "material_codes", "risks", "observations"):
         value = getattr(payload, field.removeprefix("hallazgo_") if field == "hallazgo_priority" else field, None)
         if value is not None:
             if field in ("folio", "voucher_number", "material_codes"):
                 value = value.strip() or None
+            changed_fields.append(field.removeprefix("hallazgo_"))
             setattr(wo, field, value)
+    if payload.report_date is not None:
+        wo.request_date = payload.report_date
+        wo.execution_date = payload.report_date
+        wo.scheduled_date = payload.report_date
+        changed_fields.append("report_date")
     if payload.report_kind is not None:
         wo.hallazgo_kind = payload.report_kind
+        changed_fields.append("report_kind")
     if payload.resubmit:
         if not wo.title.strip() or not (wo.description or "").strip():
             raise HTTPException(status_code=400, detail="Completa el título y la descripción antes de reenviar")
@@ -2436,8 +2455,17 @@ async def update_hallazgo(
         wo.hallazgo_status = "PENDING_REVIEW"
         wo.submitted_for_review = True
         wo.hallazgo_review_notes = None
+        wo.hallazgo_reviewed_at = None
+        wo.hallazgo_reviewed_by_user_id = None
         await notification_service.notify_work_order_submitted_to_admin(db, wo, submitted_by=current_user.full_name, link=f"/ordenes/{wo.id}")
-    await create_audit_log(db, user_id=current_user.id, action="UPDATE_HALLAZGO", entity_type="WorkOrder", entity_id=wo.id, new_data={"resubmit": payload.resubmit})
+    await create_audit_log(
+        db,
+        user_id=current_user.id,
+        action="UPDATE_HALLAZGO",
+        entity_type="WorkOrder",
+        entity_id=wo.id,
+        new_data={"resubmit": payload.resubmit, "changed_fields": changed_fields},
+    )
     await db.commit()
     # The review updates foreign keys and the participant association table.
     # Refresh eagerly-loaded relationships so the response immediately shows
@@ -2448,6 +2476,47 @@ async def update_hallazgo(
         .execution_options(populate_existing=True)
     )
     return _work_order_to_response(refreshed.scalar_one())
+
+
+@router.delete("/{wo_id}/hallazgo", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_hallazgo(
+    wo_id: int,
+    payload: HallazgoDeletePayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Hide an unconverted hallazgo and retain its deletion reason in audit."""
+    result = await db.execute(
+        select(WorkOrder).where(WorkOrder.id == wo_id).with_for_update()
+    )
+    wo = result.scalar_one_or_none()
+    if wo is None or not wo.is_hallazgo_report:
+        raise HTTPException(status_code=404, detail="Hallazgo no encontrado")
+    if current_user.role not in (UserRole.WORKER, UserRole.SUPERVISOR) or wo.created_by_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Solo quien creó el hallazgo puede eliminarlo")
+    if wo.hallazgo_status == "CONVERTED":
+        raise HTTPException(status_code=409, detail="El hallazgo ya se convirtió en OT y no se puede eliminar")
+    if wo.hallazgo_status == "DELETED":
+        raise HTTPException(status_code=404, detail="Hallazgo no encontrado")
+
+    wo.hallazgo_status = "DELETED"
+    wo.submitted_for_review = False
+    await db.execute(
+        delete(Notification).where(Notification.link == f"/ordenes/{wo.id}")
+    )
+    await create_audit_log(
+        db,
+        user_id=current_user.id,
+        action="DELETE_HALLAZGO",
+        entity_type="WorkOrder",
+        entity_id=wo.id,
+        new_data={
+            "hallazgo_folio": wo.hallazgo_folio,
+            "title": wo.title,
+            "reason": payload.reason,
+        },
+    )
+    await db.commit()
 
 
 @router.post("/{wo_id}/hallazgo-review", response_model=WorkOrderResponse)
@@ -2758,7 +2827,13 @@ async def _build_work_order_counter(
 
         # Use the same visibility rules as the paginated list endpoint so the
         # tab counters represent the complete result set, not only one page.
-        scope_conditions = []
+        scope_conditions = [
+            or_(
+                WorkOrder.is_hallazgo_report.is_(False),
+                WorkOrder.hallazgo_status.is_(None),
+                WorkOrder.hallazgo_status != "DELETED",
+            )
+        ]
         if current_user.role == UserRole.SUPERVISOR:
             if not current_user.area_ids:
                 scope_conditions.append(WorkOrder.id == -1)
@@ -2896,7 +2971,7 @@ async def get_work_order(
 ):
     result = await db.execute(_base_query().where(WorkOrder.id == wo_id))
     wo = result.scalar_one_or_none()
-    if wo is None:
+    if wo is None or (wo.is_hallazgo_report and wo.hallazgo_status == "DELETED"):
         raise HTTPException(status_code=404, detail="Orden de trabajo no encontrada")
 
     if not perms.can_view(wo, current_user):
@@ -2913,7 +2988,7 @@ async def list_work_order_evidence(
 ):
     result = await db.execute(_base_query().where(WorkOrder.id == wo_id))
     wo = result.scalar_one_or_none()
-    if wo is None:
+    if wo is None or (wo.is_hallazgo_report and wo.hallazgo_status == "DELETED"):
         raise HTTPException(status_code=404, detail="Orden de trabajo no encontrada")
     if not perms.can_view(wo, current_user):
         raise HTTPException(status_code=403, detail="No tiene permiso para ver esta OT")
@@ -2942,7 +3017,7 @@ async def upload_work_order_evidence(
         _base_query().where(WorkOrder.id == wo_id).with_for_update()
     )
     wo = result.scalar_one_or_none()
-    if wo is None:
+    if wo is None or (wo.is_hallazgo_report and wo.hallazgo_status == "DELETED"):
         raise HTTPException(status_code=404, detail="Orden de trabajo no encontrada")
     if not perms.can_view(wo, current_user):
         raise HTTPException(status_code=403, detail="No tiene permiso para ver esta OT")
@@ -3159,7 +3234,7 @@ async def get_work_order_evidence_content(
 ):
     result = await db.execute(_base_query().where(WorkOrder.id == wo_id))
     wo = result.scalar_one_or_none()
-    if wo is None:
+    if wo is None or (wo.is_hallazgo_report and wo.hallazgo_status == "DELETED"):
         raise HTTPException(status_code=404, detail="Orden de trabajo no encontrada")
     if not perms.can_view(wo, current_user):
         raise HTTPException(status_code=403, detail="No tiene permiso para ver esta OT")

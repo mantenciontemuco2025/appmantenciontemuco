@@ -922,8 +922,12 @@ export default function OrdenDetailPage({ params }: { params: Promise<{ id: stri
           {wo.is_hallazgo_report && wo.submitted_for_review && user.role === "ADMIN" && (
             <HallazgoReviewPanel wo={wo} onUpdated={(updated) => { setWo(updated); setNotice({ variant: "success", message: "Hallazgo actualizado correctamente." }); }} />
           )}
-          {wo.is_hallazgo_report && wo.hallazgo_status === "RETURNED" && wo.created_by_user_id === user.id && (
-            <HallazgoEditPanel wo={wo} onUpdated={(updated) => { setWo(updated); setNotice({ variant: "success", message: "Hallazgo reenviado al administrador." }); }} />
+          {wo.is_hallazgo_report && wo.hallazgo_status !== "CONVERTED" && wo.created_by_user_id === user.id && (
+            <HallazgoEditPanel
+              wo={wo}
+              onUpdated={(updated) => { setWo(updated); setNotice({ variant: "success", message: "Hallazgo corregido y enviado a revisión." }); }}
+              onDeleted={() => router.replace(user.role === "SUPERVISOR" ? "/dashboard" : "/hallazgos")}
+            />
           )}
 
           {wo.submitted_for_review && user.role === "ADMIN" && !wo.is_external_work && !wo.is_hallazgo_report && (
