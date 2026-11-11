@@ -9,6 +9,7 @@ import type { AreaNode, PlantAreaNode, WorkOrderRecord } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { VoiceDictation } from "@/components/maintenance/voice-dictation";
 import { MaterialCodePicker } from "@/components/orders/material-code-picker";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { MAX_EVIDENCE_PHOTOS_PER_USER } from "@/lib/evidence";
 import { prepareEvidencePhoto } from "@/lib/prepare-evidence-photo";
 
@@ -76,19 +77,25 @@ export function HallazgoWizard() {
       api.getCached<{ id: number; full_name: string }[]>("/api/users/workers", 60000),
     ]).then(([tree, sections, users]) => {
       const allowedSectionIds = new Set(user?.area_ids || []);
-      const linkedSectionIds = new Set(tree.flatMap((area) => area.sections.map((section) => section.id)));
+      const assignedParentAreaIds = new Set(user?.plant_area_ids || []);
+      const visibleLinkedSectionIds = new Set(
+        tree
+          .filter((area) => assignedParentAreaIds.has(area.id))
+          .flatMap((area) => area.sections.filter((section) => allowedSectionIds.has(section.id)).map((section) => section.id)),
+      );
+      const legacySectionIds = new Set(user?.legacy_section_ids || []);
       const visible = user?.role === "SUPERVISOR"
         ? [
-            ...tree.filter((area) => user.plant_area_ids?.includes(area.id)).map((area) => ({
+            ...tree.filter((area) => assignedParentAreaIds.has(area.id)).map((area) => ({
               ...area,
               sections: area.sections.filter((section) => allowedSectionIds.has(section.id)),
             })).filter((area) => area.sections.length > 0),
-            ...(sections.some((section) => allowedSectionIds.has(section.id) && !linkedSectionIds.has(section.id))
+            ...(sections.some((section) => legacySectionIds.has(section.id) && !visibleLinkedSectionIds.has(section.id))
               ? [{
                   id: -1,
                   name: "",
                   is_active: true,
-                  sections: sections.filter((section) => allowedSectionIds.has(section.id) && !linkedSectionIds.has(section.id)),
+                  sections: sections.filter((section) => legacySectionIds.has(section.id) && !visibleLinkedSectionIds.has(section.id)),
                 }]
               : []),
           ]
@@ -96,7 +103,7 @@ export function HallazgoWizard() {
       setPlantAreas(visible);
       setWorkers(users);
       if (visible[0]) {
-        setPlantArea(visible[0].name);
+        setPlantArea(String(visible[0].id));
         setAreaId(visible[0].sections[0]?.id || "");
       }
     }).catch(() => setError("No se pudo cargar el catálogo de áreas y equipos."))
@@ -106,9 +113,17 @@ export function HallazgoWizard() {
   useEffect(() => { photosRef.current = photos; }, [photos]);
   useEffect(() => () => photosRef.current.forEach((photo) => URL.revokeObjectURL(photo.previewUrl)), []);
 
-  const selectedPlantArea = plantAreas.find((area) => area.name === plantArea);
+  const selectedPlantArea = plantAreas.find((area) => String(area.id) === plantArea);
   const availableSections = selectedPlantArea?.sections || [];
   const selectedArea = useMemo(() => availableSections.find((area) => area.id === areaId), [availableSections, areaId]);
+  const equipmentSearchOptions = plantAreas.flatMap((plantAreaNode) =>
+    plantAreaNode.sections.flatMap((section) =>
+      section.equipment.map((equipment) => ({
+        value: String(equipment.id),
+        label: `${equipment.name}${equipment.inventory_code ? ` — ID ${equipment.inventory_code}` : ""} · ${plantAreaNode.id === -1 ? "Sin área general" : plantAreaNode.name} → ${section.name}`,
+      })),
+    ),
+  );
   function setField(key: keyof typeof form, value: string) {
     setForm((current) => ({ ...current, [key]: value }));
   }
@@ -206,7 +221,7 @@ export function HallazgoWizard() {
     try {
       const payload = {
         title: form.title.trim(), description: form.description.trim(), area_id: areaId,
-        plant_area: plantArea || null, equipment_id: equipmentId || null,
+        plant_area: selectedPlantArea?.id === -1 ? null : selectedPlantArea?.name || null, equipment_id: equipmentId || null,
         report_kind: kind, priority: form.priority, report_date: form.report_date,
         folio: form.folio.trim() || null, voucher_number: form.voucher_number.trim() || null,
         material_codes: form.material_codes.trim() || null,
@@ -258,9 +273,31 @@ export function HallazgoWizard() {
       <div className="grid gap-4 md:grid-cols-2"><label className="text-sm font-medium">Folio <span className="font-normal text-muted-foreground">(opcional)</span><input className="mt-1 w-full rounded-md border bg-background px-3 py-2" value={form.folio} onChange={(e) => setField("folio", e.target.value)} placeholder="Folio de la OT" /></label><label className="text-sm font-medium">N.º de vale <span className="font-normal text-muted-foreground">(opcional)</span><input className="mt-1 w-full rounded-md border bg-background px-3 py-2" value={form.voucher_number} onChange={(e) => setField("voucher_number", e.target.value)} placeholder="Número de vale" /></label></div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <label className="text-sm font-medium">Área de planta<select className="mt-1 w-full rounded-md border bg-background px-3 py-2" value={plantArea} onChange={(e) => { const area = plantAreas.find((item) => item.name === e.target.value); setPlantArea(e.target.value); setAreaId(area?.sections[0]?.id || ""); setEquipmentId(""); }}>{plantAreas.map((area) => <option key={area.id} value={area.name}>{area.id === -1 ? "Secciones sin área general" : area.name}</option>)}</select></label>
+        <label className="text-sm font-medium">Área de planta<select className="mt-1 w-full rounded-md border bg-background px-3 py-2" value={plantArea} onChange={(e) => { const area = plantAreas.find((item) => String(item.id) === e.target.value); setPlantArea(e.target.value); setAreaId(area?.sections[0]?.id || ""); setEquipmentId(""); }}>{plantAreas.map((area) => <option key={area.id} value={String(area.id)}>{area.id === -1 ? "Secciones sin área general" : area.name}</option>)}</select></label>
         <label className="text-sm font-medium">Sección<select className="mt-1 w-full rounded-md border bg-background px-3 py-2" value={areaId} onChange={(e) => { setAreaId(Number(e.target.value)); setEquipmentId(""); }} disabled={!availableSections.length}><option value="">Seleccionar...</option>{availableSections.map((area) => <option key={area.id} value={area.id}>{area.name}</option>)}</select></label>
       </div>
+      <SearchableSelect
+        label="Buscar equipo por nombre o código"
+        options={equipmentSearchOptions}
+        value={equipmentId ? String(equipmentId) : ""}
+        placeholder="Escribe el equipo o su código..."
+        searchPlaceholder="Buscar equipo, código, área o sección..."
+        emptyMessage="No hay equipos autorizados que coincidan con la búsqueda."
+        onValueChange={(value) => {
+          const selectedId = Number(value);
+          const match = plantAreas.flatMap((plantAreaNode) =>
+            plantAreaNode.sections.flatMap((section) =>
+              section.equipment
+                .filter((equipment) => equipment.id === selectedId)
+                .map((equipment) => ({ plantAreaNode, section, equipment })),
+            ),
+          )[0];
+          if (!match) return;
+          setPlantArea(String(match.plantAreaNode.id));
+          setAreaId(match.section.id);
+          setEquipmentId(match.equipment.id);
+        }}
+      />
       <label className="block text-sm font-medium">Equipo (opcional)<select className="mt-1 w-full rounded-md border bg-background px-3 py-2" value={equipmentId} onChange={(e) => setEquipmentId(e.target.value ? Number(e.target.value) : "")}><option value="">Sin equipo específico / agregar después</option>{(selectedArea?.equipment || []).map((equipment) => <option key={equipment.id} value={equipment.id}>{equipment.inventory_code ? `${equipment.name} — ID ${equipment.inventory_code}` : equipment.name}</option>)}</select></label>
 
       <div><label className="block text-sm font-medium">Descripción detallada</label><textarea className="mt-1 min-h-28 w-full rounded-md border bg-background px-3 py-2" value={form.description} onChange={(e) => setField("description", e.target.value)} placeholder={completed ? "Describe el trabajo realizado..." : "Describe el problema o trabajo que debe realizarse..."} /><VoiceDictation onTranscript={(text) => appendField("description", text)} /></div>

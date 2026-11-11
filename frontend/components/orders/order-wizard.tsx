@@ -170,9 +170,11 @@ export function OrderWizard() {
           user?.role === "SUPERVISOR"
             ? (user.area_ids?.length ? user.area_ids : user.area_id ? [user.area_id] : [])
             : [];
+        const supervisorPlantAreaIds = user?.role === "SUPERVISOR" ? (user.plant_area_ids || []) : [];
         const visiblePlantAreas =
           user?.role === "SUPERVISOR"
             ? hierarchy
+                .filter((plantArea) => supervisorPlantAreaIds.includes(plantArea.id))
                 .map((plantArea) => ({
                   ...plantArea,
                   sections: plantArea.sections.filter((section) => supervisorAreaIds.includes(section.id)),
@@ -214,11 +216,21 @@ export function OrderWizard() {
   const selectedSection = availableSections.find((a) => a.id === form.area_id) || null;
   const filteredEquipment = selectedSection?.equipment || [];
   const plantAreaOptions = plantAreas.map((area) => ({ value: area.name, label: area.name }));
+  const equipmentSearchOptions = plantAreas.flatMap((plantArea) =>
+    plantArea.sections.flatMap((section) =>
+      section.equipment.map((equipment) => ({
+        value: String(equipment.id),
+        label: `${equipment.name}${equipment.inventory_code ? ` — ID ${equipment.inventory_code}` : ""} · ${plantArea.name} → ${section.name}`,
+      })),
+    ),
+  );
   const supervisorAreaIds =
     user?.role === "SUPERVISOR"
       ? (user.area_ids?.length ? user.area_ids : user.area_id ? [user.area_id] : [])
       : [];
-  const supervisorWithoutArea = user?.role === "SUPERVISOR" && supervisorAreaIds.length === 0;
+  const supervisorWithoutArea = user?.role === "SUPERVISOR" && (
+    supervisorAreaIds.length === 0 || !plantAreas.some((plantArea) => plantArea.sections.length > 0)
+  );
   const isSupervisor = user?.role === "SUPERVISOR";
   const isExternalWork = form.is_external_work;
   const canCreateEquipment = user?.role === "ADMIN" || isSupervisor;
@@ -469,6 +481,34 @@ export function OrderWizard() {
         <div>
           <h3 className="text-sm font-semibold mb-2">Ubicación del trabajo *</h3>
           <div className="grid grid-cols-1 gap-3">
+            <SearchableSelect
+              label="Buscar equipo por nombre o código"
+              options={equipmentSearchOptions}
+              value={form.equipment_id ? String(form.equipment_id) : ""}
+              placeholder="Escribe el equipo o su código..."
+              searchPlaceholder="Buscar equipo, código, área o sección..."
+              emptyMessage="No hay equipos autorizados que coincidan con la búsqueda."
+              disabled={supervisorWithoutArea}
+              onValueChange={(value) => {
+                const equipmentId = Number(value);
+                const match = plantAreas.flatMap((plantArea) =>
+                  plantArea.sections.flatMap((section) =>
+                    section.equipment
+                      .filter((equipment) => equipment.id === equipmentId)
+                      .map((equipment) => ({ plantArea, section, equipment })),
+                  ),
+                )[0];
+                if (!match) return;
+                setForm((current) => ({
+                  ...current,
+                  plant_area: match.plantArea.name,
+                  area_id: match.section.id,
+                  equipment_id: match.equipment.id,
+                }));
+                setShowNewEquipment(false);
+                setEquipmentError("");
+              }}
+            />
             <Select
               label="Área"
               options={plantAreaOptions}
