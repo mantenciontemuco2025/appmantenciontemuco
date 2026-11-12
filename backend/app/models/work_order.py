@@ -85,6 +85,7 @@ class WorkOrder(Base):
     equipment_id: Mapped[int | None] = mapped_column(
         ForeignKey("equipment.id"), nullable=True
     )
+    equipment_name_snapshot: Mapped[str | None] = mapped_column(String(250), nullable=True)
     preventive_plan_id: Mapped[int | None] = mapped_column(
         ForeignKey("preventive_plans.id", ondelete="SET NULL"), nullable=True, index=True
     )

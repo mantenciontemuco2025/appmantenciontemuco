@@ -160,6 +160,31 @@ class EquipmentInventoryUpdate(BaseModel):
         return attributes
 
 
+class InventoryCatalogNamesUpdate(BaseModel):
+    equipment_name: str | None = Field(default=None, min_length=1, max_length=250)
+    section_name: str | None = Field(default=None, min_length=1, max_length=200)
+    plant_area_name: str | None = Field(default=None, min_length=1, max_length=100)
+
+    @field_validator("equipment_name", "section_name", "plant_area_name")
+    @classmethod
+    def clean_catalog_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = " ".join(value.split())
+        if not value:
+            raise ValueError("El nombre no puede quedar vacío")
+        return value
+
+
+class InventoryCatalogNamesResponse(BaseModel):
+    id: int
+    name: str
+    area_id: int | None = None
+    plant_area_id: int | None = None
+    area_name: str | None = None
+    plant_area_name: str | None = None
+
+
 class EquipmentInventoryResponse(BaseModel):
     id: int
     name: str

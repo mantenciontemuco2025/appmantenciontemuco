@@ -355,7 +355,7 @@ async def get_kpis(
         area_type_row["completed"] += int(is_completed)
         area_type_row["minutes"] += minutes
 
-        section_value = wo.area.name if wo.area else wo.section_name
+        section_value = wo.section_name or (wo.area.name if wo.area else None)
         section = (section_value or "Sin sección").strip() or "Sin sección"
         section_key = (area, section)
         section_row = section_counts.setdefault(section_key, {

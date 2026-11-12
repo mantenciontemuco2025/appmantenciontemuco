@@ -1,11 +1,4 @@
-"""Catalog CRUD: Areas, Equipment (Area -> Equipment directly).
-
-- Reading catalogs (for the maintenance form) is available to any
-  authenticated user.
-- Creating/updating is restricted to ADMIN.
-
-Section is NOT part of the catalog — it is free text on each record.
-"""
+"""Catalog CRUD for plant areas, sections, and physical equipment."""
 
 import unicodedata
 
@@ -39,6 +32,8 @@ from app.schemas.catalog import (
     EquipmentUpdate,
     EquipmentInventoryUpdate,
     EquipmentInventoryResponse,
+    InventoryCatalogNamesUpdate,
+    InventoryCatalogNamesResponse,
     InventoryImportPayload,
     InventoryImportResult,
     HierarchyEquipment,
@@ -104,6 +99,12 @@ async def _has_area_name_conflict(
     return await db.scalar(query.limit(1)) is not None
 
 admin_only = require_roles(UserRole.ADMIN)
+
+
+def _can_manage_inventory_catalog_names(user: User) -> bool:
+    return user.role == UserRole.ADMIN or (
+        user.role == UserRole.WORKER and user.can_manage_equipment_inventory
+    )
 catalog_writer = require_roles(UserRole.ADMIN, UserRole.SUPERVISOR)
 
 
@@ -882,6 +883,92 @@ async def update_equipment_inventory(
     if current_user.role != UserRole.ADMIN:
         response.initial_value = None
     return response
+
+
+@router.patch("/equipment/{equipment_id}/catalog-names", response_model=InventoryCatalogNamesResponse)
+async def update_inventory_catalog_names(
+    equipment_id: int,
+    payload: InventoryCatalogNamesUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Rename catalog labels atomically without changing equipment assignments."""
+    if not _can_manage_inventory_catalog_names(current_user):
+        raise HTTPException(status_code=403, detail="No tienes permiso para administrar nombres del inventario.")
+    changes = payload.model_dump(exclude_unset=True, exclude_none=True)
+    if not changes:
+        raise HTTPException(status_code=400, detail="Indica al menos un nombre para actualizar.")
+
+    result = await db.execute(
+        select(Equipment, Area, PlantArea)
+        .outerjoin(Area, Equipment.area_id == Area.id)
+        .outerjoin(PlantArea, Equipment.plant_area_id == PlantArea.id)
+        .where(Equipment.id == equipment_id)
+        .with_for_update(of=Equipment)
+    )
+    row = result.one_or_none()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Equipo no encontrado.")
+    equipment, section, plant_area = row
+    previous_names = {
+        "equipment_name": equipment.name,
+        "section_name": section.name if section else None,
+        "plant_area_name": plant_area.name if plant_area else None,
+    }
+
+    if "equipment_name" in changes:
+        equipment.name = changes["equipment_name"]
+
+    if "section_name" in changes:
+        if section is None:
+            raise HTTPException(status_code=400, detail="Este equipo no tiene una sección asignada.")
+        if await _has_area_name_conflict(
+            db, name=changes["section_name"], exclude_section_id=section.id, section_id=section.id
+        ):
+            raise HTTPException(status_code=409, detail="Ya existe una sección con ese nombre en esta área.")
+        section.name = changes["section_name"]
+
+    if "plant_area_name" in changes:
+        if plant_area is None:
+            raise HTTPException(status_code=400, detail="Este equipo no tiene un área general asignada.")
+        duplicate_area = await db.scalar(
+            select(PlantArea.id).where(
+                PlantArea.id != plant_area.id,
+                func.lower(func.trim(PlantArea.name)) == changes["plant_area_name"].lower(),
+            ).limit(1)
+        )
+        if duplicate_area is not None:
+            raise HTTPException(status_code=409, detail="Ya existe un área general con ese nombre.")
+        plant_area.name = changes["plant_area_name"]
+
+    # The assignment IDs remain the same. Work order labels are snapshots, so
+    # renaming the live catalog does not rewrite historical OT displays.
+    for entity, entity_type, entity_id, field in (
+        (equipment, "Equipment", equipment.id, "equipment_name"),
+        (section, "Area", section.id if section else None, "section_name"),
+        (plant_area, "PlantArea", plant_area.id if plant_area else None, "plant_area_name"),
+    ):
+        if entity is not None and field in changes:
+            await create_audit_log(
+                db,
+                user_id=current_user.id,
+                action="UPDATE",
+                entity_type=entity_type,
+                entity_id=entity_id,
+                previous_data={"name": previous_names[field]},
+                new_data={"name": changes[field], "source": "equipment_inventory"},
+            )
+
+    await db.flush()
+    return InventoryCatalogNamesResponse(
+        id=equipment.id,
+        name=equipment.name,
+        inventory_code=equipment.inventory_code,
+        area_id=section.id if section else None,
+        plant_area_id=plant_area.id if plant_area else None,
+        area_name=section.name if section else None,
+        plant_area_name=plant_area.name if plant_area else None,
+    )
 
 
 @router.post("/equipment", response_model=EquipmentResponse, status_code=status.HTTP_201_CREATED)

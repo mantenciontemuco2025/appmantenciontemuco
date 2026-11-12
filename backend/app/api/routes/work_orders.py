@@ -381,9 +381,12 @@ def _display_area_name(wo: WorkOrder) -> str | None:
 
 def _display_section_name(wo: WorkOrder) -> str | None:
     """New sections are catalog-backed and snapshotted in section_name."""
-    if wo.plant_area and wo.area:
-        return wo.area.name
-    return wo.section_name
+    return wo.section_name or (wo.area.name if wo.plant_area and wo.area else None)
+
+
+def _display_equipment_name(wo: WorkOrder) -> str | None:
+    """Prefer the name captured when the OT was created."""
+    return wo.equipment_name_snapshot or (wo.equipment.name if wo.equipment else None)
 
 
 def _classification_status(wo: WorkOrder) -> str:
@@ -518,7 +521,7 @@ def _work_order_to_response(wo: WorkOrder) -> dict:
         "plant_area": wo.plant_area,
         "equipment_id": wo.equipment_id,
         "preventive_plan_id": wo.preventive_plan_id,
-        "equipment_name": wo.equipment.name if wo.equipment else None,
+        "equipment_name": _display_equipment_name(wo),
         "section_name": _display_section_name(wo),
         "maintenance_type": wo.maintenance_type,
         "loto_status": wo.loto_status,
@@ -855,7 +858,7 @@ async def _sync_work_order_to_monthly(
             exec_dt,
             area_name=_display_area_name(wo) or "",
             section_name=_display_section_name(wo) or "",
-            equipment_name=wo.equipment.name if wo.equipment else "",
+            equipment_name=_display_equipment_name(wo) or "",
             description=wo.description or "",
             maintenance_type=wo.maintenance_type,
             participants=participants,
@@ -964,6 +967,7 @@ async def create_historical_work_order(
         area_id=payload.area_id,
         plant_area=plant_area,
         equipment_id=equipment.id if equipment else None,
+        equipment_name_snapshot=equipment.name if equipment else None,
         section_name=area.name if area else None,
         maintenance_type=payload.maintenance_type,
         loto_status="NOT_APPLICABLE",
@@ -1223,7 +1227,7 @@ async def list_historical_pending_classification(
             title=wo.title,
             area_name=_display_area_name(wo),
             plant_area=wo.plant_area,
-            equipment_name=wo.equipment.name if wo.equipment else None,
+            equipment_name=_display_equipment_name(wo),
             preventive_plan_id=wo.preventive_plan_id,
             section_name=_display_section_name(wo),
             maintenance_type=wo.maintenance_type,
@@ -1381,6 +1385,7 @@ async def create_work_order(
         area_id=payload.area_id,
         plant_area=plant_area,
         equipment_id=payload.equipment_id,
+        equipment_name_snapshot=equipment.name if equipment else None,
         preventive_plan_id=payload.preventive_plan_id,
         # area_id points to the section catalog; snapshot its display name.
         section_name=area.name,
@@ -1853,7 +1858,7 @@ async def _populate_individual_ot(wo: WorkOrder) -> None:
         ot_number=wo.ot_number,
         area_name=_display_area_name(wo) or "",
         section_name=_display_section_name(wo) or "",
-        equipment_name=wo.equipment.name if wo.equipment else "",
+        equipment_name=_display_equipment_name(wo) or "",
         maintenance_type=wo.maintenance_type,
         loto_status=wo.loto_status,
         loto_controls=wo.loto_controls,
@@ -2261,7 +2266,7 @@ async def list_work_orders(
             title=wo.title,
             area_name=_display_area_name(wo),
             plant_area=wo.plant_area,
-            equipment_name=wo.equipment.name if wo.equipment else None,
+            equipment_name=_display_equipment_name(wo),
             section_name=_display_section_name(wo),
             maintenance_type=wo.maintenance_type,
             loto_status=wo.loto_status,
@@ -2337,6 +2342,7 @@ async def create_hallazgo(
         area_id=payload.area_id,
         plant_area=payload.plant_area,
         equipment_id=payload.equipment_id,
+        equipment_name_snapshot=equipment.name if equipment else None,
         section_name=area.name,
         maintenance_type=payload.maintenance_type,
         loto_status=legacy_status_from_controls(loto_controls, "NOT_APPLICABLE"),
@@ -2419,7 +2425,7 @@ async def list_hallazgos(
             is_historical=wo.is_historical, original_ot_number=wo.original_ot_number,
             title=wo.title,
             area_name=_display_area_name(wo), plant_area=wo.plant_area,
-            equipment_name=wo.equipment.name if wo.equipment else None,
+            equipment_name=_display_equipment_name(wo),
             section_name=_display_section_name(wo), maintenance_type=wo.maintenance_type,
             loto_status=wo.loto_status, status=wo.status,
             submitted_for_review=wo.submitted_for_review,
@@ -2675,6 +2681,7 @@ async def review_hallazgo(
             wo.area_id = section.id
             wo.section_name = section.name
             wo.equipment_id = equipment.id if equipment else None
+            wo.equipment_name_snapshot = equipment.name if equipment else None
         if payload.scheduled_date is not None:
             wo.scheduled_date = payload.scheduled_date
         if payload.due_date is not None:
@@ -2783,7 +2790,7 @@ async def my_work_orders(
             title=wo.title,
             area_name=_display_area_name(wo),
             plant_area=wo.plant_area,
-            equipment_name=wo.equipment.name if wo.equipment else None,
+            equipment_name=_display_equipment_name(wo),
             section_name=_display_section_name(wo),
             maintenance_type=wo.maintenance_type,
             loto_status=wo.loto_status,
@@ -3444,6 +3451,7 @@ async def update_work_order(
         wo.plant_area = target_plant_area
         wo.area_id = section.id
         wo.equipment_id = equipment.id if equipment else None
+        wo.equipment_name_snapshot = equipment.name if equipment else None
         if wo.section_name is not None:
             wo.section_name = section.name
     if payload.section_name is not None:
@@ -3711,6 +3719,7 @@ async def reassign_work_order(
         wo.plant_area = target_plant_area
         wo.area_id = section.id
         wo.equipment_id = equipment.id
+        wo.equipment_name_snapshot = equipment.name
         wo.section_name = section.name
 
     if "scheduled_date" in payload.model_fields_set:

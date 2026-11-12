@@ -75,6 +75,8 @@ export default function EquipmentInventoryPage() {
   const [draft, setDraft] = useState<EquipmentInventory | null>(null);
   const [hierarchy, setHierarchy] = useState<InventoryHierarchy[]>([]);
   const [editingLocation, setEditingLocation] = useState(false);
+  const [editingCatalogNames, setEditingCatalogNames] = useState(false);
+  const [catalogNameDraft, setCatalogNameDraft] = useState({ equipment_name: "", section_name: "", plant_area_name: "" });
   const [locationAreaId, setLocationAreaId] = useState("");
   const [locationSectionId, setLocationSectionId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -108,7 +110,7 @@ export default function EquipmentInventoryPage() {
   useEffect(() => {
     if (user) {
       void load();
-      if (user.role === "ADMIN") void loadHierarchy();
+      if (user.role === "ADMIN" || (user.role === "WORKER" && user.can_manage_equipment_inventory)) void loadHierarchy();
     }
   }, [user]);
 
@@ -159,6 +161,44 @@ export default function EquipmentInventoryPage() {
     setLocationSectionId(item.area_id == null ? "" : String(item.area_id));
     setEditingLocation(true);
     setMessage(null);
+  }
+
+  function beginCatalogNamesEdit(item: EquipmentInventory) {
+    setCatalogNameDraft({
+      equipment_name: item.name,
+      section_name: item.area_name || "",
+      plant_area_name: item.plant_area_name || "",
+    });
+    setEditingCatalogNames(true);
+    setEditingLocation(false);
+    setMessage(null);
+  }
+
+  async function saveCatalogNames() {
+    if (!selected) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const payload: Record<string, string> = { equipment_name: catalogNameDraft.equipment_name.trim() };
+      if (selected.area_id != null) payload.section_name = catalogNameDraft.section_name.trim();
+      if (selected.plant_area_id != null) payload.plant_area_name = catalogNameDraft.plant_area_name.trim();
+      const saved = await api.patch<Partial<EquipmentInventory>>(
+        `/api/catalogs/equipment/${selected.id}/catalog-names`, payload,
+      );
+      setItems((current) => current.map((item) => ({
+        ...item,
+        ...(item.id === selected.id ? { name: saved.name || item.name } : {}),
+        ...(saved.area_id != null && item.area_id === saved.area_id ? { area_name: saved.area_name || item.area_name } : {}),
+        ...(saved.plant_area_id != null && item.plant_area_id === saved.plant_area_id ? { plant_area_name: saved.plant_area_name || item.plant_area_name } : {}),
+      })));
+      setEditingCatalogNames(false);
+      await loadHierarchy();
+      setMessage({ error: false, text: "Nombres actualizados. Las OTs anteriores conservan los nombres con que fueron registradas." });
+    } catch (error) {
+      setMessage({ error: true, text: error instanceof Error ? error.message : "No se pudieron actualizar los nombres." });
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function saveLocation() {
@@ -216,7 +256,7 @@ export default function EquipmentInventoryPage() {
     <Shell fullName={user.full_name} role={user.role} onLogout={logout}>
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3"><span className="rounded-xl bg-blue-100 p-3 text-blue-700"><Boxes className="h-6 w-6" /></span><div><h1 className="text-2xl font-bold">Inventario de equipos</h1><p className="mt-1 text-sm text-muted-foreground">Características, ubicación y datos técnicos de los equipos registrados.</p></div></div>
-        {canEditInventory && selected && !editing && <Button onClick={() => beginEdit(selected)}><Pencil className="mr-2 h-4 w-4" />Editar ficha</Button>}
+        {canEditInventory && selected && !editing && <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => beginCatalogNamesEdit(selected)}><Pencil className="mr-2 h-4 w-4" />Editar nombres</Button><Button onClick={() => beginEdit(selected)}><Pencil className="mr-2 h-4 w-4" />Editar ficha</Button></div>}
       </div>
 
       {message && <div className={`mb-4 rounded-lg border p-3 text-sm ${message.error ? "border-red-200 bg-red-50 text-red-800" : "border-green-200 bg-green-50 text-green-800"}`}>{message.text}</div>}
@@ -240,6 +280,15 @@ export default function EquipmentInventoryPage() {
         <section className="min-w-0 rounded-xl border bg-card p-4 sm:p-6">
           {!selected ? <div className="py-16 text-center text-sm text-muted-foreground">{items.length ? "Selecciona un equipo para ver su ficha." : "Todavía no hay equipos registrados en el catálogo."}</div> : <>
             <div className="mb-5 flex flex-wrap items-start justify-between gap-3 border-b pb-4"><div><h2 className="text-xl font-semibold">{selected.name}</h2><p className="mt-1 text-sm text-muted-foreground">Código: {selected.inventory_code || "—"} · {selected.area_name || "Sin sección"}{selected.plant_area_name ? ` · ${selected.plant_area_name}` : ""}</p></div><div className="flex flex-wrap gap-2">{isAdmin && !editingLocation && !editing && <Button variant="outline" onClick={() => beginLocationEdit(selected)}><Pencil className="mr-2 h-4 w-4" />Cambiar área/sección</Button>}{editing && <><Button variant="outline" onClick={() => { setEditing(false); setDraft(null); }} disabled={busy}><X className="mr-1 h-4 w-4" />Cancelar</Button><Button onClick={() => void save()} disabled={busy}>{busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}Guardar</Button></>}</div></div>
+            {editingCatalogNames && canEditInventory && <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50/50 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">Editar nombres del catálogo</h3><p className="mt-1 text-sm text-muted-foreground">Se conservan los vínculos de equipos y secciones. Las OTs anteriores mantienen sus nombres originales.</p></div><Button type="button" variant="ghost" size="icon" aria-label="Cancelar edición de nombres" onClick={() => setEditingCatalogNames(false)} disabled={busy}><X className="h-4 w-4" /></Button></div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                <label className="text-sm font-medium">Equipo<input className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal" maxLength={250} value={catalogNameDraft.equipment_name} onChange={(event) => setCatalogNameDraft({ ...catalogNameDraft, equipment_name: event.target.value })} /></label>
+                {selected.area_id != null && <label className="text-sm font-medium">Sección<input className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal" maxLength={200} value={catalogNameDraft.section_name} onChange={(event) => setCatalogNameDraft({ ...catalogNameDraft, section_name: event.target.value })} /></label>}
+                {selected.plant_area_id != null && <label className="text-sm font-medium">Área<input className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal" maxLength={100} value={catalogNameDraft.plant_area_name} onChange={(event) => setCatalogNameDraft({ ...catalogNameDraft, plant_area_name: event.target.value })} /></label>}
+              </div>
+              <div className="mt-3 flex gap-2"><Button onClick={() => void saveCatalogNames()} disabled={busy || !catalogNameDraft.equipment_name.trim() || (selected.area_id != null && !catalogNameDraft.section_name.trim()) || (selected.plant_area_id != null && !catalogNameDraft.plant_area_name.trim())}>{busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}Guardar nombres</Button><Button variant="outline" onClick={() => setEditingCatalogNames(false)} disabled={busy}>Cancelar</Button></div>
+            </div>}
             {editingLocation && isAdmin && <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50/50 p-4">
               <h3 className="font-semibold">Asignar equipo a un área y sección</h3>
               <p className="mt-1 text-sm text-muted-foreground">Esto cambia la ubicación del equipo en el catálogo. Las órdenes de trabajo anteriores conservan sus datos.</p>
