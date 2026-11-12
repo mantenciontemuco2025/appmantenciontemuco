@@ -25,6 +25,7 @@ from app.models.water_register import (
     WaterMeterReading,
 )
 from app.models.hazardous_waste import HazardousWasteRecord, HazardousWasteSettings
+from app.models.preventive import PreventiveAlertSettings, PreventivePlan
 
 __all__ = [
     "User",
@@ -54,4 +55,6 @@ __all__ = [
     "WaterDqoSample",
     "HazardousWasteRecord",
     "HazardousWasteSettings",
+    "PreventivePlan",
+    "PreventiveAlertSettings",
 ]

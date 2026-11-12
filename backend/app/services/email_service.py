@@ -25,6 +25,8 @@ _SUBJECTS = {
     "OT_DEVUELTA": "OT devuelta para corrección",
     "OT_CANCELADA": "OT cancelada",
     "OT_REABIERTA": "OT reabierta",
+    "PREVENTIVO_PROXIMO": "Mantenimiento preventivo próximo a vencer",
+    "PREVENTIVO_VENCIDO": "Mantenimiento preventivo vencido",
 }
 
 

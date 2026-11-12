@@ -7,8 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.config import settings
-from app.api.routes import auth, users, catalogs, maintenance, audit, admin, materials, work_orders, notifications, push_subscriptions, kpis, water_register, equipment_life, hazardous_waste
-from app.services import email_service, push_service
+from app.api.routes import auth, users, catalogs, maintenance, audit, admin, materials, work_orders, notifications, push_subscriptions, kpis, water_register, equipment_life, hazardous_waste, preventive
+from app.services import email_service, push_service, preventive_alert_service
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +18,7 @@ async def lifespan(app: FastAPI):
     sync_worker = asyncio.create_task(work_orders.external_sync_worker())
     push_worker = asyncio.create_task(push_service.worker())
     email_worker = asyncio.create_task(email_service.worker())
+    preventive_alert_worker = asyncio.create_task(preventive_alert_service.worker())
     water_register_worker = asyncio.create_task(water_register.water_register_sync_worker())
     hazardous_waste_worker = asyncio.create_task(hazardous_waste.hazardous_waste_sync_worker())
     try:
@@ -26,11 +27,12 @@ async def lifespan(app: FastAPI):
         sync_worker.cancel()
         push_worker.cancel()
         email_worker.cancel()
+        preventive_alert_worker.cancel()
         water_register_worker.cancel()
         hazardous_waste_worker.cancel()
         await asyncio.gather(
             sync_worker, push_worker, email_worker, water_register_worker,
-            hazardous_waste_worker, return_exceptions=True
+            hazardous_waste_worker, preventive_alert_worker, return_exceptions=True
         )
 
 
@@ -65,6 +67,7 @@ app.include_router(kpis.router)
 app.include_router(water_register.router)
 app.include_router(equipment_life.router)
 app.include_router(hazardous_waste.router)
+app.include_router(preventive.router)
 
 @app.get("/health", tags=["health"])
 async def health():

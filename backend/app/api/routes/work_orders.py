@@ -17,6 +17,7 @@ import time
 import unicodedata
 from datetime import datetime, timezone, timedelta, date as _date, time as _time
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel
@@ -44,6 +45,7 @@ from app.models.worker_column import WorkerColumn
 from app.models.sync_job import ExternalSyncJob, SyncJobStatus
 from app.models.notification import Notification
 from app.models.material_catalog import MaterialCatalog
+from app.models.preventive import PreventivePlan
 from app.schemas.work_order import (
     WorkOrderCreate,
     HistoricalWorkOrderCreate,
@@ -71,6 +73,7 @@ from app.services import wo_permissions as perms
 from app.services import notification_service
 from app.api.routes.equipment_life import sync_equipment_from_database
 from app.services.evidence_images import MAX_UPLOAD_BYTES, prepare_evidence_image
+from app.services.preventive import PERIODICITY_MONTHS, add_months
 
 logger = logging.getLogger(__name__)
 
@@ -514,6 +517,7 @@ def _work_order_to_response(wo: WorkOrder) -> dict:
         "area_name": _display_area_name(wo),
         "plant_area": wo.plant_area,
         "equipment_id": wo.equipment_id,
+        "preventive_plan_id": wo.preventive_plan_id,
         "equipment_name": wo.equipment.name if wo.equipment else None,
         "section_name": _display_section_name(wo),
         "maintenance_type": wo.maintenance_type,
@@ -1220,6 +1224,7 @@ async def list_historical_pending_classification(
             area_name=_display_area_name(wo),
             plant_area=wo.plant_area,
             equipment_name=wo.equipment.name if wo.equipment else None,
+            preventive_plan_id=wo.preventive_plan_id,
             section_name=_display_section_name(wo),
             maintenance_type=wo.maintenance_type,
             loto_status=wo.loto_status,
@@ -1246,6 +1251,32 @@ async def create_work_order(
 ):
     if not perms.can_create(current_user):
         raise HTTPException(status_code=403, detail="No tiene permiso para crear OTs")
+
+    preventive_plan = None
+    if payload.preventive_plan_id is not None:
+        if current_user.role != UserRole.ADMIN:
+            raise HTTPException(status_code=403, detail="Solo el administrador puede generar OTs desde el plan preventivo.")
+        preventive_plan = await db.scalar(
+            select(PreventivePlan).where(PreventivePlan.id == payload.preventive_plan_id).with_for_update()
+        )
+        if not preventive_plan or not preventive_plan.active:
+            raise HTTPException(status_code=404, detail="El plan preventivo no está disponible.")
+        if preventive_plan.equipment_id != payload.equipment_id:
+            raise HTTPException(status_code=400, detail="El equipo no coincide con el plan preventivo.")
+        if payload.maintenance_type != "PREVENTIVE" or not payload.emit:
+            raise HTTPException(status_code=400, detail="Las OTs vinculadas a un plan deben generarse como preventivas desde el módulo.")
+        if not preventive_plan.description or not preventive_plan.next_due_date:
+            raise HTTPException(status_code=400, detail="Completa la descripción y próxima fecha del preventivo antes de generar la OT.")
+        if not preventive_plan.interval_months and preventive_plan.periodicity not in PERIODICITY_MONTHS:
+            raise HTTPException(status_code=400, detail="Configura la periodicidad antes de generar una OT preventiva.")
+        open_preventive_order = await db.scalar(
+            select(WorkOrder.id).where(
+                WorkOrder.preventive_plan_id == preventive_plan.id,
+                WorkOrder.status.in_((WorkOrderStatus.DRAFT.value, WorkOrderStatus.PENDING.value, WorkOrderStatus.IN_PROGRESS.value)),
+            ).limit(1)
+        )
+        if open_preventive_order:
+            raise HTTPException(status_code=409, detail="Este preventivo ya tiene una OT abierta.")
 
     plant_area = _validate_plant_area(payload.plant_area)
     if payload.equipment_id is None:
@@ -1350,6 +1381,7 @@ async def create_work_order(
         area_id=payload.area_id,
         plant_area=plant_area,
         equipment_id=payload.equipment_id,
+        preventive_plan_id=payload.preventive_plan_id,
         # area_id points to the section catalog; snapshot its display name.
         section_name=area.name,
         maintenance_type=payload.maintenance_type,
@@ -1433,6 +1465,7 @@ async def create_work_order(
             "status": wo.status,
             "is_external_work": wo.is_external_work,
             "external_executor_name": wo.external_executor_name,
+            "preventive_plan_id": wo.preventive_plan_id,
         },
     )
     await db.flush()
@@ -4544,6 +4577,20 @@ async def complete_work_order(
     # manual duration or calculated from a start/end range.
     wo.estimated_time = _format_work_duration(reported_minutes)
 
+    preventive_plan = None
+    if wo.preventive_plan_id is not None:
+        preventive_plan = await db.scalar(
+            select(PreventivePlan).where(PreventivePlan.id == wo.preventive_plan_id).with_for_update()
+        )
+        if preventive_plan is not None:
+            interval = preventive_plan.interval_months or PERIODICITY_MONTHS.get(preventive_plan.periodicity or "")
+            if interval:
+                completed_local_date = datetime.now(ZoneInfo("America/Santiago")).date()
+                wo.preventive_previous_last_completed_date = preventive_plan.last_completed_date
+                wo.preventive_previous_next_due_date = preventive_plan.next_due_date
+                preventive_plan.last_completed_date = completed_local_date
+                preventive_plan.next_due_date = add_months(completed_local_date, interval)
+
     await create_audit_log(
         db,
         user_id=current_user.id,
@@ -4557,6 +4604,8 @@ async def complete_work_order(
             "actual_duration_minutes": wo.actual_duration_minutes,
             "work_time_mode": wo.work_time_mode,
             "worked_duration_minutes": wo.worked_duration_minutes,
+            "preventive_plan_id": wo.preventive_plan_id,
+            "preventive_next_due_date": preventive_plan.next_due_date.isoformat() if wo.preventive_plan_id and preventive_plan and preventive_plan.next_due_date else None,
         },
     )
     await db.flush()
@@ -4783,6 +4832,16 @@ async def return_work_order(
 
     previous_status = wo.status
     now = datetime.now(timezone.utc)
+    preventive_plan = None
+    if wo.preventive_plan_id is not None:
+        preventive_plan = await db.scalar(
+            select(PreventivePlan).where(PreventivePlan.id == wo.preventive_plan_id).with_for_update()
+        )
+        if preventive_plan and wo.preventive_previous_next_due_date is not None:
+            preventive_plan.last_completed_date = wo.preventive_previous_last_completed_date
+            preventive_plan.next_due_date = wo.preventive_previous_next_due_date
+        wo.preventive_previous_last_completed_date = None
+        wo.preventive_previous_next_due_date = None
     wo.status = WorkOrderStatus.IN_PROGRESS.value
     wo.returned_at = now
     wo.returned_by_user_id = current_user.id
@@ -4807,6 +4866,7 @@ async def return_work_order(
         new_data={
             "status": wo.status,
             "return_reason": payload.return_reason,
+            "preventive_next_due_date": preventive_plan.next_due_date.isoformat() if preventive_plan and preventive_plan.next_due_date else None,
         },
     )
     await db.flush()

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { Wrench, LayoutDashboard, ClipboardList, ClipboardCheck, Users, LogOut, PenLine, Droplets, Siren, History, Biohazard, Boxes } from "lucide-react";
+import { Wrench, LayoutDashboard, ClipboardList, ClipboardCheck, Users, LogOut, PenLine, Droplets, Siren, History, Biohazard, Boxes, CalendarClock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { NotificationBell } from "@/components/notifications/bell";
 import { getAuthUser } from "@/lib/auth";
@@ -32,6 +32,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/perfil", label: "Mi perfil", icon: <PenLine className="h-4 w-4" /> },
   { href: "/registro-agua", label: "Planta de RILES", icon: <Droplets className="h-4 w-4" />, waterRegisterOnly: true },
   { href: "/residuos-peligrosos", label: "Residuos peligrosos", icon: <Biohazard className="h-4 w-4" />, hazardousWasteOnly: true },
+  { href: "/preventivo", label: "Preventivo", icon: <CalendarClock className="h-4 w-4" />, adminOnly: true },
   { href: "/admin", label: "Admin", icon: <Users className="h-4 w-4" />, adminOnly: true },
 ];
 

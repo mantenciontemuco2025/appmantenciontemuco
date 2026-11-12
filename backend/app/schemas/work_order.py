@@ -12,6 +12,7 @@ class WorkOrderCreate(BaseModel):
     area_id: int
     plant_area: str
     equipment_id: int | None = None
+    preventive_plan_id: int | None = None
     section_name: str | None = None
     maintenance_type: str  # PREVENTIVE, CORRECTIVE, PREDICTIVE, PROYECTO, MONTAJE
     loto_status: str = LotoStatus.NOT_APPLICABLE.value
@@ -433,6 +434,7 @@ class WorkOrderResponse(BaseModel):
     plant_area: str | None = None
     area_name: str | None = None
     equipment_id: int | None
+    preventive_plan_id: int | None = None
     equipment_name: str | None = None
     section_name: str | None
     maintenance_type: str
@@ -556,6 +558,7 @@ class WorkOrderListResponse(BaseModel):
     area_name: str | None = None
     plant_area: str | None = None
     equipment_name: str | None = None
+    preventive_plan_id: int | None = None
     section_name: str | None
     maintenance_type: str
     loto_status: str

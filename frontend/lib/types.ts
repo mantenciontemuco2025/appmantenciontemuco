@@ -627,7 +627,9 @@ export type NotificationType =
   | "OT_VALIDACION_SUPERVISOR"
   | "OT_VALIDADA_SUPERVISOR"
   | "OT_DEVUELTA_SUPERVISOR"
-  | "OT_REASIGNADA";
+  | "OT_REASIGNADA"
+  | "PREVENTIVO_PROXIMO"
+  | "PREVENTIVO_VENCIDO";
 
 export interface AppNotification {
   id: number;

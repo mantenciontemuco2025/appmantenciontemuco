@@ -1,5 +1,5 @@
 import enum
-from datetime import datetime, time, timezone
+from datetime import date, datetime, time, timezone
 
 from sqlalchemy import (
     String,
@@ -85,6 +85,11 @@ class WorkOrder(Base):
     equipment_id: Mapped[int | None] = mapped_column(
         ForeignKey("equipment.id"), nullable=True
     )
+    preventive_plan_id: Mapped[int | None] = mapped_column(
+        ForeignKey("preventive_plans.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    preventive_previous_last_completed_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    preventive_previous_next_due_date: Mapped[date | None] = mapped_column(Date, nullable=True)
 
     maintenance_type: Mapped[str] = mapped_column(String(20))
     loto_status: Mapped[str] = mapped_column(
