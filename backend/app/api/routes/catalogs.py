@@ -30,6 +30,7 @@ from app.schemas.catalog import (
     EquipmentCreate,
     EquipmentResponse,
     EquipmentUpdate,
+    EquipmentBrief,
     EquipmentInventoryUpdate,
     EquipmentInventoryResponse,
     InventoryCatalogNamesUpdate,
@@ -111,6 +112,94 @@ catalog_writer = require_roles(UserRole.ADMIN, UserRole.SUPERVISOR)
 # --------------------------------------------------------------------------
 # Hierarchical inventory catalog (plant area -> section -> physical equipment)
 # --------------------------------------------------------------------------
+async def _load_catalog_hierarchy(
+    db: AsyncSession,
+    *,
+    include_inactive: bool = False,
+) -> list[PlantAreaWithSections]:
+    statement = select(PlantArea.id, PlantArea.name, PlantArea.is_active)
+    if not include_inactive:
+        statement = statement.where(PlantArea.is_active.is_(True))
+    plants = (await db.execute(statement.order_by(PlantArea.name))).all()
+    if not plants:
+        return []
+
+    plant_ids = [plant_id for plant_id, _, _ in plants]
+    section_rows = (
+        await db.execute(
+            select(plant_area_sections.c.plant_area_id, Area.id, Area.name)
+            .join(Area, Area.id == plant_area_sections.c.section_id)
+            .where(plant_area_sections.c.plant_area_id.in_(plant_ids))
+            .order_by(Area.name)
+        )
+    ).all()
+    section_ids = list({section_id for _, section_id, _ in section_rows})
+    equipment_rows = []
+    if section_ids:
+        equipment_rows = (
+            await db.execute(
+                select(
+                    Equipment.id,
+                    Equipment.area_id,
+                    Equipment.name,
+                    Equipment.plant_area_id,
+                    Equipment.inventory_code,
+                    Equipment.category,
+                    Equipment.location,
+                    Equipment.operational_status,
+                )
+                .where(Equipment.area_id.in_(section_ids))
+                .order_by(Equipment.name, Equipment.id)
+            )
+        ).all()
+
+    section_parent_ids: dict[int, set[int]] = {}
+    sections_by_plant: dict[int, list[tuple[int, str]]] = {}
+    for plant_id, section_id, section_name in section_rows:
+        section_parent_ids.setdefault(section_id, set()).add(plant_id)
+        sections_by_plant.setdefault(plant_id, []).append((section_id, section_name))
+    equipment_by_section: dict[int, list[HierarchyEquipment]] = {}
+    for row in equipment_rows:
+        equipment_by_section.setdefault(row.area_id, []).append(
+            HierarchyEquipment(
+                id=row.id,
+                name=row.name,
+                plant_area_id=row.plant_area_id,
+                inventory_code=row.inventory_code,
+                category=row.category,
+                location=row.location,
+                operational_status=row.operational_status,
+            )
+        )
+
+    response: list[PlantAreaWithSections] = []
+    for plant_id, plant_name, is_active in plants:
+        sections: list[SectionWithEquipment] = []
+        for section_id, section_name in sections_by_plant.get(plant_id, []):
+            equipment = [
+                item
+                for item in equipment_by_section.get(section_id, [])
+                if item.plant_area_id == plant_id
+                or (item.plant_area_id is None and len(section_parent_ids[section_id]) == 1)
+            ]
+            sections.append(
+                SectionWithEquipment(
+                    id=section_id,
+                    name=section_name,
+                    equipment=equipment,
+                )
+            )
+        response.append(
+            PlantAreaWithSections(
+                id=plant_id,
+                name=plant_name,
+                is_active=is_active,
+                sections=sections,
+            )
+        )
+    return response
+
+
 @router.get("/hierarchy", response_model=list[PlantAreaWithSections])
 async def get_catalog_hierarchy(
     include_inactive: bool = False,
@@ -120,40 +209,104 @@ async def get_catalog_hierarchy(
     """Return the inventory hierarchy while preserving the legacy /tree API."""
     if include_inactive and current_user.role != UserRole.ADMIN:
         raise HTTPException(status_code=403, detail="Solo administradores pueden ver áreas inactivas")
-    statement = select(PlantArea).options(
-        selectinload(PlantArea.sections)
-        .selectinload(Area.equipment),
-        selectinload(PlantArea.sections).selectinload(Area.plant_areas),
-    )
-    if not include_inactive:
-        statement = statement.where(PlantArea.is_active.is_(True))
-    result = await db.execute(statement.order_by(PlantArea.name))
-    response: list[PlantAreaWithSections] = []
-    for plant in result.scalars().all():
-        sections = []
-        for section in plant.sections:
-            equipment = [
-                HierarchyEquipment.model_validate(item)
-                for item in section.equipment
-                if item.plant_area_id == plant.id
-                or (item.plant_area_id is None and len(section.plant_areas) == 1)
-            ]
-            sections.append(
-                SectionWithEquipment(
-                    id=section.id,
-                    name=section.name,
-                    equipment=equipment,
+    return await _load_catalog_hierarchy(db, include_inactive=include_inactive)
+
+
+@router.get("/hallazgo-options", response_model=list[PlantAreaWithSections])
+async def get_hallazgo_catalog_options(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return equipment options, applying the supervisor's saved scope on the server."""
+    hierarchy = await _load_catalog_hierarchy(db)
+    if current_user.role != UserRole.SUPERVISOR:
+        return hierarchy
+
+    allowed_section_ids = set(current_user.area_ids)
+    assigned_plant_area_ids = set(current_user.plant_area_ids)
+
+    visible_areas: list[PlantAreaWithSections] = []
+    visible_linked_section_ids: set[int] = set()
+    for plant_area in hierarchy:
+        if plant_area.id not in assigned_plant_area_ids:
+            continue
+        sections = [
+            section
+            for section in plant_area.sections
+            if section.id in allowed_section_ids
+        ]
+        if sections:
+            visible_areas.append(
+                PlantAreaWithSections(
+                    id=plant_area.id,
+                    name=plant_area.name,
+                    is_active=plant_area.is_active,
+                    sections=sections,
                 )
             )
-        response.append(
-            PlantAreaWithSections(
-                id=plant.id,
-                name=plant.name,
-                is_active=plant.is_active,
-                sections=sections,
+            visible_linked_section_ids.update(section.id for section in sections)
+
+    # Older supervisors can have explicitly assigned sections that have no
+    # parent plant area. Preserve those options in a separate, clearly named
+    # group without exposing equipment scoped to an unrelated parent area.
+    legacy_section_ids = set(current_user.legacy_section_ids) - visible_linked_section_ids
+    if legacy_section_ids:
+        section_rows = (
+            await db.execute(
+                select(Area.id, Area.name)
+                .where(Area.id.in_(legacy_section_ids))
+                .order_by(Area.name)
             )
-        )
-    return response
+        ).all()
+        equipment_rows = (
+            await db.execute(
+                select(
+                    Equipment.id,
+                    Equipment.area_id,
+                    Equipment.name,
+                    Equipment.plant_area_id,
+                    Equipment.inventory_code,
+                    Equipment.category,
+                    Equipment.location,
+                    Equipment.operational_status,
+                )
+                .where(Equipment.area_id.in_(legacy_section_ids))
+                .order_by(Equipment.name, Equipment.id)
+            )
+        ).all()
+        equipment_by_section: dict[int, list[HierarchyEquipment]] = {}
+        for row in equipment_rows:
+            if row.plant_area_id is None or row.plant_area_id in assigned_plant_area_ids:
+                equipment_by_section.setdefault(row.area_id, []).append(
+                    HierarchyEquipment(
+                        id=row.id,
+                        name=row.name,
+                        plant_area_id=row.plant_area_id,
+                        inventory_code=row.inventory_code,
+                        category=row.category,
+                        location=row.location,
+                        operational_status=row.operational_status,
+                    )
+                )
+        sections = [
+            SectionWithEquipment(
+                id=section_id,
+                name=section_name,
+                equipment=equipment_by_section.get(section_id, []),
+            )
+            for section_id, section_name in section_rows
+        ]
+        if sections:
+            visible_areas.append(
+                PlantAreaWithSections(
+                    id=-1,
+                    name="Secciones sin área general",
+                    is_active=True,
+                    sections=sections,
+                )
+            )
+
+    return visible_areas
 
 
 # --------------------------------------------------------------------------
@@ -619,19 +772,52 @@ async def get_catalog_tree(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(
-        select(Area)
-        .options(selectinload(Area.equipment), selectinload(Area.plant_areas))
-        .order_by(Area.name)
-    )
+    section_rows = (
+        await db.execute(select(Area.id, Area.name).order_by(Area.name))
+    ).all()
+    section_ids = {section_id for section_id, _ in section_rows}
+    parents_by_section = await _section_parent_areas(db, section_ids)
+    equipment_rows = []
+    if section_ids:
+        equipment_rows = (
+            await db.execute(
+                select(
+                    Equipment.id,
+                    Equipment.area_id,
+                    Equipment.name,
+                    Equipment.plant_area_id,
+                    Equipment.inventory_code,
+                    Equipment.category,
+                    Equipment.location,
+                    Equipment.operational_status,
+                )
+                .where(Equipment.area_id.in_(section_ids))
+                .order_by(Equipment.name, Equipment.id)
+            )
+        ).all()
+    equipment_by_section: dict[int, list[EquipmentBrief]] = {}
+    for row in equipment_rows:
+        equipment_by_section.setdefault(row.area_id, []).append(
+            EquipmentBrief(
+                id=row.id,
+                name=row.name,
+                plant_area_id=row.plant_area_id,
+                inventory_code=row.inventory_code,
+                category=row.category,
+                location=row.location,
+                operational_status=row.operational_status,
+            )
+        )
     return [
-        {
-            "id": section.id,
-            "name": section.name,
-            "plant_area_names": sorted(area.name for area in section.plant_areas),
-            "equipment": section.equipment,
-        }
-        for section in result.scalars().all()
+        AreaWithEquipment(
+            id=section_id,
+            name=section_name,
+            plant_area_names=sorted(
+                area_name for _, area_name in parents_by_section.get(section_id, [])
+            ),
+            equipment=equipment_by_section.get(section_id, []),
+        )
+        for section_id, section_name in section_rows
     ]
 
 

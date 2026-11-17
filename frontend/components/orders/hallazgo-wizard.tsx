@@ -4,8 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, Camera, Check, Loader2, Save, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
-import { useAuth } from "@/lib/auth";
-import type { AreaNode, PlantAreaNode, WorkOrderRecord } from "@/lib/types";
+import type { PlantAreaNode, WorkOrderRecord } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { VoiceDictation } from "@/components/maintenance/voice-dictation";
 import { MaterialCodePicker } from "@/components/orders/material-code-picker";
@@ -48,7 +47,6 @@ function rangeDuration(start: string, end: string) {
 
 export function HallazgoWizard() {
   const router = useRouter();
-  const { user } = useAuth();
   const [plantAreas, setPlantAreas] = useState<PlantAreaNode[]>([]);
   const [workers, setWorkers] = useState<{ id: number; full_name: string }[]>([]);
   const [plantArea, setPlantArea] = useState<string>("");
@@ -72,66 +70,21 @@ export function HallazgoWizard() {
 
   useEffect(() => {
     Promise.all([
-      api.getCached<PlantAreaNode[]>("/api/catalogs/hierarchy", 300000),
-      api.getCached<AreaNode[]>("/api/catalogs/tree", 300000),
+      api.getCached<PlantAreaNode[]>("/api/catalogs/hallazgo-options", 300000),
       api.getCached<{ id: number; full_name: string }[]>("/api/users/workers", 60000),
-    ]).then(([tree, sections, users]) => {
-      // The section catalog is the canonical source for equipment lists. Merge
-      // its equipment into the hierarchy before applying supervisor scope so
-      // supervisor forms do not end up with empty equipment arrays while the
-      // same section remains visible. Keep parent-area filtering strict.
-      const sectionsById = new Map(sections.map((section) => [section.id, section]));
-      const hierarchy = tree.map((plantAreaNode) => ({
-        ...plantAreaNode,
-        sections: plantAreaNode.sections.map((section) => {
-          const catalogSection = sectionsById.get(section.id);
-          const catalogEquipment = (catalogSection?.equipment || []).filter((equipment) =>
-            equipment.plant_area_id === plantAreaNode.id
-            || (
-              equipment.plant_area_id == null
-              && catalogSection?.plant_area_names?.length === 1
-              && catalogSection.plant_area_names[0] === plantAreaNode.name
-            ),
-          );
-          const equipmentById = new Map(
-            [...section.equipment, ...catalogEquipment].map((equipment) => [equipment.id, equipment]),
-          );
-          return { ...section, equipment: [...equipmentById.values()] };
-        }),
-      }));
-      const allowedSectionIds = new Set(user?.area_ids || []);
-      const assignedParentAreaIds = new Set(user?.plant_area_ids || []);
-      const visibleLinkedSectionIds = new Set(
-        hierarchy
-          .filter((area) => assignedParentAreaIds.has(area.id))
-          .flatMap((area) => area.sections.filter((section) => allowedSectionIds.has(section.id)).map((section) => section.id)),
-      );
-      const legacySectionIds = new Set(user?.legacy_section_ids || []);
-      const visible = user?.role === "SUPERVISOR"
-        ? [
-            ...hierarchy.filter((area) => assignedParentAreaIds.has(area.id)).map((area) => ({
-              ...area,
-              sections: area.sections.filter((section) => allowedSectionIds.has(section.id)),
-            })).filter((area) => area.sections.length > 0),
-            ...(sections.some((section) => legacySectionIds.has(section.id) && !visibleLinkedSectionIds.has(section.id))
-              ? [{
-                  id: -1,
-                  name: "",
-                  is_active: true,
-                  sections: sections.filter((section) => legacySectionIds.has(section.id) && !visibleLinkedSectionIds.has(section.id)),
-                }]
-              : []),
-          ]
-        : hierarchy;
-      setPlantAreas(visible);
+    ]).then(([catalog, users]) => {
+      // The API returns the full catalog for admins and the saved, authorized
+      // area/section/equipment scope for supervisors. Keep permission logic in
+      // one place so stale client user data cannot hide assigned equipment.
+      setPlantAreas(catalog);
       setWorkers(users);
-      if (visible[0]) {
-        setPlantArea(String(visible[0].id));
-        setAreaId(visible[0].sections[0]?.id || "");
+      if (catalog[0]) {
+        setPlantArea(String(catalog[0].id));
+        setAreaId(catalog[0].sections[0]?.id || "");
       }
     }).catch(() => setError("No se pudo cargar el catálogo de áreas y equipos."))
       .finally(() => setLoading(false));
-  }, [user]);
+  }, []);
 
   useEffect(() => { photosRef.current = photos; }, [photos]);
   useEffect(() => () => photosRef.current.forEach((photo) => URL.revokeObjectURL(photo.previewUrl)), []);
