@@ -366,10 +366,27 @@ async def _validate_area_equipment(
         if eq is None or eq.area_id != area_id:
             raise HTTPException(status_code=400, detail="El equipo no pertenece al área seleccionada")
         if plant_area is not None and eq.plant_area_id != plant_area.id:
-            raise HTTPException(
-                status_code=400,
-                detail="El equipo no está asociado a esa área general y sección.",
+            # Legacy equipment can have no explicit plant_area_id. Accept it
+            # only when its section belongs exclusively to the selected area;
+            # never expose an unscoped item shared by multiple parent areas.
+            if eq.plant_area_id is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El equipo no está asociado a esa área general y sección.",
+                )
+            other_parent = await db.scalar(
+                select(plant_area_sections.c.plant_area_id)
+                .where(
+                    plant_area_sections.c.section_id == area_id,
+                    plant_area_sections.c.plant_area_id != plant_area.id,
+                )
+                .limit(1)
             )
+            if other_parent is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El equipo antiguo no tiene un área general definida; asígnalo explícitamente antes de usarlo aquí.",
+                )
         return area, eq
     return area, None
 

@@ -121,7 +121,9 @@ async def get_catalog_hierarchy(
     if include_inactive and current_user.role != UserRole.ADMIN:
         raise HTTPException(status_code=403, detail="Solo administradores pueden ver áreas inactivas")
     statement = select(PlantArea).options(
-        selectinload(PlantArea.sections).selectinload(Area.equipment)
+        selectinload(PlantArea.sections)
+        .selectinload(Area.equipment),
+        selectinload(PlantArea.sections).selectinload(Area.plant_areas),
     )
     if not include_inactive:
         statement = statement.where(PlantArea.is_active.is_(True))
@@ -134,6 +136,7 @@ async def get_catalog_hierarchy(
                 HierarchyEquipment.model_validate(item)
                 for item in section.equipment
                 if item.plant_area_id == plant.id
+                or (item.plant_area_id is None and len(section.plant_areas) == 1)
             ]
             sections.append(
                 SectionWithEquipment(
