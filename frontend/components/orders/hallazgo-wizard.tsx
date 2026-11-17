@@ -76,17 +76,40 @@ export function HallazgoWizard() {
       api.getCached<AreaNode[]>("/api/catalogs/tree", 300000),
       api.getCached<{ id: number; full_name: string }[]>("/api/users/workers", 60000),
     ]).then(([tree, sections, users]) => {
+      // The section catalog is the canonical source for equipment lists. Merge
+      // its equipment into the hierarchy before applying supervisor scope so
+      // supervisor forms do not end up with empty equipment arrays while the
+      // same section remains visible. Keep parent-area filtering strict.
+      const sectionsById = new Map(sections.map((section) => [section.id, section]));
+      const hierarchy = tree.map((plantAreaNode) => ({
+        ...plantAreaNode,
+        sections: plantAreaNode.sections.map((section) => {
+          const catalogSection = sectionsById.get(section.id);
+          const catalogEquipment = (catalogSection?.equipment || []).filter((equipment) =>
+            equipment.plant_area_id === plantAreaNode.id
+            || (
+              equipment.plant_area_id == null
+              && catalogSection?.plant_area_names?.length === 1
+              && catalogSection.plant_area_names[0] === plantAreaNode.name
+            ),
+          );
+          const equipmentById = new Map(
+            [...section.equipment, ...catalogEquipment].map((equipment) => [equipment.id, equipment]),
+          );
+          return { ...section, equipment: [...equipmentById.values()] };
+        }),
+      }));
       const allowedSectionIds = new Set(user?.area_ids || []);
       const assignedParentAreaIds = new Set(user?.plant_area_ids || []);
       const visibleLinkedSectionIds = new Set(
-        tree
+        hierarchy
           .filter((area) => assignedParentAreaIds.has(area.id))
           .flatMap((area) => area.sections.filter((section) => allowedSectionIds.has(section.id)).map((section) => section.id)),
       );
       const legacySectionIds = new Set(user?.legacy_section_ids || []);
       const visible = user?.role === "SUPERVISOR"
         ? [
-            ...tree.filter((area) => assignedParentAreaIds.has(area.id)).map((area) => ({
+            ...hierarchy.filter((area) => assignedParentAreaIds.has(area.id)).map((area) => ({
               ...area,
               sections: area.sections.filter((section) => allowedSectionIds.has(section.id)),
             })).filter((area) => area.sections.length > 0),
@@ -99,7 +122,7 @@ export function HallazgoWizard() {
                 }]
               : []),
           ]
-        : tree;
+        : hierarchy;
       setPlantAreas(visible);
       setWorkers(users);
       if (visible[0]) {
