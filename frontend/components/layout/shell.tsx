@@ -77,7 +77,7 @@ export function Shell({
     <div className="min-h-screen flex flex-col bg-background">
       {/* ── Header ─────────────────────────────────────────────── */}
       <header className="border-b bg-card sticky top-0 z-10">
-        <div className="mx-auto w-full max-w-6xl px-4 py-3 flex items-center justify-between">
+        <div className="w-full px-4 py-3 flex items-center justify-between sm:px-6 xl:px-8 2xl:px-12">
           <div className="flex items-center gap-2.5">
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
               <Wrench className="h-5 w-5" />
@@ -122,7 +122,7 @@ export function Shell({
 
       {/* ── Nav ────────────────────────────────────────────────── */}
       <nav className="border-b bg-card">
-        <div className="mx-auto w-full max-w-6xl px-4">
+        <div className="w-full px-4 sm:px-6 xl:px-8 2xl:px-12">
           <div className="flex items-center gap-1 overflow-x-auto md:flex-wrap">
             {NAV_ITEMS.filter(
               (item) =>
@@ -152,7 +152,7 @@ export function Shell({
       </nav>
 
       {/* ── Main ───────────────────────────────────────────────── */}
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">{children}</main>
+      <main className="w-full flex-1 px-4 py-6 sm:px-6 xl:px-8 2xl:px-12">{children}</main>
     </div>
   );
 }
