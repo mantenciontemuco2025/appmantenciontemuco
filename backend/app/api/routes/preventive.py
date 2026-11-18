@@ -112,6 +112,12 @@ def _interval(periodicity: str | None, months: int | None) -> int | None:
     return months or PERIODICITY_MONTHS.get(periodicity or "")
 
 
+def _is_configured(plan: PreventivePlan) -> bool:
+    if plan.periodicity == "SELECTED_MONTHS":
+        return bool(plan.scheduled_months)
+    return bool(_interval(plan.periodicity, plan.interval_months))
+
+
 async def _alert_days(db: AsyncSession) -> int:
     settings_row = await db.get(PreventiveAlertSettings, 1)
     return settings_row.alert_days if settings_row is not None else 30
@@ -122,7 +128,7 @@ def _status(plan: PreventivePlan, latest: WorkOrder | None, alert_days: int = 30
         return "INACTIVE"
     if latest and latest.status in OPEN_STATUSES:
         return "OT_OPEN"
-    if not plan.periodicity or not _interval(plan.periodicity, plan.interval_months) or not plan.next_due_date:
+    if not plan.periodicity or not _is_configured(plan) or not plan.next_due_date:
         return "NEEDS_CONFIGURATION"
     due = plan.next_due_date
     today = _today()
@@ -194,6 +200,7 @@ def _plan_response(plan: PreventivePlan, equipment: Equipment, area: Area,
         source_plan_id=plan.source_plan_id,
         periodicity=plan.periodicity,
         interval_months=plan.interval_months,
+        scheduled_months=plan.scheduled_months,
         planned_month=plan.planned_month,
         last_completed_date=plan.last_completed_date,
         next_due_date=plan.next_due_date,
@@ -282,6 +289,8 @@ async def create_plan(
     _require_admin(current_user)
     if payload.equipment_id <= 0:
         raise HTTPException(status_code=422, detail="Selecciona un equipo del inventario.")
+    if payload.periodicity == "SELECTED_MONTHS" and not payload.scheduled_months:
+        raise HTTPException(status_code=422, detail="Selecciona al menos un mes para el preventivo.")
     responsible = None
     if payload.default_responsible_user_id:
         responsible = await db.get(User, payload.default_responsible_user_id)
@@ -317,6 +326,10 @@ async def update_plan(
         raise HTTPException(status_code=404, detail="Plan preventivo no encontrado.")
     plan, equipment, area, plant_area = row
     changes = payload.model_dump(exclude_unset=True)
+    periodicity = changes.get("periodicity", plan.periodicity)
+    scheduled_months = changes.get("scheduled_months", plan.scheduled_months)
+    if periodicity == "SELECTED_MONTHS" and not scheduled_months:
+        raise HTTPException(status_code=422, detail="Selecciona al menos un mes para el preventivo.")
     responsible = None
     responsible_id = changes.get("default_responsible_user_id", plan.default_responsible_user_id)
     if responsible_id is not None:
@@ -476,7 +489,7 @@ async def generate_work_order(
         raise HTTPException(status_code=409, detail="El plan preventivo está inactivo.")
     if not plan.description or not plan.description.strip():
         raise HTTPException(status_code=409, detail="Completa la descripción del preventivo antes de generar la OT.")
-    if not plan.next_due_date or not _interval(plan.periodicity, plan.interval_months):
+    if not plan.next_due_date or not _is_configured(plan):
         raise HTTPException(status_code=409, detail="Completa la periodicidad y próxima fecha del preventivo antes de generar la OT.")
     open_order = await db.scalar(select(WorkOrder.id).where(
         WorkOrder.preventive_plan_id == plan.id,

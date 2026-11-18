@@ -27,6 +27,8 @@ def _today():
 
 
 def _is_configured(plan: PreventivePlan) -> bool:
+    if plan.periodicity == "SELECTED_MONTHS":
+        return bool(plan.scheduled_months)
     if plan.periodicity == "CUSTOM":
         return bool(plan.interval_months and plan.interval_months > 0)
     return plan.periodicity in {"MONTHLY", "QUARTERLY", "SEMIANNUAL", "ANNUAL"}

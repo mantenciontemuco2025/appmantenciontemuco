@@ -1,6 +1,6 @@
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -39,6 +39,7 @@ class PreventivePlan(Base):
     source_plan_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     periodicity: Mapped[str | None] = mapped_column(String(30), nullable=True)
     interval_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    scheduled_months: Mapped[list[int] | None] = mapped_column(JSON, nullable=True)
     planned_month: Mapped[str | None] = mapped_column(String(40), nullable=True)
     last_completed_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     next_due_date: Mapped[date | None] = mapped_column(Date, nullable=True)

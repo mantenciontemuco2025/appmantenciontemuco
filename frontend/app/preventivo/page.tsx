@@ -54,6 +54,7 @@ type Plan = {
   source_plan_id: string | null;
   periodicity: string | null;
   interval_months: number | null;
+  scheduled_months: number[] | null;
   planned_month: string | null;
   last_completed_date: string | null;
   next_due_date: string | null;
@@ -73,6 +74,7 @@ type PlanDraft = {
   equipment_id: string;
   periodicity: string;
   interval_months: string;
+  scheduled_months: number[];
   last_completed_date: string;
   next_due_date: string;
   description: string;
@@ -88,10 +90,16 @@ const PERIODS = [
   ["SEMIANNUAL", "Semestral"],
   ["ANNUAL", "Anual"],
   ["CUSTOM", "Personalizada"],
+  ["SELECTED_MONTHS", "Meses específicos"],
 ] as const;
 
+const MONTHS = Array.from({ length: 12 }, (_, index) => ({
+  value: index + 1,
+  label: new Intl.DateTimeFormat("es-CL", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2020, index, 1))),
+}));
+
 const emptyDraft: PlanDraft = {
-  equipment_id: "", periodicity: "", interval_months: "", last_completed_date: "", next_due_date: "",
+  equipment_id: "", periodicity: "", interval_months: "", scheduled_months: [], last_completed_date: "", next_due_date: "",
   description: "", spare_parts: "", estimated_time: "", observations: "", default_responsible_user_id: "",
 };
 
@@ -201,6 +209,22 @@ function calculateNextDueDate(baseDate: string, periodicity: string, intervalMon
   return `${nextYear}-${String(nextMonth).padStart(2, "0")}-${String(nextDay).padStart(2, "0")}`;
 }
 
+function calculateSelectedMonthDueDate(baseDate: string, months: number[]): string {
+  if (!baseDate || months.length === 0) return "";
+  const [year, month, day] = baseDate.split("-").map(Number);
+  if (!year || !month || !day) return "";
+  const selected = [...new Set(months)].sort((a, b) => a - b);
+  for (const candidateYear of [year, year + 1]) {
+    for (const candidateMonth of selected) {
+      if (candidateYear === year && candidateMonth < month) continue;
+      const lastDay = new Date(Date.UTC(candidateYear, candidateMonth, 0)).getUTCDate();
+      const candidate = `${candidateYear}-${String(candidateMonth).padStart(2, "0")}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
+      if (candidate > baseDate) return candidate;
+    }
+  }
+  return "";
+}
+
 const statusLabels: Record<string, string> = {
   ON_TIME: "Al día", DUE_SOON: "Próximo", OVERDUE: "Vencido", NEEDS_CONFIGURATION: "Falta configurar",
   OT_OPEN: "OT abierta", INACTIVE: "Inactivo",
@@ -225,6 +249,7 @@ export default function PreventivoPage() {
   const [notice, setNotice] = useState("");
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [monthFilter, setMonthFilter] = useState("ALL");
   const [draft, setDraft] = useState<PlanDraft>(emptyDraft);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [createPlanOpen, setCreatePlanOpen] = useState(false);
@@ -299,10 +324,11 @@ export default function PreventivoPage() {
     const query = normalizedHeader(search);
     return plans.filter((plan) => {
       if (statusFilter !== "ALL" && plan.status !== statusFilter) return false;
+      if (monthFilter !== "ALL" && Number(plan.next_due_date?.slice(5, 7)) !== Number(monthFilter)) return false;
       const source = normalizedHeader([plan.equipment_name, plan.inventory_code, plan.area_name, plan.section_name, plan.description, plan.source_plan_id].join(" "));
       return !query || source.includes(query);
     });
-  }, [plans, search, statusFilter]);
+  }, [plans, search, statusFilter, monthFilter]);
 
   useEffect(() => {
     if (deepLinkHandledRef.current || plans.length === 0) return;
@@ -336,6 +362,7 @@ export default function PreventivoPage() {
     setCreatePlanOpen(false);
     setDraft({
       equipment_id: String(plan.equipment_id), periodicity: plan.periodicity || "", interval_months: plan.interval_months ? String(plan.interval_months) : "",
+      scheduled_months: plan.scheduled_months || [],
       last_completed_date: plan.last_completed_date || "", next_due_date: plan.next_due_date || "", description: plan.description || "",
       spare_parts: plan.spare_parts || "", estimated_time: plan.estimated_time || "", observations: plan.observations || "",
       default_responsible_user_id: plan.default_responsible_user_id ? String(plan.default_responsible_user_id) : "",
@@ -351,10 +378,14 @@ export default function PreventivoPage() {
     if (draft.periodicity === "CUSTOM" && !draft.interval_months) {
       setError("Indica cada cuántos meses se repetirá este preventivo."); return;
     }
+    if (draft.periodicity === "SELECTED_MONTHS" && draft.scheduled_months.length === 0) {
+      setError("Selecciona al menos un mes para este preventivo."); return;
+    }
     setBusy(true);
     const payload = {
       equipment_id: Number(draft.equipment_id), periodicity: draft.periodicity,
       interval_months: draft.interval_months ? Number(draft.interval_months) : null,
+      scheduled_months: draft.periodicity === "SELECTED_MONTHS" ? draft.scheduled_months : null,
       last_completed_date: draft.last_completed_date || null, next_due_date: draft.next_due_date || null,
       description: draft.description.trim(), spare_parts: draft.spare_parts || null, estimated_time: draft.estimated_time || null,
       observations: draft.observations || null,
@@ -495,9 +526,10 @@ export default function PreventivoPage() {
           <form onSubmit={(event) => void savePlan(event)} className="space-y-4">
             <SearchableSelect label="Equipo del inventario" options={equipmentOptions} value={draft.equipment_id} onValueChange={(value) => setDraft((current) => ({ ...current, equipment_id: value }))} placeholder="Buscar equipo por nombre, ID, área o sección..." searchPlaceholder="Escribe nombre o código..." emptyMessage="No se encontraron equipos en el inventario." disabled={!!editingId} />
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <label className="text-sm font-medium">Periodicidad<select className="mt-1 h-10 w-full rounded-md border bg-background px-3" value={draft.periodicity} onChange={(event) => setDraft((current) => { const periodicity = event.target.value; const intervalMonths = periodicity === "CUSTOM" ? current.interval_months : ""; const calculated = calculateNextDueDate(current.last_completed_date, periodicity, intervalMonths); return { ...current, periodicity, interval_months: intervalMonths, next_due_date: calculated || (periodicity ? "" : current.next_due_date) }; })}><option value="">Seleccionar...</option>{PERIODS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+              <label className="text-sm font-medium">Periodicidad<select className="mt-1 h-10 w-full rounded-md border bg-background px-3" value={draft.periodicity} onChange={(event) => setDraft((current) => { const periodicity = event.target.value; const intervalMonths = periodicity === "CUSTOM" ? current.interval_months : ""; const calculated = periodicity === "SELECTED_MONTHS" ? calculateSelectedMonthDueDate(current.last_completed_date, current.scheduled_months) : calculateNextDueDate(current.last_completed_date, periodicity, intervalMonths); return { ...current, periodicity, interval_months: intervalMonths, scheduled_months: periodicity === "SELECTED_MONTHS" ? current.scheduled_months : [], next_due_date: calculated || (periodicity ? "" : current.next_due_date) }; })}><option value="">Seleccionar...</option>{PERIODS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
               {draft.periodicity === "CUSTOM" && <label className="text-sm font-medium">Cada cuántos meses<input className="mt-1 h-10 w-full rounded-md border bg-background px-3" type="number" min="1" max="120" value={draft.interval_months} onChange={(event) => setDraft((current) => { const intervalMonths = event.target.value; const calculated = calculateNextDueDate(current.last_completed_date, current.periodicity, intervalMonths); return { ...current, interval_months: intervalMonths, next_due_date: calculated || "" }; })} /></label>}
-              <label className="text-sm font-medium">Fecha base / última realizada<input className="mt-1 h-10 w-full rounded-md border bg-background px-3" type="date" value={draft.last_completed_date} onChange={(event) => setDraft((current) => { const lastCompletedDate = event.target.value; const calculated = calculateNextDueDate(lastCompletedDate, current.periodicity, current.interval_months); return { ...current, last_completed_date: lastCompletedDate, next_due_date: calculated || current.next_due_date }; })} /></label>
+              {draft.periodicity === "SELECTED_MONTHS" && <fieldset className="text-sm font-medium lg:col-span-4"><legend>Meses en que se debe realizar</legend><div className="mt-2 flex flex-wrap gap-2">{MONTHS.map((month) => <label key={month.value} className={`flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 capitalize ${draft.scheduled_months.includes(month.value) ? "border-primary bg-primary/10 text-primary" : "bg-background"}`}><input type="checkbox" checked={draft.scheduled_months.includes(month.value)} onChange={(event) => setDraft((current) => { const scheduled_months = event.target.checked ? [...current.scheduled_months, month.value].sort((a, b) => a - b) : current.scheduled_months.filter((value) => value !== month.value); return { ...current, scheduled_months, next_due_date: calculateSelectedMonthDueDate(current.last_completed_date, scheduled_months) || current.next_due_date }; })} />{month.label}</label>)}</div><span className="mt-1 block text-xs font-normal text-muted-foreground">Se repetirá únicamente en los meses seleccionados, usando el día de la fecha base.</span></fieldset>}
+              <label className="text-sm font-medium">Fecha base / última realizada<input className="mt-1 h-10 w-full rounded-md border bg-background px-3" type="date" value={draft.last_completed_date} onChange={(event) => setDraft((current) => { const lastCompletedDate = event.target.value; const calculated = current.periodicity === "SELECTED_MONTHS" ? calculateSelectedMonthDueDate(lastCompletedDate, current.scheduled_months) : calculateNextDueDate(lastCompletedDate, current.periodicity, current.interval_months); return { ...current, last_completed_date: lastCompletedDate, next_due_date: calculated || current.next_due_date }; })} /></label>
               <label className="text-sm font-medium">Próximo vencimiento<input className="mt-1 h-10 w-full rounded-md border bg-background px-3" type="date" required value={draft.next_due_date} onChange={(event) => setDraft((current) => ({ ...current, next_due_date: event.target.value }))} /><span className="mt-1 block text-xs font-normal text-muted-foreground">Se calcula desde la fecha base y la periodicidad; puedes corregirla si es necesario.</span></label>
               <label className="text-sm font-medium">Responsable sugerido<select className="mt-1 h-10 w-full rounded-md border bg-background px-3" value={draft.default_responsible_user_id} onChange={(event) => setDraft((current) => ({ ...current, default_responsible_user_id: event.target.value }))}><option value="">Elegir al generar la OT</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.full_name}</option>)}</select></label>
               <label className="text-sm font-medium">Horas estimadas<input className="mt-1 h-10 w-full rounded-md border bg-background px-3" value={draft.estimated_time} onChange={(event) => setDraft((current) => ({ ...current, estimated_time: event.target.value }))} placeholder="Ej. 2 horas" /></label>
@@ -511,7 +543,7 @@ export default function PreventivoPage() {
         </section>
 
         <section ref={planListRef} className="scroll-mt-20 space-y-3">
-          <div className="flex flex-wrap items-center gap-3"><h2 className="mr-auto text-lg font-semibold">Equipos con preventivo ({filteredPlans.length})</h2><div className="relative w-full sm:w-80"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input className="pl-9" placeholder="Buscar equipo, ID, área o tarea" value={search} onChange={(event) => setSearch(event.target.value)} /></div><select className="h-10 rounded-md border bg-background px-3 text-sm" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="ALL">Todos los estados</option><option value="ON_TIME">Al día</option><option value="DUE_SOON">Próximos</option><option value="OVERDUE">Vencidos</option><option value="OT_OPEN">OT abierta</option><option value="NEEDS_CONFIGURATION">Falta configurar</option><option value="INACTIVE">Inactivos</option></select></div>
+          <div className="flex flex-wrap items-center gap-3"><h2 className="mr-auto text-lg font-semibold">Equipos con preventivo ({filteredPlans.length})</h2><div className="relative w-full sm:w-80"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input className="pl-9" placeholder="Buscar equipo, ID, área o tarea" value={search} onChange={(event) => setSearch(event.target.value)} /></div><select aria-label="Filtrar preventivos por mes" className="h-10 rounded-md border bg-background px-3 text-sm" value={monthFilter} onChange={(event) => setMonthFilter(event.target.value)}><option value="ALL">Todos los meses</option>{MONTHS.map((month) => <option key={month.value} value={month.value} className="capitalize">{month.label}</option>)}</select><select className="h-10 rounded-md border bg-background px-3 text-sm" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="ALL">Todos los estados</option><option value="ON_TIME">Al día</option><option value="DUE_SOON">Próximos</option><option value="OVERDUE">Vencidos</option><option value="OT_OPEN">OT abierta</option><option value="NEEDS_CONFIGURATION">Falta configurar</option><option value="INACTIVE">Inactivos</option></select></div>
           {filteredPlans.length === 0 ? <div className="rounded-xl border bg-card p-10 text-center text-muted-foreground">{busy ? "Cargando planes..." : "No hay planes que coincidan con la búsqueda."}</div> : <>
             <div ref={topHorizontalScrollRef} className="sticky top-14 z-20 h-5 overflow-x-auto overflow-y-hidden rounded-t-xl border border-b-0 bg-muted/70" aria-label="Desplazar tabla de preventivos horizontalmente" onScroll={(event) => { if (tableHorizontalScrollRef.current && tableHorizontalScrollRef.current.scrollLeft !== event.currentTarget.scrollLeft) tableHorizontalScrollRef.current.scrollLeft = event.currentTarget.scrollLeft; }}>
               <div className="h-1 min-w-[1450px]" />
@@ -534,7 +566,7 @@ export default function PreventivoPage() {
                   <tr className="align-top hover:bg-muted/20">
                     <td className="max-w-56 px-3 py-2.5"><div className="font-semibold text-foreground" title={plan.equipment_name}>{plan.equipment_name}</div><div className="mt-0.5 text-muted-foreground">{plan.inventory_code ? `ID ${plan.inventory_code}` : "Sin ID"}</div></td>
                     <td className="max-w-48 px-3 py-2.5"><div title={plan.area_name || "Área sin vincular"}>{plan.area_name || "Área sin vincular"}</div><div className="mt-0.5 text-muted-foreground" title={plan.section_name || "Sin sección"}>{plan.section_name || "Sin sección"}</div></td>
-                    <td className="whitespace-nowrap px-3 py-2.5">{PERIODS.find(([value]) => value === plan.periodicity)?.[1] || "Sin configurar"}{plan.periodicity === "CUSTOM" && plan.interval_months ? <div className="mt-0.5 text-muted-foreground">Cada {plan.interval_months} meses</div> : null}</td>
+                    <td className="whitespace-nowrap px-3 py-2.5">{PERIODS.find(([value]) => value === plan.periodicity)?.[1] || "Sin configurar"}{plan.periodicity === "CUSTOM" && plan.interval_months ? <div className="mt-0.5 text-muted-foreground">Cada {plan.interval_months} meses</div> : null}{plan.periodicity === "SELECTED_MONTHS" && plan.scheduled_months?.length ? <div className="mt-0.5 max-w-40 whitespace-normal text-muted-foreground">{plan.scheduled_months.map((month) => MONTHS[month - 1]?.label).filter(Boolean).join(", ")}</div> : null}</td>
                     <td className="whitespace-nowrap px-3 py-2.5"><div><span className="text-muted-foreground">Última:</span> {dateLabel(plan.last_completed_date)}</div><div className="mt-0.5"><span className="text-muted-foreground">Próxima:</span> {dateLabel(plan.next_due_date)}</div>{plan.latest_work_order && <div className="mt-1"><a className="text-primary underline" href={`/ordenes/${plan.latest_work_order.id}`}>{plan.latest_work_order.ot_number}</a></div>}</td>
                     <td className="max-w-[360px] px-3 py-2.5"><div className="line-clamp-2 whitespace-pre-wrap" title={plan.description || "Falta agregar descripción."}>{plan.description || <span className="text-amber-700">Falta descripción.</span>}</div>{plan.spare_parts && <div className="mt-1 line-clamp-1 text-muted-foreground" title={`Repuestos: ${plan.spare_parts}`}><span className="font-medium">Repuestos:</span> {plan.spare_parts}</div>}</td>
                     <td className="min-w-48 px-3 py-2.5"><div className="mb-1 truncate" title={plan.default_responsible_name || "Sin asignar"}>{plan.default_responsible_name || "Sin asignar"}</div>{plan.active ? <select aria-label={`Responsable para OT de ${plan.equipment_name}`} className="h-8 w-full rounded-md border bg-background px-2 text-xs" value={responsibleValue} onChange={(event) => setResponsibleByPlan((current) => ({ ...current, [plan.id]: event.target.value }))}><option value="">Elegir trabajador...</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.full_name}</option>)}</select> : <span className="text-muted-foreground">Plan inactivo</span>}</td>

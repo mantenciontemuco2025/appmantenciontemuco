@@ -19,6 +19,22 @@ def add_months(value: date, months: int) -> date:
     return date(year, month, day)
 
 
+def next_selected_month_date(after_date: date, months: list[int], day: int | None = None) -> date | None:
+    """Return the next scheduled occurrence strictly after a date."""
+    selected = sorted({month for month in months if 1 <= month <= 12})
+    if not selected:
+        return None
+    target_day = day or after_date.day
+    for year in (after_date.year, after_date.year + 1):
+        for month in selected:
+            if (year, month) < (after_date.year, after_date.month):
+                continue
+            candidate = date(year, month, min(target_day, calendar.monthrange(year, month)[1]))
+            if candidate > after_date:
+                return candidate
+    return None
+
+
 def periodicity_from_template(value: str | None) -> tuple[str | None, int | None]:
     if not value:
         return None, None

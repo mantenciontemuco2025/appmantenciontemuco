@@ -3,7 +3,15 @@ from datetime import date, datetime
 from pydantic import BaseModel, Field, field_validator
 
 
-PERIODICITIES = {"MONTHLY", "QUARTERLY", "SEMIANNUAL", "ANNUAL", "CUSTOM"}
+PERIODICITIES = {"MONTHLY", "QUARTERLY", "SEMIANNUAL", "ANNUAL", "CUSTOM", "SELECTED_MONTHS"}
+
+
+def normalize_months(value: list[int] | None) -> list[int] | None:
+    if value is None:
+        return None
+    if any(month < 1 or month > 12 for month in value):
+        raise ValueError("Los meses deben estar entre enero (1) y diciembre (12).")
+    return sorted(set(value))
 
 
 class PreventiveAlertSettingsUpdate(BaseModel):
@@ -19,6 +27,7 @@ class PreventivePlanCreate(BaseModel):
     equipment_id: int
     periodicity: str | None = None
     interval_months: int | None = Field(default=None, ge=1, le=120)
+    scheduled_months: list[int] | None = None
     planned_month: str | None = Field(default=None, max_length=40)
     last_completed_date: date | None = None
     next_due_date: date | None = None
@@ -29,6 +38,11 @@ class PreventivePlanCreate(BaseModel):
     observations: str | None = None
     responsible_name_hint: str | None = Field(default=None, max_length=200)
     default_responsible_user_id: int | None = None
+
+    @field_validator("scheduled_months")
+    @classmethod
+    def validate_scheduled_months(cls, value: list[int] | None) -> list[int] | None:
+        return normalize_months(value)
 
     @field_validator("periodicity")
     @classmethod
@@ -44,6 +58,7 @@ class PreventivePlanCreate(BaseModel):
 class PreventivePlanUpdate(BaseModel):
     periodicity: str | None = None
     interval_months: int | None = Field(default=None, ge=1, le=120)
+    scheduled_months: list[int] | None = None
     planned_month: str | None = Field(default=None, max_length=40)
     last_completed_date: date | None = None
     next_due_date: date | None = None
@@ -55,6 +70,11 @@ class PreventivePlanUpdate(BaseModel):
     responsible_name_hint: str | None = Field(default=None, max_length=200)
     default_responsible_user_id: int | None = None
     active: bool | None = None
+
+    @field_validator("scheduled_months")
+    @classmethod
+    def validate_scheduled_months(cls, value: list[int] | None) -> list[int] | None:
+        return normalize_months(value)
 
     @field_validator("periodicity")
     @classmethod
@@ -134,6 +154,7 @@ class PreventivePlanResponse(BaseModel):
     source_plan_id: str | None = None
     periodicity: str | None = None
     interval_months: int | None = None
+    scheduled_months: list[int] | None = None
     planned_month: str | None = None
     last_completed_date: date | None = None
     next_due_date: date | None = None

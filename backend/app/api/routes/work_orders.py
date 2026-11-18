@@ -73,7 +73,7 @@ from app.services import wo_permissions as perms
 from app.services import notification_service
 from app.api.routes.equipment_life import sync_equipment_from_database
 from app.services.evidence_images import MAX_UPLOAD_BYTES, prepare_evidence_image
-from app.services.preventive import PERIODICITY_MONTHS, add_months
+from app.services.preventive import PERIODICITY_MONTHS, add_months, next_selected_month_date
 
 logger = logging.getLogger(__name__)
 
@@ -1288,7 +1288,8 @@ async def create_work_order(
             raise HTTPException(status_code=400, detail="Las OTs vinculadas a un plan deben generarse como preventivas desde el módulo.")
         if not preventive_plan.description or not preventive_plan.next_due_date:
             raise HTTPException(status_code=400, detail="Completa la descripción y próxima fecha del preventivo antes de generar la OT.")
-        if not preventive_plan.interval_months and preventive_plan.periodicity not in PERIODICITY_MONTHS:
+        selected_month_schedule = preventive_plan.periodicity == "SELECTED_MONTHS" and bool(preventive_plan.scheduled_months)
+        if not selected_month_schedule and not preventive_plan.interval_months and preventive_plan.periodicity not in PERIODICITY_MONTHS:
             raise HTTPException(status_code=400, detail="Configura la periodicidad antes de generar una OT preventiva.")
         open_preventive_order = await db.scalar(
             select(WorkOrder.id).where(
@@ -4609,13 +4610,20 @@ async def complete_work_order(
             select(PreventivePlan).where(PreventivePlan.id == wo.preventive_plan_id).with_for_update()
         )
         if preventive_plan is not None:
-            interval = preventive_plan.interval_months or PERIODICITY_MONTHS.get(preventive_plan.periodicity or "")
-            if interval:
-                completed_local_date = datetime.now(ZoneInfo("America/Santiago")).date()
+            completed_local_date = datetime.now(ZoneInfo("America/Santiago")).date()
+            if preventive_plan.periodicity == "SELECTED_MONTHS" and preventive_plan.scheduled_months:
                 wo.preventive_previous_last_completed_date = preventive_plan.last_completed_date
                 wo.preventive_previous_next_due_date = preventive_plan.next_due_date
                 preventive_plan.last_completed_date = completed_local_date
-                preventive_plan.next_due_date = add_months(completed_local_date, interval)
+                anchor_day = preventive_plan.next_due_date.day if preventive_plan.next_due_date else completed_local_date.day
+                preventive_plan.next_due_date = next_selected_month_date(completed_local_date, preventive_plan.scheduled_months, anchor_day)
+            else:
+                interval = preventive_plan.interval_months or PERIODICITY_MONTHS.get(preventive_plan.periodicity or "")
+                if interval:
+                    wo.preventive_previous_last_completed_date = preventive_plan.last_completed_date
+                    wo.preventive_previous_next_due_date = preventive_plan.next_due_date
+                    preventive_plan.last_completed_date = completed_local_date
+                    preventive_plan.next_due_date = add_months(completed_local_date, interval)
 
     await create_audit_log(
         db,
