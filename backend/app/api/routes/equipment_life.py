@@ -107,6 +107,7 @@ async def _load_catalog_and_orders(db: AsyncSession, include_drafts: bool = Fals
     equipment_result = await db.execute(
         select(Equipment)
         .options(selectinload(Equipment.area), selectinload(Equipment.plant_area))
+        .where(Equipment.merged_into_equipment_id.is_(None))
         .order_by(Equipment.name)
     )
     equipment = list(equipment_result.scalars().all())
@@ -143,6 +144,13 @@ async def sync_equipment_from_database(
         .options(selectinload(Equipment.area), selectinload(Equipment.plant_area))
         .where(Equipment.id == equipment_id)
     )
+    if equipment and equipment.merged_into_equipment_id is not None:
+        equipment_id = equipment.merged_into_equipment_id
+        equipment = await db.scalar(
+            select(Equipment)
+            .options(selectinload(Equipment.area), selectinload(Equipment.plant_area))
+            .where(Equipment.id == equipment_id)
+        )
     if equipment is None:
         return None
     result = await db.execute(
@@ -154,7 +162,10 @@ async def sync_equipment_from_database(
         .where(WorkOrder.equipment_id == equipment_id)
     )
     work_orders = [wo for wo in result.scalars().all() if _eligible_work_order(wo, include_drafts)]
-    if not work_orders:
+    # A merge rollback can leave an existing life sheet with no remaining
+    # eligible OTs. Still rewrite that file with an empty history so stale
+    # rows copied during the merge are removed. Avoid creating empty sheets.
+    if not work_orders and not equipment.life_sheet_file_id:
         return None
     # The Drive/Sheets rewrite can take seconds. The caller has already
     # flushed the OT changes, so do not keep a PostgreSQL connection checked
@@ -210,6 +221,13 @@ async def get_equipment_life(
         .options(selectinload(Equipment.area), selectinload(Equipment.plant_area))
         .where(Equipment.id == equipment_id)
     )
+    if equipment and equipment.merged_into_equipment_id is not None:
+        equipment_id = equipment.merged_into_equipment_id
+        equipment = await db.scalar(
+            select(Equipment)
+            .options(selectinload(Equipment.area), selectinload(Equipment.plant_area))
+            .where(Equipment.id == equipment_id)
+        )
     if equipment is None:
         raise HTTPException(status_code=404, detail="Equipo no encontrado")
     result = await db.execute(
@@ -247,6 +265,9 @@ async def get_equipment_life_work_order(
     Workers may inspect issued OTs associated with equipment, while the normal
     `/api/work-orders/{id}` access rules and fulfillment workflow stay intact.
     """
+    alias = await db.get(Equipment, equipment_id)
+    if alias and alias.merged_into_equipment_id is not None:
+        equipment_id = alias.merged_into_equipment_id
     result = await db.execute(
         select(WorkOrder)
         .options(

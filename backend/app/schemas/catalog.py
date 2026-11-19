@@ -160,6 +160,48 @@ class EquipmentInventoryUpdate(BaseModel):
         return attributes
 
 
+class EquipmentMergeRequest(BaseModel):
+    source_equipment_ids: list[int] = Field(min_length=1, max_length=100)
+
+    @field_validator("source_equipment_ids")
+    @classmethod
+    def validate_source_ids(cls, value: list[int]) -> list[int]:
+        normalized = list(dict.fromkeys(value))
+        if any(item <= 0 for item in normalized):
+            raise ValueError("Los equipos seleccionados no son válidos.")
+        return normalized
+
+
+class EquipmentMergeResponse(BaseModel):
+    canonical_equipment_id: int
+    merged_equipment_ids: list[int]
+    work_orders_moved: int
+    maintenance_records_moved: int
+    preventive_plans_moved: int
+    life_sheet_sync_status: str
+
+
+class EquipmentMergeHistoryResponse(BaseModel):
+    id: int
+    canonical_equipment_id: int
+    canonical_equipment_name: str
+    source_equipment_ids: list[int]
+    source_equipment_names: list[str]
+    work_orders_moved: int
+    maintenance_records_moved: int
+    preventive_plans_moved: int
+    status: str
+    life_sheet_sync_status: str
+    created_at: datetime
+    reverted_at: datetime | None = None
+
+
+class EquipmentMergeRevertResponse(BaseModel):
+    merge_id: int
+    status: str
+    life_sheet_sync_status: str
+
+
 class InventoryCatalogNamesUpdate(BaseModel):
     equipment_name: str | None = Field(default=None, min_length=1, max_length=250)
     section_name: str | None = Field(default=None, min_length=1, max_length=200)

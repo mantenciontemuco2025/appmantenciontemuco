@@ -18,6 +18,9 @@ class Equipment(Base):
         ForeignKey("plant_areas.id", ondelete="SET NULL"), nullable=True, index=True
     )
     inventory_code: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    merged_into_equipment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("equipment.id", ondelete="RESTRICT"), nullable=True, index=True
+    )
     category: Mapped[str | None] = mapped_column(String(180), nullable=True)
     location: Mapped[str | None] = mapped_column(String(250), nullable=True)
     operational_status: Mapped[str | None] = mapped_column(String(80), nullable=True)

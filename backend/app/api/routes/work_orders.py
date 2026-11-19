@@ -363,6 +363,13 @@ async def _validate_area_equipment(
             )
     if equipment_id is not None:
         eq = await db.get(Equipment, equipment_id)
+        if eq is not None and eq.merged_into_equipment_id is not None:
+            canonical = await db.get(Equipment, eq.merged_into_equipment_id)
+            canonical_name = canonical.name if canonical else "el equipo principal"
+            raise HTTPException(
+                status_code=409,
+                detail=f"Este equipo fue unificado con «{canonical_name}». Vuelve a seleccionarlo para crear la OT.",
+            )
         if eq is None or eq.area_id != area_id:
             raise HTTPException(status_code=400, detail="El equipo no pertenece al área seleccionada")
         if plant_area is not None and eq.plant_area_id != plant_area.id:

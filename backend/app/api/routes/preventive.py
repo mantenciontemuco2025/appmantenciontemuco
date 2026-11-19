@@ -148,7 +148,10 @@ async def _load_import_catalog(db: AsyncSession, items: list[PreventiveImportIte
         select(Equipment, Area, PlantArea)
         .join(Area, Equipment.area_id == Area.id)
         .outerjoin(PlantArea, Equipment.plant_area_id == PlantArea.id)
-        .where(or_(Equipment.inventory_code.in_(codes), Equipment.id.in_(numeric_ids)))
+        .where(
+            Equipment.merged_into_equipment_id.is_(None),
+            or_(Equipment.inventory_code.in_(codes), Equipment.id.in_(numeric_ids)),
+        )
     )).all()
     by_code = defaultdict(list)
     by_id = {}

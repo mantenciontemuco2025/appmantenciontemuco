@@ -1,6 +1,8 @@
 """Catalog CRUD for plant areas, sections, and physical equipment."""
 
 import unicodedata
+from datetime import date, datetime, timezone
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.encoders import jsonable_encoder
@@ -13,9 +15,11 @@ from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.models.area import Area
 from app.models.equipment import Equipment
+from app.models.equipment_merge import EquipmentMergeHistory
 from app.models.plant_area import PlantArea, plant_area_sections
 from app.models.maintenance import MaintenanceRecord
 from app.models.work_order import WorkOrder, WorkOrderStatus
+from app.models.preventive import PreventivePlan
 from app.models.supervisor_area import supervisor_areas
 from app.schemas.catalog import (
     AreaCreate,
@@ -33,6 +37,10 @@ from app.schemas.catalog import (
     EquipmentBrief,
     EquipmentInventoryUpdate,
     EquipmentInventoryResponse,
+    EquipmentMergeRequest,
+    EquipmentMergeResponse,
+    EquipmentMergeHistoryResponse,
+    EquipmentMergeRevertResponse,
     InventoryCatalogNamesUpdate,
     InventoryCatalogNamesResponse,
     InventoryImportPayload,
@@ -44,6 +52,34 @@ from app.schemas.catalog import (
 from app.services.audit_service import create_audit_log
 
 router = APIRouter(prefix="/api/catalogs", tags=["catalogs"])
+
+
+def _snapshot_value(value):
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, list):
+        return [_snapshot_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _snapshot_value(item) for key, item in value.items()}
+    return value
+
+
+def _restore_equipment_snapshot(equipment: Equipment, values: dict) -> None:
+    date_fields = {"purchase_receipt_date", "warranty_end", "last_maintenance_date"}
+    datetime_fields = {"created_at", "updated_at", "life_sheet_synced_at"}
+    decimal_fields = {"weight", "initial_value"}
+    for field, value in values.items():
+        if field == "id":
+            continue
+        if value is not None and field in date_fields:
+            value = date.fromisoformat(value)
+        elif value is not None and field in datetime_fields:
+            value = datetime.fromisoformat(value)
+        elif value is not None and field in decimal_fields:
+            value = Decimal(value)
+        setattr(equipment, field, value)
 
 
 async def _section_parent_areas(
@@ -148,7 +184,10 @@ async def _load_catalog_hierarchy(
                     Equipment.location,
                     Equipment.operational_status,
                 )
-                .where(Equipment.area_id.in_(section_ids))
+                .where(
+                    Equipment.area_id.in_(section_ids),
+                    Equipment.merged_into_equipment_id.is_(None),
+                )
                 .order_by(Equipment.name, Equipment.id)
             )
         ).all()
@@ -270,7 +309,10 @@ async def get_hallazgo_catalog_options(
                     Equipment.location,
                     Equipment.operational_status,
                 )
-                .where(Equipment.area_id.in_(legacy_section_ids))
+                .where(
+                    Equipment.area_id.in_(legacy_section_ids),
+                    Equipment.merged_into_equipment_id.is_(None),
+                )
                 .order_by(Equipment.name, Equipment.id)
             )
         ).all()
@@ -923,7 +965,11 @@ async def list_equipment(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(select(Equipment).order_by(Equipment.name))
+    result = await db.execute(
+        select(Equipment)
+        .where(Equipment.merged_into_equipment_id.is_(None))
+        .order_by(Equipment.name)
+    )
     return result.scalars().all()
 
 
@@ -936,6 +982,7 @@ async def list_equipment_inventory(
         select(Equipment, Area.id, Area.name, PlantArea.id, PlantArea.name)
         .outerjoin(Area, Equipment.area_id == Area.id)
         .outerjoin(PlantArea, Equipment.plant_area_id == PlantArea.id)
+        .where(Equipment.merged_into_equipment_id.is_(None))
         .order_by(Equipment.name, Equipment.id)
     )
     equipment_rows = result.all()
@@ -1072,6 +1119,324 @@ async def update_equipment_inventory(
     if current_user.role != UserRole.ADMIN:
         response.initial_value = None
     return response
+
+
+@router.post(
+    "/equipment/{canonical_equipment_id}/merge",
+    response_model=EquipmentMergeResponse,
+)
+async def merge_equipment_records(
+    canonical_equipment_id: int,
+    payload: EquipmentMergeRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Move linked history to one canonical equipment and retain merged aliases."""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Solo administradores pueden unificar equipos.")
+    source_ids = payload.source_equipment_ids
+    if canonical_equipment_id in source_ids:
+        raise HTTPException(status_code=422, detail="El equipo principal no puede estar entre los duplicados.")
+
+    requested_ids = [canonical_equipment_id, *source_ids]
+    rows = (await db.execute(
+        select(Equipment)
+        .where(Equipment.id.in_(requested_ids))
+        .order_by(Equipment.id)
+        .with_for_update()
+    )).scalars().all()
+    equipment_by_id = {item.id: item for item in rows}
+    if len(equipment_by_id) != len(set(requested_ids)):
+        raise HTTPException(status_code=404, detail="Uno o más equipos no existen en el inventario.")
+    canonical = equipment_by_id[canonical_equipment_id]
+    if canonical.merged_into_equipment_id is not None:
+        raise HTTPException(status_code=409, detail="El equipo principal ya fue unificado con otro.")
+    sources = [equipment_by_id[item_id] for item_id in source_ids]
+    already_merged = [item.id for item in sources if item.merged_into_equipment_id is not None]
+    if already_merged:
+        raise HTTPException(status_code=409, detail="Uno de los equipos seleccionados ya fue unificado.")
+
+    work_order_assignments = (await db.execute(
+        select(WorkOrder.id, WorkOrder.equipment_id).where(WorkOrder.equipment_id.in_(source_ids))
+    )).all()
+    maintenance_assignments = (await db.execute(
+        select(MaintenanceRecord.id, MaintenanceRecord.equipment_id).where(
+            MaintenanceRecord.equipment_id.in_(source_ids)
+        )
+    )).all()
+    preventive_assignments = (await db.execute(
+        select(PreventivePlan.id, PreventivePlan.equipment_id).where(
+            PreventivePlan.equipment_id.in_(source_ids)
+        )
+    )).all()
+    child_alias_assignments = (await db.execute(
+        select(Equipment.id, Equipment.merged_into_equipment_id).where(
+            Equipment.merged_into_equipment_id.in_(source_ids)
+        )
+    )).all()
+    equipment_snapshots = {
+        str(item.id): {
+            column.name: _snapshot_value(getattr(item, column.name))
+            for column in Equipment.__table__.columns
+        }
+        for item in [canonical, *sources]
+    }
+    merge_snapshot = {
+        "equipment": equipment_snapshots,
+        "work_orders": [{"id": row.id, "equipment_id": row.equipment_id} for row in work_order_assignments],
+        "maintenance_records": [{"id": row.id, "equipment_id": row.equipment_id} for row in maintenance_assignments],
+        "preventive_plans": [{"id": row.id, "equipment_id": row.equipment_id} for row in preventive_assignments],
+        "child_aliases": [{"id": row.id, "merged_into_equipment_id": row.merged_into_equipment_id} for row in child_alias_assignments],
+    }
+
+    # Keep the canonical record's values when present; fill only blank fields
+    # from duplicates so inventory data is retained without overwriting it.
+    ficha_fields = (
+        "category", "model", "dimensions", "weight", "unit", "description", "location",
+        "purchase_receipt_date", "purchased_from", "warranty_end", "web1", "initial_value",
+        "impeller_diameter", "flow_rate", "total_manometric_head", "rotation_speed", "npsh",
+        "operational_status", "general_spare_parts", "observations", "power_hp", "power_kw",
+        "voltage", "current", "revolutions", "efficiency", "capacity",
+    )
+    transferred_sheet = False
+    for source in sources:
+        for field in ficha_fields:
+            current = getattr(canonical, field)
+            incoming = getattr(source, field)
+            if current is None or (isinstance(current, str) and not current.strip()):
+                if incoming is not None and (not isinstance(incoming, str) or incoming.strip()):
+                    setattr(canonical, field, incoming)
+        custom_attributes = list(canonical.custom_attributes or [])
+        existing_labels = {str(item.get("label", "")).strip().casefold() for item in custom_attributes}
+        for attribute in source.custom_attributes or []:
+            label = str(attribute.get("label", "")).strip()
+            if label and label.casefold() not in existing_labels:
+                custom_attributes.append(attribute)
+                existing_labels.add(label.casefold())
+        canonical.custom_attributes = custom_attributes
+        if not canonical.life_sheet_file_id and source.life_sheet_file_id and not transferred_sheet:
+            canonical.life_sheet_file_id = source.life_sheet_file_id
+            canonical.life_sheet_url = source.life_sheet_url
+            transferred_sheet = True
+
+    work_orders_moved = (await db.execute(
+        update(WorkOrder)
+        .where(WorkOrder.equipment_id.in_(source_ids))
+        .values(equipment_id=canonical_equipment_id)
+    )).rowcount
+    work_orders_moved = len(work_order_assignments) if work_orders_moved is None or work_orders_moved < 0 else work_orders_moved
+    maintenance_moved = (await db.execute(
+        update(MaintenanceRecord)
+        .where(MaintenanceRecord.equipment_id.in_(source_ids))
+        .values(equipment_id=canonical_equipment_id)
+    )).rowcount
+    maintenance_moved = len(maintenance_assignments) if maintenance_moved is None or maintenance_moved < 0 else maintenance_moved
+    plans_moved = (await db.execute(
+        update(PreventivePlan)
+        .where(PreventivePlan.equipment_id.in_(source_ids))
+        .values(equipment_id=canonical_equipment_id)
+    )).rowcount
+    plans_moved = len(preventive_assignments) if plans_moved is None or plans_moved < 0 else plans_moved
+
+    # Flatten any older aliases so historical links resolve directly to the
+    # surviving equipment if a canonical record is unified again later.
+    await db.execute(
+        update(Equipment)
+        .where(Equipment.merged_into_equipment_id.in_(source_ids))
+        .values(merged_into_equipment_id=canonical_equipment_id)
+    )
+    for source in sources:
+        source.merged_into_equipment_id = canonical_equipment_id
+    merge_history = EquipmentMergeHistory(
+        canonical_equipment_id=canonical_equipment_id,
+        canonical_equipment_name=canonical.name,
+        source_equipment_ids=source_ids,
+        source_equipment_names=[source.name for source in sources],
+        work_orders_moved=work_orders_moved,
+        maintenance_records_moved=maintenance_moved,
+        preventive_plans_moved=plans_moved,
+        snapshot=merge_snapshot,
+        created_by_user_id=current_user.id,
+    )
+    db.add(merge_history)
+    await create_audit_log(
+        db,
+        user_id=current_user.id,
+        action="MERGE_EQUIPMENT",
+        entity_type="Equipment",
+        entity_id=canonical_equipment_id,
+        previous_data={"merged_equipment_ids": source_ids},
+        new_data={
+            "canonical_equipment_id": canonical_equipment_id,
+            "work_orders_moved": work_orders_moved,
+            "maintenance_records_moved": maintenance_moved,
+            "preventive_plans_moved": plans_moved,
+        },
+    )
+    await db.commit()
+
+    life_sheet_status = canonical.life_sheet_sync_status
+    try:
+        from app.api.routes.equipment_life import sync_equipment_from_database
+
+        synced = await sync_equipment_from_database(db, canonical_equipment_id)
+        if synced:
+            canonical.life_sheet_sync_status = "SYNCED"
+            canonical.life_sheet_sync_error = None
+            life_sheet_status = "SYNCED"
+        merge_history.life_sheet_sync_status = life_sheet_status
+        await db.commit()
+    except Exception as exc:  # Drive sync must not undo the database merge.
+        canonical.life_sheet_sync_status = "FAILED"
+        canonical.life_sheet_sync_error = str(exc)[:500]
+        life_sheet_status = "FAILED"
+        merge_history.life_sheet_sync_status = life_sheet_status
+        await db.commit()
+
+    return EquipmentMergeResponse(
+        canonical_equipment_id=canonical_equipment_id,
+        merged_equipment_ids=source_ids,
+        work_orders_moved=work_orders_moved,
+        maintenance_records_moved=maintenance_moved,
+        preventive_plans_moved=plans_moved,
+        life_sheet_sync_status=life_sheet_status,
+    )
+
+
+@router.get("/equipment-merges", response_model=list[EquipmentMergeHistoryResponse])
+async def list_equipment_merges(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Solo administradores pueden revisar unificaciones.")
+    rows = (await db.execute(
+        select(EquipmentMergeHistory).order_by(EquipmentMergeHistory.created_at.desc(), EquipmentMergeHistory.id.desc())
+    )).scalars().all()
+    return [
+        EquipmentMergeHistoryResponse(
+            id=row.id,
+            canonical_equipment_id=row.canonical_equipment_id,
+            canonical_equipment_name=row.canonical_equipment_name,
+            source_equipment_ids=row.source_equipment_ids,
+            source_equipment_names=row.source_equipment_names,
+            work_orders_moved=row.work_orders_moved,
+            maintenance_records_moved=row.maintenance_records_moved,
+            preventive_plans_moved=row.preventive_plans_moved,
+            status=row.status,
+            life_sheet_sync_status=row.life_sheet_sync_status,
+            created_at=row.created_at,
+            reverted_at=row.reverted_at,
+        )
+        for row in rows
+    ]
+
+
+@router.post(
+    "/equipment-merges/{merge_id}/revert",
+    response_model=EquipmentMergeRevertResponse,
+)
+async def revert_equipment_merge(
+    merge_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Solo administradores pueden revertir unificaciones.")
+    merge = await db.scalar(
+        select(EquipmentMergeHistory)
+        .where(EquipmentMergeHistory.id == merge_id)
+        .with_for_update()
+    )
+    if merge is None:
+        raise HTTPException(status_code=404, detail="No se encontró el historial de unificación.")
+    if merge.status != "ACTIVE":
+        raise HTTPException(status_code=409, detail="Esta unificación ya fue revertida.")
+
+    snapshot = merge.snapshot or {}
+    equipment_snapshots = snapshot.get("equipment", {})
+    source_ids = merge.source_equipment_ids or []
+    all_ids = [merge.canonical_equipment_id, *source_ids]
+    equipment_rows = (await db.execute(
+        select(Equipment)
+        .where(Equipment.id.in_(all_ids))
+        .order_by(Equipment.id)
+        .with_for_update()
+    )).scalars().all()
+    equipment_by_id = {item.id: item for item in equipment_rows}
+    if len(equipment_by_id) != len(set(all_ids)):
+        raise HTTPException(status_code=409, detail="Falta un equipo del registro original; no se revirtió ningún cambio.")
+    canonical = equipment_by_id[merge.canonical_equipment_id]
+    if canonical.merged_into_equipment_id is not None:
+        raise HTTPException(status_code=409, detail="El equipo principal fue unificado nuevamente. Revierte primero esa unificación.")
+    if any(equipment_by_id[source_id].merged_into_equipment_id != canonical.id for source_id in source_ids):
+        raise HTTPException(status_code=409, detail="Los vínculos de equipos cambiaron después de esta unificación; no se revirtió ningún cambio.")
+
+    async def restore_assignments(model, rows: list[dict], field_name: str = "equipment_id") -> None:
+        grouped: dict[int, list[int]] = {}
+        for item in rows:
+            grouped.setdefault(int(item[field_name]), []).append(int(item["id"]))
+        for original_equipment_id, row_ids in grouped.items():
+            current_ids = set((await db.execute(
+                select(model.id).where(model.id.in_(row_ids), model.equipment_id == canonical.id)
+            )).scalars().all())
+            if current_ids != set(row_ids):
+                raise HTTPException(status_code=409, detail="Algunos registros cambiaron después de la unificación; no se revirtió ningún cambio.")
+            await db.execute(
+                update(model).where(model.id.in_(row_ids), model.equipment_id == canonical.id)
+                .values(equipment_id=original_equipment_id)
+            )
+
+    await restore_assignments(WorkOrder, snapshot.get("work_orders", []))
+    await restore_assignments(MaintenanceRecord, snapshot.get("maintenance_records", []))
+    await restore_assignments(PreventivePlan, snapshot.get("preventive_plans", []))
+
+    child_aliases = snapshot.get("child_aliases", [])
+    for alias_item in child_aliases:
+        alias_id = int(alias_item["id"])
+        alias = equipment_by_id.get(alias_id)
+        if alias is None:
+            alias = await db.scalar(select(Equipment).where(Equipment.id == alias_id).with_for_update())
+        if alias is None or alias.merged_into_equipment_id != canonical.id:
+            raise HTTPException(status_code=409, detail="La jerarquía de equipos cambió; no se revirtió ningún cambio.")
+        alias.merged_into_equipment_id = int(alias_item["merged_into_equipment_id"])
+
+    for equipment_id in all_ids:
+        _restore_equipment_snapshot(equipment_by_id[equipment_id], equipment_snapshots[str(equipment_id)])
+    merge.status = "REVERTED"
+    merge.reverted_by_user_id = current_user.id
+    merge.reverted_at = datetime.now(timezone.utc)
+    await create_audit_log(
+        db,
+        user_id=current_user.id,
+        action="REVERT_EQUIPMENT_MERGE",
+        entity_type="EquipmentMergeHistory",
+        entity_id=merge.id,
+        previous_data={"status": "ACTIVE", "canonical_equipment_id": canonical.id, "source_equipment_ids": source_ids},
+        new_data={"status": "REVERTED"},
+    )
+    await db.commit()
+
+    life_sheet_status = "SYNCED"
+    try:
+        from app.api.routes.equipment_life import sync_equipment_from_database
+
+        for equipment_id in all_ids:
+            await sync_equipment_from_database(db, equipment_id)
+        merge.life_sheet_sync_status = life_sheet_status
+        await db.commit()
+    except Exception as exc:  # Database rollback remains complete even if Drive is unavailable.
+        life_sheet_status = "FAILED"
+        merge.life_sheet_sync_status = life_sheet_status
+        canonical.life_sheet_sync_status = "FAILED"
+        canonical.life_sheet_sync_error = str(exc)[:500]
+        await db.commit()
+
+    return EquipmentMergeRevertResponse(
+        merge_id=merge.id,
+        status=merge.status,
+        life_sheet_sync_status=life_sheet_status,
+    )
 
 
 @router.patch("/equipment/{equipment_id}/catalog-names", response_model=InventoryCatalogNamesResponse)
@@ -1329,6 +1694,13 @@ async def delete_equipment(
     equipment = result.scalar_one_or_none()
     if equipment is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Equipo no encontrado")
+    if equipment.merged_into_equipment_id is not None:
+        raise HTTPException(status_code=409, detail="Este equipo fue unificado y se conserva como referencia histórica.")
+    has_merged_aliases = await db.scalar(
+        select(Equipment.id).where(Equipment.merged_into_equipment_id == equipment_id).limit(1)
+    )
+    if has_merged_aliases is not None:
+        raise HTTPException(status_code=409, detail="No se puede eliminar el equipo principal mientras conserve equipos unificados.")
     references = [
         select(WorkOrder.id).where(WorkOrder.equipment_id == equipment_id),
         select(MaintenanceRecord.id).where(MaintenanceRecord.equipment_id == equipment_id),

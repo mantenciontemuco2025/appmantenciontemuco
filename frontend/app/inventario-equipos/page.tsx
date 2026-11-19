@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Boxes, Loader2, Pencil, Plus, Save, Search, Trash2, X } from "lucide-react";
+import { Boxes, Combine, Loader2, Pencil, Plus, Save, Search, Trash2, X } from "lucide-react";
 import { Shell } from "@/components/layout/shell";
 import { PageLoading } from "@/components/ui/page-loading";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,29 @@ type EquipmentInventory = {
   power_kw: string | null; voltage: string | null; current: string | null;
   revolutions: string | null; efficiency: string | null; capacity: string | null;
   custom_attributes: CustomAttribute[];
+  merged_into_equipment_id?: number | null;
+};
+type EquipmentMergeResult = {
+  canonical_equipment_id: number;
+  merged_equipment_ids: number[];
+  work_orders_moved: number;
+  maintenance_records_moved: number;
+  preventive_plans_moved: number;
+  life_sheet_sync_status: string;
+};
+type EquipmentMergeHistory = {
+  id: number;
+  canonical_equipment_id: number;
+  canonical_equipment_name: string;
+  source_equipment_ids: number[];
+  source_equipment_names: string[];
+  work_orders_moved: number;
+  maintenance_records_moved: number;
+  preventive_plans_moved: number;
+  status: string;
+  life_sheet_sync_status: string;
+  created_at: string;
+  reverted_at: string | null;
 };
 
 const fields: { key: keyof EquipmentInventory; label: string; type?: string; multiline?: boolean; adminOnly?: boolean }[] = [
@@ -76,6 +99,11 @@ export default function EquipmentInventoryPage() {
   const [hierarchy, setHierarchy] = useState<InventoryHierarchy[]>([]);
   const [editingLocation, setEditingLocation] = useState(false);
   const [editingCatalogNames, setEditingCatalogNames] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [mergeHistoryOpen, setMergeHistoryOpen] = useState(false);
+  const [mergeHistory, setMergeHistory] = useState<EquipmentMergeHistory[]>([]);
+  const [mergeSearch, setMergeSearch] = useState("");
+  const [mergeSourceIds, setMergeSourceIds] = useState<number[]>([]);
   const [catalogNameDraft, setCatalogNameDraft] = useState({ equipment_name: "", section_name: "", plant_area_name: "" });
   const [locationAreaId, setLocationAreaId] = useState("");
   const [locationSectionId, setLocationSectionId] = useState("");
@@ -149,6 +177,11 @@ export default function EquipmentInventoryPage() {
       }));
   }, [filtered]);
   const selected = items.find((item) => item.id === selectedId) ?? null;
+  const mergeCandidates = useMemo(() => {
+    const query = mergeSearch.trim().toLocaleLowerCase("es");
+    return items.filter((item) => item.id !== selectedId && (!query || [item.name, item.inventory_code, item.area_name, item.plant_area_name]
+      .some((value) => value?.toLocaleLowerCase("es").includes(query))));
+  }, [items, mergeSearch, selectedId]);
 
   function beginEdit(item: EquipmentInventory) {
     setDraft({ ...item, custom_attributes: item.custom_attributes || [] });
@@ -250,16 +283,82 @@ export default function EquipmentInventoryPage() {
     }
   }
 
+  function openMerge() {
+    if (!selected) return;
+    setMergeSearch(selected.name);
+    setMergeSourceIds([]);
+    setMergeOpen(true);
+    setMessage(null);
+  }
+
+  async function mergeSelectedEquipment() {
+    if (!selected || mergeSourceIds.length === 0) return;
+    const sources = items.filter((item) => mergeSourceIds.includes(item.id));
+    const labels = sources.map((item) => `${item.name} (${item.inventory_code || `ID ${item.id}`})`).join(", ");
+    if (!window.confirm(`Se unificarán ${sources.length} registro(s) en “${selected.name}”. Las OT, mantenciones y preventivos pasarán al equipo principal; sus folios y fechas se conservarán. ¿Continuar?\n\nDuplicados: ${labels}`)) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await api.post<EquipmentMergeResult>(`/api/catalogs/equipment/${selected.id}/merge`, { source_equipment_ids: mergeSourceIds });
+      setMergeOpen(false);
+      setMergeSourceIds([]);
+      await load();
+      if (mergeHistoryOpen) await loadMergeHistory();
+      const syncMessage = result.life_sheet_sync_status === "FAILED"
+        ? " La copia de Google Drive no se pudo actualizar; el historial de la app sí quedó unificado."
+        : result.life_sheet_sync_status === "PENDING"
+          ? " La hoja de vida de Drive queda pendiente de sincronización."
+          : " La hoja de vida quedó actualizada.";
+      setMessage({ error: result.life_sheet_sync_status === "FAILED", text: `Unificación lista: ${result.work_orders_moved} OT, ${result.maintenance_records_moved} mantenciones y ${result.preventive_plans_moved} preventivos trasladados al equipo principal.${syncMessage}` });
+    } catch (error) {
+      setMessage({ error: true, text: error instanceof Error ? error.message : "No se pudieron unificar los equipos." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadMergeHistory() {
+    setBusy(true);
+    setMessage(null);
+    try {
+      setMergeHistory(await api.get<EquipmentMergeHistory[]>("/api/catalogs/equipment-merges"));
+    } catch (error) {
+      setMessage({ error: true, text: error instanceof Error ? error.message : "No se pudo cargar el historial de unificaciones." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revertMerge(item: EquipmentMergeHistory) {
+    if (!window.confirm(`Se restaurarán los equipos, OT, mantenciones y preventivos tal como estaban antes de esta unificación. La ficha del equipo principal volverá a su estado anterior, por lo que se perderán cambios de inventario hechos después de unirlos. Las actividades nuevas creadas después permanecerán con el equipo principal. ¿Revertir la unión de ${item.source_equipment_names.join(", ")} con ${item.canonical_equipment_name}?`)) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await api.post<{ merge_id: number; status: string; life_sheet_sync_status: string }>(`/api/catalogs/equipment-merges/${item.id}/revert`, {});
+      await load();
+      await loadMergeHistory();
+      setMessage({ error: result.life_sheet_sync_status === "FAILED", text: result.life_sheet_sync_status === "FAILED"
+        ? "La unificación se revirtió en la app, pero Drive no pudo sincronizar las hojas de vida."
+        : "Unificación revertida. Se restauraron los vínculos anteriores y se sincronizaron las hojas de vida." });
+    } catch (error) {
+      setMessage({ error: true, text: error instanceof Error ? error.message : "No se pudo revertir la unificación." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (loading || !user) return <PageLoading message={loading ? "Validando sesión..." : "Redirigiendo..."} />;
 
   return (
     <Shell fullName={user.full_name} role={user.role} onLogout={logout}>
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3"><span className="rounded-xl bg-blue-100 p-3 text-blue-700"><Boxes className="h-6 w-6" /></span><div><h1 className="text-2xl font-bold">Inventario de equipos</h1><p className="mt-1 text-sm text-muted-foreground">Características, ubicación y datos técnicos de los equipos registrados.</p></div></div>
-        {canEditInventory && selected && !editing && <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => beginCatalogNamesEdit(selected)}><Pencil className="mr-2 h-4 w-4" />Editar nombres</Button><Button onClick={() => beginEdit(selected)}><Pencil className="mr-2 h-4 w-4" />Editar ficha</Button></div>}
+        {canEditInventory && selected && !editing && <div className="flex flex-wrap gap-2">{isAdmin && <><Button variant="outline" onClick={openMerge}><Combine className="mr-2 h-4 w-4" />Unificar duplicados</Button><Button variant="outline" onClick={() => { const opening = !mergeHistoryOpen; setMergeHistoryOpen(opening); if (opening) void loadMergeHistory(); }}><Boxes className="mr-2 h-4 w-4" />Historial de unificaciones</Button></>}<Button variant="outline" onClick={() => beginCatalogNamesEdit(selected)}><Pencil className="mr-2 h-4 w-4" />Editar nombres</Button><Button onClick={() => beginEdit(selected)}><Pencil className="mr-2 h-4 w-4" />Editar ficha</Button></div>}
       </div>
 
       {message && <div className={`mb-4 rounded-lg border p-3 text-sm ${message.error ? "border-red-200 bg-red-50 text-red-800" : "border-green-200 bg-green-50 text-green-800"}`}>{message.text}</div>}
+
+      {mergeHistoryOpen && isAdmin && <section className="mb-5 rounded-xl border bg-card p-4 shadow-sm sm:p-5"><div className="mb-3 flex items-center justify-between gap-3"><div><h2 className="font-semibold">Historial de unificaciones</h2><p className="text-sm text-muted-foreground">Las uniones activas se pueden revertir desde aquí.</p></div><Button variant="outline" size="sm" onClick={() => void loadMergeHistory()} disabled={busy}><Loader2 className={`mr-2 h-4 w-4 ${busy ? "animate-spin" : "hidden"}`} />Actualizar</Button></div>{mergeHistory.length ? <div className="space-y-2">{mergeHistory.map((item) => <div key={item.id} className="flex flex-wrap items-center gap-3 rounded-lg border p-3"><div className="min-w-64 flex-1"><div className="font-medium">{item.source_equipment_names.join(", ")} → {item.canonical_equipment_name}</div><div className="mt-1 text-xs text-muted-foreground">{dateLabel(item.created_at)} · {item.work_orders_moved} OT · {item.maintenance_records_moved} mantenciones · {item.preventive_plans_moved} preventivos · Drive: {item.life_sheet_sync_status === "SYNCED" ? "sincronizado" : item.life_sheet_sync_status === "FAILED" ? "error" : "pendiente"}</div></div><span className={`rounded-full px-2 py-1 text-xs font-semibold ${item.status === "ACTIVE" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>{item.status === "ACTIVE" ? "Unificada" : "Revertida"}</span>{item.status === "ACTIVE" && <Button variant="outline" size="sm" onClick={() => void revertMerge(item)} disabled={busy}>Revertir</Button>}</div>)}</div> : <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">Todavía no hay unificaciones registradas.</p>}</section>}
 
       <div className="grid gap-5 lg:grid-cols-[minmax(240px,0.8fr)_minmax(0,1.6fr)]">
         <section className="rounded-xl border bg-card p-4">
@@ -280,6 +379,12 @@ export default function EquipmentInventoryPage() {
         <section className="min-w-0 rounded-xl border bg-card p-4 sm:p-6">
           {!selected ? <div className="py-16 text-center text-sm text-muted-foreground">{items.length ? "Selecciona un equipo para ver su ficha." : "Todavía no hay equipos registrados en el catálogo."}</div> : <>
             <div className="mb-5 flex flex-wrap items-start justify-between gap-3 border-b pb-4"><div><h2 className="text-xl font-semibold">{selected.name}</h2><p className="mt-1 text-sm text-muted-foreground">Código: {selected.inventory_code || "—"} · {selected.area_name || "Sin sección"}{selected.plant_area_name ? ` · ${selected.plant_area_name}` : ""}</p></div><div className="flex flex-wrap gap-2">{isAdmin && !editingLocation && !editing && <Button variant="outline" onClick={() => beginLocationEdit(selected)}><Pencil className="mr-2 h-4 w-4" />Cambiar área/sección</Button>}{editing && <><Button variant="outline" onClick={() => { setEditing(false); setDraft(null); }} disabled={busy}><X className="mr-1 h-4 w-4" />Cancelar</Button><Button onClick={() => void save()} disabled={busy}>{busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}Guardar</Button></>}</div></div>
+            {mergeOpen && isAdmin && <div className="mb-5 rounded-lg border border-amber-300 bg-amber-50/60 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">Unificar equipos en “{selected.name}”</h3><p className="mt-1 text-sm text-muted-foreground">El equipo seleccionado se conservará como principal. El inventario duplicado quedará fuera de las listas y sus OT, mantenciones y preventivos se asociarán al principal. Puedes seleccionar primero coincidencias con el mismo nombre.</p></div><Button type="button" variant="ghost" size="icon" aria-label="Cerrar unificación" onClick={() => setMergeOpen(false)} disabled={busy}><X className="h-4 w-4" /></Button></div>
+              <div className="relative mt-3"><Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><input className="h-10 w-full rounded-md border bg-background pl-9 pr-3 text-sm" placeholder="Buscar duplicado por nombre, código o área..." value={mergeSearch} onChange={(event) => setMergeSearch(event.target.value)} /></div>
+              <div className="mt-3 max-h-64 space-y-1 overflow-auto rounded-md border bg-background p-2">{mergeCandidates.map((item) => <label key={item.id} className="flex cursor-pointer items-start gap-3 rounded-md p-2 hover:bg-muted/50"><input className="mt-1" type="checkbox" checked={mergeSourceIds.includes(item.id)} onChange={(event) => setMergeSourceIds((current) => event.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} /><span className="min-w-0"><span className="block font-medium">{item.name}</span><span className="text-xs text-muted-foreground">{item.inventory_code || `ID ${item.id}`} · {item.plant_area_name || "Sin área"} → {item.area_name || "Sin sección"}</span></span></label>)}{!mergeCandidates.length && <p className="p-4 text-center text-sm text-muted-foreground">No hay otros equipos que coincidan con la búsqueda.</p>}</div>
+              <div className="mt-3 flex flex-wrap items-center gap-2"><Button onClick={() => void mergeSelectedEquipment()} disabled={busy || !mergeSourceIds.length}>{busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Combine className="mr-2 h-4 w-4" />}Unificar {mergeSourceIds.length || "duplicados"}</Button><Button variant="outline" onClick={() => setMergeOpen(false)} disabled={busy}>Cancelar</Button><span className="text-xs text-muted-foreground">Los cambios en los vínculos de historial no se pueden revertir desde la app.</span></div>
+            </div>}
             {editingCatalogNames && canEditInventory && <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50/50 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">Editar nombres del catálogo</h3><p className="mt-1 text-sm text-muted-foreground">Se conservan los vínculos de equipos y secciones. Las OTs anteriores mantienen sus nombres originales.</p></div><Button type="button" variant="ghost" size="icon" aria-label="Cancelar edición de nombres" onClick={() => setEditingCatalogNames(false)} disabled={busy}><X className="h-4 w-4" /></Button></div>
               <div className="mt-3 grid gap-3 sm:grid-cols-3">
