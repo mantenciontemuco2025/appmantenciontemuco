@@ -250,6 +250,42 @@ async def get_equipment_life(
     return response
 
 
+@router.post("/{equipment_id}/public-link")
+async def enable_equipment_life_public_link(
+    equipment_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(admin_only),
+):
+    """Enable link-only public viewing for this equipment's Drive history sheet."""
+    equipment = await db.get(Equipment, equipment_id)
+    if equipment and equipment.merged_into_equipment_id is not None:
+        equipment_id = equipment.merged_into_equipment_id
+        equipment = await db.get(Equipment, equipment_id)
+    if equipment is None:
+        raise HTTPException(status_code=404, detail="Equipo no encontrado")
+    if not equipment.life_sheet_file_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Este equipo todavía no tiene una hoja de vida sincronizada en Drive.",
+        )
+    file_id = equipment.life_sheet_file_id
+    sheet_url = equipment.life_sheet_url
+    await db.commit()
+    try:
+        public_url = await asyncio.to_thread(
+            drive_service.enable_anyone_reader,
+            file_id,
+            sheet_url,
+        )
+    except Exception as exc:
+        logger.exception("No se pudo habilitar el enlace público de la hoja de vida del equipo %s", equipment_id)
+        raise HTTPException(
+            status_code=502,
+            detail="Google Drive no permitió compartir esta hoja de vida. Revisa los permisos de la cuenta y de la carpeta.",
+        ) from exc
+    return {"url": public_url}
+
+
 @router.get(
     "/equipment/{equipment_id}/work-orders/{work_order_id}",
     response_model=EquipmentLifeWorkOrderView,

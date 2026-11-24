@@ -290,6 +290,40 @@ def _copy_template(
     return {"file_id": file_id, "url": url}
 
 
+def enable_anyone_reader(file_id: str, existing_url: str | None = None) -> str:
+    """Allow anyone with the link to view one Drive file, without discovery."""
+    drive = _build_drive_write_service()
+    result = drive.permissions().list(
+        fileId=file_id,
+        fields="permissions(id,type,role,allowFileDiscovery)",
+        supportsAllDrives=True,
+    ).execute()
+    permissions = result.get("permissions", [])
+    public_permission = next(
+        (permission for permission in permissions if permission.get("type") == "anyone"),
+        None,
+    )
+    if public_permission is None:
+        drive.permissions().create(
+            fileId=file_id,
+            body={"type": "anyone", "role": "reader", "allowFileDiscovery": False},
+            fields="id",
+            supportsAllDrives=True,
+        ).execute()
+    elif (
+        public_permission.get("role") != "reader"
+        or public_permission.get("allowFileDiscovery")
+    ):
+        drive.permissions().update(
+            fileId=file_id,
+            permissionId=public_permission["id"],
+            body={"role": "reader", "allowFileDiscovery": False},
+            fields="id",
+            supportsAllDrives=True,
+        ).execute()
+    return existing_url or f"https://docs.google.com/spreadsheets/d/{file_id}/edit"
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Sheets helpers (for both OT document and monthly sheet)
 # ──────────────────────────────────────────────────────────────────────
