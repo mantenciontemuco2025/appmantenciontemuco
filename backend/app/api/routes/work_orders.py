@@ -1244,6 +1244,7 @@ async def list_historical_pending_classification(
         WorkOrderListResponse(
             id=wo.id,
             ot_number=wo.ot_number,
+            google_ot_url=wo.google_ot_url,
             is_historical=wo.is_historical,
             original_ot_number=wo.original_ot_number,
             classification_pending=_classification_status(wo) != "COMPLETE",
@@ -2282,6 +2283,7 @@ async def list_work_orders(
         WorkOrderListResponse(
             id=wo.id,
             ot_number=wo.ot_number,
+            google_ot_url=wo.google_ot_url,
             is_historical=wo.is_historical,
             original_ot_number=wo.original_ot_number,
             classification_pending=bool(
@@ -2447,6 +2449,7 @@ async def list_hallazgos(
     return [
         WorkOrderListResponse(
             id=wo.id, ot_number=wo.ot_number,
+            google_ot_url=wo.google_ot_url,
             is_historical=wo.is_historical, original_ot_number=wo.original_ot_number,
             title=wo.title,
             area_name=_display_area_name(wo), plant_area=wo.plant_area,
@@ -2810,6 +2813,7 @@ async def my_work_orders(
         WorkOrderListResponse(
             id=wo.id,
             ot_number=wo.ot_number,
+            google_ot_url=wo.google_ot_url,
             is_historical=wo.is_historical,
             original_ot_number=wo.original_ot_number,
             title=wo.title,

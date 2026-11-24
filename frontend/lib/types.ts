@@ -549,6 +549,7 @@ export interface WorkOrderCounter {
 export interface WorkOrderListItem {
   id: number;
   ot_number: string;
+  google_ot_url?: string | null;
   is_historical?: boolean;
   original_ot_number?: string | null;
   classification_pending?: boolean;

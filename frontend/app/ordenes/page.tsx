@@ -3,11 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Plus, Loader2, RefreshCw, Eye, Send, ClipboardList, ChevronDown, SearchX, SendHorizontal } from "lucide-react";
+import { Plus, Loader2, RefreshCw, Eye, Send, ClipboardList, ChevronDown, SearchX, SendHorizontal, QrCode, X, ExternalLink } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { Shell } from "@/components/layout/shell";
-import type { WorkOrderListItem, WorkOrderCounter, WorkOrderStatus } from "@/lib/types";
+import type { WorkOrderListItem, WorkOrderCounter } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { PageLoading } from "@/components/ui/page-loading";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -56,6 +57,7 @@ export default function OrdenesPage() {
   const [kpiMaterialCode, setKpiMaterialCode] = useState("");
   const [counter, setCounter] = useState<WorkOrderCounter | null>(null);
   const [error, setError] = useState("");
+  const [qrOrder, setQrOrder] = useState<{ otNumber: string; url: string } | null>(null);
 
   // Vencidas — ventana separada consultada al servidor (overdue=true).
   const [overdue, setOverdue] = useState<WorkOrderListItem[]>([]);
@@ -564,6 +566,17 @@ export default function OrdenesPage() {
                           />
                         )}
                         <span className="font-mono text-sm font-bold text-primary">{o.ot_number}</span>
+                        {o.google_ot_url && (
+                          <button
+                            type="button"
+                            onClick={() => setQrOrder({ otNumber: o.ot_number, url: o.google_ot_url! })}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md border text-muted-foreground transition-colors hover:border-primary hover:text-primary"
+                            aria-label={`Mostrar QR de ${o.ot_number} para abrir su documento en Drive`}
+                            title="Mostrar QR del documento en Drive"
+                          >
+                            <QrCode className="h-4 w-4" />
+                          </button>
+                        )}
                         {o.is_historical && (
                           <span className="inline-flex items-center rounded-full bg-slate-100 text-slate-700 px-2.5 py-0.5 text-xs font-medium">
                             Histórica{o.original_ot_number ? ` · original ${o.original_ot_number}` : ""}
@@ -706,6 +719,38 @@ export default function OrdenesPage() {
           </div>
           )}
         </>
+      )}
+      {qrOrder && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="work-order-qr-title"
+          onMouseDown={(event) => { if (event.target === event.currentTarget) setQrOrder(null); }}
+        >
+          <div className="w-full max-w-sm rounded-xl border bg-card p-5 shadow-xl">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <h2 id="work-order-qr-title" className="text-lg font-semibold">Documento de {qrOrder.otNumber}</h2>
+                <p className="text-sm text-muted-foreground">Escanea para abrir la OT en Google Drive.</p>
+              </div>
+              <button type="button" onClick={() => setQrOrder(null)} className="rounded-md p-1 text-muted-foreground hover:bg-muted" aria-label="Cerrar código QR">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="flex justify-center rounded-lg bg-white p-4">
+              <QRCodeSVG value={qrOrder.url} size={240} level="M" includeMargin />
+            </div>
+            <a
+              href={qrOrder.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+            >
+              <ExternalLink className="h-4 w-4" /> Abrir documento en Drive
+            </a>
+          </div>
+        </div>
       )}
     </Shell>
   );

@@ -545,6 +545,7 @@ class WorkOrderEvidenceResponse(BaseModel):
 class WorkOrderListResponse(BaseModel):
     id: int
     ot_number: str
+    google_ot_url: str | None = None
     is_historical: bool = False
     original_ot_number: str | None = None
     classification_pending: bool = False
