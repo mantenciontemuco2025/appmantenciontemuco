@@ -52,6 +52,19 @@ type EquipmentMergeHistory = {
   created_at: string;
   reverted_at: string | null;
 };
+type PlantAreaMergeHistory = {
+  id: number;
+  canonical_plant_area_id: number;
+  canonical_plant_area_name: string;
+  source_plant_area_ids: number[];
+  source_plant_area_names: string[];
+  equipment_moved: number;
+  sections_moved: number;
+  supervisor_assignments_moved: number;
+  status: string;
+  created_at: string;
+  reverted_at: string | null;
+};
 
 const fields: { key: keyof EquipmentInventory; label: string; type?: string; multiline?: boolean; adminOnly?: boolean }[] = [
   { key: "category", label: "Categoría" },
@@ -104,6 +117,12 @@ export default function EquipmentInventoryPage() {
   const [mergeHistory, setMergeHistory] = useState<EquipmentMergeHistory[]>([]);
   const [mergeSearch, setMergeSearch] = useState("");
   const [mergeSourceIds, setMergeSourceIds] = useState<number[]>([]);
+  const [plantAreaMergeOpen, setPlantAreaMergeOpen] = useState(false);
+  const [plantAreaMergeHistoryOpen, setPlantAreaMergeHistoryOpen] = useState(false);
+  const [plantAreaMergeHistory, setPlantAreaMergeHistory] = useState<PlantAreaMergeHistory[]>([]);
+  const [plantAreaCanonicalId, setPlantAreaCanonicalId] = useState("");
+  const [plantAreaMergeSearch, setPlantAreaMergeSearch] = useState("");
+  const [plantAreaSourceIds, setPlantAreaSourceIds] = useState<number[]>([]);
   const [catalogNameDraft, setCatalogNameDraft] = useState({ equipment_name: "", section_name: "", plant_area_name: "" });
   const [locationAreaId, setLocationAreaId] = useState("");
   const [locationSectionId, setLocationSectionId] = useState("");
@@ -182,6 +201,11 @@ export default function EquipmentInventoryPage() {
     return items.filter((item) => item.id !== selectedId && (!query || [item.name, item.inventory_code, item.area_name, item.plant_area_name]
       .some((value) => value?.toLocaleLowerCase("es").includes(query))));
   }, [items, mergeSearch, selectedId]);
+  const plantAreaMergeCandidates = useMemo(() => {
+    const query = plantAreaMergeSearch.trim().toLocaleLowerCase("es");
+    return hierarchy.filter((area) => area.id !== Number(plantAreaCanonicalId)
+      && (!query || area.name.toLocaleLowerCase("es").includes(query)));
+  }, [hierarchy, plantAreaCanonicalId, plantAreaMergeSearch]);
 
   function beginEdit(item: EquipmentInventory) {
     setDraft({ ...item, custom_attributes: item.custom_attributes || [] });
@@ -347,18 +371,74 @@ export default function EquipmentInventoryPage() {
     }
   }
 
+  async function mergeSelectedPlantAreas() {
+    const canonical = hierarchy.find((area) => area.id === Number(plantAreaCanonicalId));
+    const sources = hierarchy.filter((area) => plantAreaSourceIds.includes(area.id));
+    if (!canonical || !sources.length) return;
+    const sourceNames = sources.map((area) => area.name).join(", ");
+    if (!window.confirm(`Se unificarán ${sources.length} área(s) en “${canonical.name}”. Los equipos, secciones y permisos de supervisores pasarán al área principal. Las OTs antiguas conservarán sus datos, pero los KPI las agruparán bajo “${canonical.name}”. La unión quedará en el historial y podrá revertirse si después no se cambian sus vínculos.\n\nDuplicadas: ${sourceNames}\n\n¿Continuar?`)) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await api.post<{ equipment_moved: number; sections_moved: number; supervisor_assignments_moved: number }>(
+        `/api/catalogs/plant-areas/${canonical.id}/merge`,
+        { source_plant_area_ids: plantAreaSourceIds },
+      );
+      setPlantAreaMergeOpen(false);
+      setPlantAreaSourceIds([]);
+      await Promise.all([load(), loadHierarchy()]);
+      if (plantAreaMergeHistoryOpen) await loadPlantAreaMergeHistory();
+      setMessage({ error: false, text: `Áreas unificadas. ${result.equipment_moved} equipos, ${result.sections_moved} secciones y ${result.supervisor_assignments_moved} permisos de supervisores se trasladaron al área principal. Los KPI agruparán ahí las OTs históricas.` });
+    } catch (error) {
+      setMessage({ error: true, text: error instanceof Error ? error.message : "No se pudieron unificar las áreas generales." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadPlantAreaMergeHistory() {
+    setBusy(true);
+    setMessage(null);
+    try {
+      setPlantAreaMergeHistory(await api.get<PlantAreaMergeHistory[]>("/api/catalogs/plant-area-merges"));
+    } catch (error) {
+      setMessage({ error: true, text: error instanceof Error ? error.message : "No se pudo cargar el historial de áreas." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revertPlantAreaMerge(item: PlantAreaMergeHistory) {
+    if (!window.confirm(`Se restaurarán las áreas “${item.source_plant_area_names.join(", ")}” y sus equipos, secciones y permisos al estado anterior. Los KPI volverán a separar los nombres históricos. Si hubo cambios posteriores en los vínculos, la app bloqueará la reversión para protegerlos. ¿Revertir?`)) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      await api.post<{ merge_id: number; status: string }>(`/api/catalogs/plant-area-merges/${item.id}/revert`, {});
+      await Promise.all([load(), loadHierarchy(), loadPlantAreaMergeHistory()]);
+      setMessage({ error: false, text: "Unificación de áreas revertida. Se restauraron los equipos, las secciones y los permisos anteriores." });
+    } catch (error) {
+      setMessage({ error: true, text: error instanceof Error ? error.message : "No se pudo revertir la unificación de áreas." });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (loading || !user) return <PageLoading message={loading ? "Validando sesión..." : "Redirigiendo..."} />;
 
   return (
     <Shell fullName={user.full_name} role={user.role} onLogout={logout}>
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3"><span className="rounded-xl bg-blue-100 p-3 text-blue-700"><Boxes className="h-6 w-6" /></span><div><h1 className="text-2xl font-bold">Inventario de equipos</h1><p className="mt-1 text-sm text-muted-foreground">Características, ubicación y datos técnicos de los equipos registrados.</p></div></div>
-        {canEditInventory && selected && !editing && <div className="flex flex-wrap gap-2">{isAdmin && <><Button variant="outline" onClick={openMerge}><Combine className="mr-2 h-4 w-4" />Unificar duplicados</Button><Button variant="outline" onClick={() => { const opening = !mergeHistoryOpen; setMergeHistoryOpen(opening); if (opening) void loadMergeHistory(); }}><Boxes className="mr-2 h-4 w-4" />Historial de unificaciones</Button></>}<Button variant="outline" onClick={() => beginCatalogNamesEdit(selected)}><Pencil className="mr-2 h-4 w-4" />Editar nombres</Button><Button onClick={() => beginEdit(selected)}><Pencil className="mr-2 h-4 w-4" />Editar ficha</Button></div>}
+        <div className="flex flex-wrap gap-2">{isAdmin && !editing && <><Button variant="outline" onClick={() => { setPlantAreaCanonicalId(""); setPlantAreaSourceIds([]); setPlantAreaMergeSearch(""); setPlantAreaMergeOpen((open) => !open); }}><Combine className="mr-2 h-4 w-4" />Unificar áreas generales</Button><Button variant="outline" onClick={() => { const opening = !plantAreaMergeHistoryOpen; setPlantAreaMergeHistoryOpen(opening); if (opening) void loadPlantAreaMergeHistory(); }}><Boxes className="mr-2 h-4 w-4" />Historial de áreas</Button></>}{canEditInventory && selected && !editing && <>{isAdmin && <><Button variant="outline" onClick={openMerge}><Combine className="mr-2 h-4 w-4" />Unificar equipos</Button><Button variant="outline" onClick={() => { const opening = !mergeHistoryOpen; setMergeHistoryOpen(opening); if (opening) void loadMergeHistory(); }}><Boxes className="mr-2 h-4 w-4" />Historial de equipos</Button></>}<Button variant="outline" onClick={() => beginCatalogNamesEdit(selected)}><Pencil className="mr-2 h-4 w-4" />Editar nombres</Button><Button onClick={() => beginEdit(selected)}><Pencil className="mr-2 h-4 w-4" />Editar ficha</Button></>}</div>
       </div>
 
       {message && <div className={`mb-4 rounded-lg border p-3 text-sm ${message.error ? "border-red-200 bg-red-50 text-red-800" : "border-green-200 bg-green-50 text-green-800"}`}>{message.text}</div>}
 
       {mergeHistoryOpen && isAdmin && <section className="mb-5 rounded-xl border bg-card p-4 shadow-sm sm:p-5"><div className="mb-3 flex items-center justify-between gap-3"><div><h2 className="font-semibold">Historial de unificaciones</h2><p className="text-sm text-muted-foreground">Las uniones activas se pueden revertir desde aquí.</p></div><Button variant="outline" size="sm" onClick={() => void loadMergeHistory()} disabled={busy}><Loader2 className={`mr-2 h-4 w-4 ${busy ? "animate-spin" : "hidden"}`} />Actualizar</Button></div>{mergeHistory.length ? <div className="space-y-2">{mergeHistory.map((item) => <div key={item.id} className="flex flex-wrap items-center gap-3 rounded-lg border p-3"><div className="min-w-64 flex-1"><div className="font-medium">{item.source_equipment_names.join(", ")} → {item.canonical_equipment_name}</div><div className="mt-1 text-xs text-muted-foreground">{dateLabel(item.created_at)} · {item.work_orders_moved} OT · {item.maintenance_records_moved} mantenciones · {item.preventive_plans_moved} preventivos · Drive: {item.life_sheet_sync_status === "SYNCED" ? "sincronizado" : item.life_sheet_sync_status === "FAILED" ? "error" : "pendiente"}</div></div><span className={`rounded-full px-2 py-1 text-xs font-semibold ${item.status === "ACTIVE" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>{item.status === "ACTIVE" ? "Unificada" : "Revertida"}</span>{item.status === "ACTIVE" && <Button variant="outline" size="sm" onClick={() => void revertMerge(item)} disabled={busy}>Revertir</Button>}</div>)}</div> : <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">Todavía no hay unificaciones registradas.</p>}</section>}
+
+      {plantAreaMergeHistoryOpen && isAdmin && <section className="mb-5 rounded-xl border bg-card p-4 shadow-sm sm:p-5"><div className="mb-3 flex items-center justify-between gap-3"><div><h2 className="font-semibold">Historial de unificaciones de áreas</h2><p className="text-sm text-muted-foreground">Puedes revertir una unión mientras no se hayan cambiado sus equipos, secciones o permisos.</p></div><Button variant="outline" size="sm" onClick={() => void loadPlantAreaMergeHistory()} disabled={busy}><Loader2 className={`mr-2 h-4 w-4 ${busy ? "animate-spin" : "hidden"}`} />Actualizar</Button></div>{plantAreaMergeHistory.length ? <div className="space-y-2">{plantAreaMergeHistory.map((item) => <div key={item.id} className="flex flex-wrap items-center gap-3 rounded-lg border p-3"><div className="min-w-64 flex-1"><div className="font-medium">{item.source_plant_area_names.join(", ")} → {item.canonical_plant_area_name}</div><div className="mt-1 text-xs text-muted-foreground">{dateLabel(item.created_at)} · {item.equipment_moved} equipos · {item.sections_moved} secciones · {item.supervisor_assignments_moved} permisos de supervisores · KPI históricos agrupados</div></div><span className={`rounded-full px-2 py-1 text-xs font-semibold ${item.status === "ACTIVE" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>{item.status === "ACTIVE" ? "Unificada" : "Revertida"}</span>{item.status === "ACTIVE" && <Button variant="outline" size="sm" onClick={() => void revertPlantAreaMerge(item)} disabled={busy}>Revertir</Button>}</div>)}</div> : <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">Todavía no hay unificaciones de áreas.</p>}</section>}
+
+      {plantAreaMergeOpen && isAdmin && <section className="mb-5 rounded-xl border border-amber-300 bg-amber-50/50 p-4 shadow-sm sm:p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold">Unificar áreas generales</h2><p className="mt-1 text-sm text-muted-foreground">Elige el área que se conservará y las duplicadas. Se trasladarán sus equipos, secciones y permisos de supervisores; las OTs antiguas mantendrán sus datos y los KPI agruparán sus nombres bajo el área principal.</p></div><Button type="button" variant="ghost" size="icon" aria-label="Cerrar unificación de áreas" onClick={() => setPlantAreaMergeOpen(false)} disabled={busy}><X className="h-4 w-4" /></Button></div><div className="mt-3 grid gap-3 md:grid-cols-2"><label className="text-sm font-medium">Área principal<select className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal" value={plantAreaCanonicalId} onChange={(event) => { setPlantAreaCanonicalId(event.target.value); setPlantAreaSourceIds((current) => current.filter((id) => String(id) !== event.target.value)); }}><option value="">Selecciona el área que conservarás</option>{hierarchy.map((area) => <option key={area.id} value={area.id}>{area.name}{area.is_active ? "" : " (Inactiva)"}</option>)}</select></label><label className="text-sm font-medium">Buscar áreas duplicadas<input className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal" placeholder="Escribe el nombre del área..." value={plantAreaMergeSearch} onChange={(event) => setPlantAreaMergeSearch(event.target.value)} disabled={!plantAreaCanonicalId} /></label></div><div className="mt-3 max-h-56 space-y-1 overflow-auto rounded-md border bg-background p-2">{plantAreaCanonicalId ? plantAreaMergeCandidates.map((area) => <label key={area.id} className="flex cursor-pointer items-start gap-3 rounded-md p-2 hover:bg-muted/50"><input className="mt-1" type="checkbox" checked={plantAreaSourceIds.includes(area.id)} onChange={(event) => setPlantAreaSourceIds((current) => event.target.checked ? [...current, area.id] : current.filter((id) => id !== area.id))} /><span><span className="block font-medium">{area.name}</span><span className="text-xs text-muted-foreground">{area.sections.length} secciones</span></span></label>) : <p className="p-4 text-center text-sm text-muted-foreground">Selecciona primero el área principal.</p>}{plantAreaCanonicalId && !plantAreaMergeCandidates.length && <p className="p-4 text-center text-sm text-muted-foreground">No hay otras áreas que coincidan con la búsqueda.</p>}</div><div className="mt-3 flex flex-wrap items-center gap-2"><Button onClick={() => void mergeSelectedPlantAreas()} disabled={busy || !plantAreaCanonicalId || !plantAreaSourceIds.length}>{busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Combine className="mr-2 h-4 w-4" />}Unificar {plantAreaSourceIds.length || "áreas"}</Button><Button variant="outline" onClick={() => setPlantAreaMergeOpen(false)} disabled={busy}>Cancelar</Button><span className="text-xs text-muted-foreground">Si después se cambian asignaciones, el sistema bloqueará una reversión que pudiera perder esos cambios.</span></div></section>}
 
       <div className="grid gap-5 lg:grid-cols-[minmax(240px,0.8fr)_minmax(0,1.6fr)]">
         <section className="rounded-xl border bg-card p-4">

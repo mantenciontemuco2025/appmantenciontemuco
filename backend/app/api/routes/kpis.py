@@ -3,6 +3,7 @@
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 import re
+import unicodedata
 from threading import Lock
 from time import monotonic
 
@@ -16,6 +17,8 @@ from app.db.session import get_db
 from app.models.user import User, UserRole
 from app.models.work_order import WorkOrder
 from app.models.material_catalog import MaterialCatalog
+from app.models.plant_area import PlantArea
+from app.models.plant_area_merge import PlantAreaMergeHistory
 from app.schemas.kpi import (
     KpiMaintenanceRow,
     KpiMonthRow,
@@ -93,6 +96,33 @@ def _store_cached_kpi(key: tuple, value: KpiResponse) -> None:
         _KPI_CACHE[key] = (now + KPI_CACHE_TTL_SECONDS, value)
         while len(_KPI_CACHE) > KPI_CACHE_MAX_ENTRIES:
             _KPI_CACHE.pop(next(iter(_KPI_CACHE)))
+
+
+def _area_key(value: str | None) -> str:
+    normalized = unicodedata.normalize("NFD", " ".join((value or "").split())).casefold()
+    return "".join(char for char in normalized if unicodedata.category(char) != "Mn")
+
+
+async def _active_area_aliases(db: AsyncSession):
+    rows = (await db.execute(
+        select(PlantAreaMergeHistory, PlantArea.name)
+        .join(PlantArea, PlantArea.id == PlantAreaMergeHistory.canonical_plant_area_id)
+        .where(PlantAreaMergeHistory.status == "ACTIVE")
+    )).all()
+    name_by_key: dict[str, str] = {}
+    id_by_key: dict[str, int] = {}
+    labels_by_id: dict[int, set[str]] = {}
+    for merge, canonical_name in rows:
+        area_id = merge.canonical_plant_area_id
+        display_name = canonical_name.strip().upper()
+        labels = labels_by_id.setdefault(area_id, {display_name})
+        name_by_key[_area_key(canonical_name)] = display_name
+        id_by_key[_area_key(canonical_name)] = area_id
+        for alias in merge.source_plant_area_names or []:
+            labels.add(alias.strip().upper())
+            name_by_key[_area_key(alias)] = display_name
+            id_by_key[_area_key(alias)] = area_id
+    return name_by_key, id_by_key, labels_by_id
 
 
 def _parse_estimated_minutes(value: str | None) -> float:
@@ -212,7 +242,12 @@ async def get_kpis(
     if selected_type and selected_type not in VALID_MAINTENANCE_TYPES:
         raise HTTPException(status_code=400, detail="Tipo de mantenimiento no válido")
 
-    cache_key = _kpi_cache_key(current_user, start, end, area_id, plant_area, section_name, selected_type)
+    area_name_by_key, area_id_by_key, area_labels_by_id = await _active_area_aliases(db)
+    requested_area_id = area_id_by_key.get(_area_key(plant_area)) if plant_area and plant_area.strip() else None
+    cache_area = plant_area
+    if requested_area_id is not None:
+        cache_area = area_name_by_key.get(_area_key(plant_area), plant_area)
+    cache_key = _kpi_cache_key(current_user, start, end, area_id, cache_area, section_name, selected_type)
     cached = _get_cached_kpi(cache_key)
     if cached is not None:
         return cached
@@ -266,8 +301,11 @@ async def get_kpis(
     if area_id is not None:
         query = query.where(WorkOrder.area_id == area_id)
     if plant_area and plant_area.strip():
-        normalized_area = plant_area.strip().upper()
-        query = query.where(WorkOrder.plant_area == normalized_area)
+        if requested_area_id is not None:
+            legacy_labels = area_labels_by_id.get(requested_area_id, {plant_area.strip().upper()})
+            query = query.where(func.upper(func.trim(WorkOrder.plant_area)).in_(legacy_labels))
+        else:
+            query = query.where(WorkOrder.plant_area == plant_area.strip().upper())
     if section_name and section_name.strip():
         query = query.where(func.lower(func.coalesce(WorkOrder.section_name, "")) == section_name.strip().lower())
     if selected_type:
@@ -336,7 +374,8 @@ async def get_kpis(
 
         # ``plant_area`` is the general area. The legacy ``area`` relation is
         # the section catalog and must never be used as an area fallback.
-        area = (wo.plant_area or "").strip() or "Sin área"
+        raw_area = (wo.plant_area or "").strip()
+        area = area_name_by_key.get(_area_key(raw_area), raw_area) or "Sin área"
         area_row = area_counts.setdefault(area, {
             "total": 0, "completed": 0, "minutes": 0.0,
             "preventive": 0, "corrective": 0,

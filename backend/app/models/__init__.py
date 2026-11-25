@@ -27,6 +27,7 @@ from app.models.water_register import (
 from app.models.hazardous_waste import HazardousWasteRecord, HazardousWasteSettings
 from app.models.preventive import PreventiveAlertSettings, PreventivePlan
 from app.models.equipment_merge import EquipmentMergeHistory
+from app.models.plant_area_merge import PlantAreaMergeHistory
 
 __all__ = [
     "User",
@@ -59,4 +60,5 @@ __all__ = [
     "PreventivePlan",
     "PreventiveAlertSettings",
     "EquipmentMergeHistory",
+    "PlantAreaMergeHistory",
 ]

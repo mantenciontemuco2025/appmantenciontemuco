@@ -16,11 +16,12 @@ from app.models.user import User, UserRole
 from app.models.area import Area
 from app.models.equipment import Equipment
 from app.models.equipment_merge import EquipmentMergeHistory
+from app.models.plant_area_merge import PlantAreaMergeHistory
 from app.models.plant_area import PlantArea, plant_area_sections
 from app.models.maintenance import MaintenanceRecord
 from app.models.work_order import WorkOrder, WorkOrderStatus
 from app.models.preventive import PreventivePlan
-from app.models.supervisor_area import supervisor_areas
+from app.models.supervisor_area import supervisor_areas, supervisor_plant_areas
 from app.schemas.catalog import (
     AreaCreate,
     AreaResponse,
@@ -31,6 +32,10 @@ from app.schemas.catalog import (
     PlantAreaUpdate,
     PlantAreaSectionCreate,
     PlantAreaWorkOrderBrief,
+    PlantAreaMergeRequest,
+    PlantAreaMergeResponse,
+    PlantAreaMergeHistoryResponse,
+    PlantAreaMergeRevertResponse,
     EquipmentCreate,
     EquipmentResponse,
     EquipmentUpdate,
@@ -52,6 +57,11 @@ from app.schemas.catalog import (
 from app.services.audit_service import create_audit_log
 
 router = APIRouter(prefix="/api/catalogs", tags=["catalogs"])
+
+
+def _plant_area_key(value: str | None) -> str:
+    normalized = unicodedata.normalize("NFD", " ".join((value or "").split())).casefold()
+    return "".join(char for char in normalized if unicodedata.category(char) != "Mn")
 
 
 def _snapshot_value(value):
@@ -153,7 +163,9 @@ async def _load_catalog_hierarchy(
     *,
     include_inactive: bool = False,
 ) -> list[PlantAreaWithSections]:
-    statement = select(PlantArea.id, PlantArea.name, PlantArea.is_active)
+    statement = select(PlantArea.id, PlantArea.name, PlantArea.is_active).where(
+        PlantArea.merged_into_plant_area_id.is_(None)
+    )
     if not include_inactive:
         statement = statement.where(PlantArea.is_active.is_(True))
     plants = (await db.execute(statement.order_by(PlantArea.name))).all()
@@ -359,7 +371,11 @@ async def list_plant_areas(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    result = await db.execute(select(PlantArea).order_by(PlantArea.name))
+    result = await db.execute(
+        select(PlantArea)
+        .where(PlantArea.merged_into_plant_area_id.is_(None))
+        .order_by(PlantArea.name)
+    )
     return result.scalars().all()
 
 
@@ -378,6 +394,8 @@ async def create_or_link_plant_area_section(
     plant_area = await db.get(PlantArea, plant_area_id)
     if plant_area is None:
         raise HTTPException(status_code=404, detail="Área general no encontrada")
+    if plant_area.merged_into_plant_area_id is not None:
+        raise HTTPException(status_code=409, detail="Esta área fue unificada; usa el área principal.")
 
     name = " ".join(payload.name.split())
     existing = await db.scalar(
@@ -443,6 +461,10 @@ async def link_existing_plant_area_section(
     section = await db.get(Area, section_id)
     if plant_area is None or section is None:
         raise HTTPException(status_code=404, detail="Área o sección no encontrada")
+    if plant_area.merged_into_plant_area_id is not None:
+        raise HTTPException(status_code=409, detail="Esta área fue unificada; administra sus secciones desde el área principal.")
+    if plant_area.merged_into_plant_area_id is not None:
+        raise HTTPException(status_code=409, detail="Esta área fue unificada; usa el área principal.")
     linked = await db.scalar(
         select(plant_area_sections.c.section_id).where(
             plant_area_sections.c.plant_area_id == plant_area_id,
@@ -572,6 +594,8 @@ async def update_plant_area(
     area = await db.get(PlantArea, plant_area_id)
     if area is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Área general no encontrada")
+    if area.merged_into_plant_area_id is not None:
+        raise HTTPException(status_code=409, detail="Esta área fue unificada; edita el área principal.")
     previous = {"name": area.name, "is_active": area.is_active}
     if payload.name is not None:
         name = payload.name.strip()
@@ -607,6 +631,8 @@ async def delete_plant_area(
     area = await db.get(PlantArea, plant_area_id)
     if area is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Área general no encontrada")
+    if area.merged_into_plant_area_id is not None:
+        raise HTTPException(status_code=409, detail="Esta área fue unificada y no se puede eliminar.")
     normalized_name = area.name.strip().upper()
     has_work_order = await db.scalar(
         select(WorkOrder.id)
@@ -624,6 +650,287 @@ async def delete_plant_area(
         previous_data={"name": area.name},
     )
     await db.delete(area)
+
+
+@router.post("/plant-areas/{canonical_plant_area_id}/merge", response_model=PlantAreaMergeResponse)
+async def merge_plant_areas(
+    canonical_plant_area_id: int,
+    payload: PlantAreaMergeRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(admin_only),
+):
+    source_ids = payload.source_plant_area_ids
+    if canonical_plant_area_id in source_ids:
+        raise HTTPException(status_code=422, detail="El área principal no puede estar entre las duplicadas.")
+
+    all_ids = [canonical_plant_area_id, *source_ids]
+    rows = (await db.execute(
+        select(PlantArea).where(PlantArea.id.in_(all_ids)).order_by(PlantArea.id).with_for_update()
+    )).scalars().all()
+    areas_by_id = {area.id: area for area in rows}
+    if len(areas_by_id) != len(set(all_ids)):
+        raise HTTPException(status_code=404, detail="Una o más áreas generales no existen.")
+    canonical = areas_by_id[canonical_plant_area_id]
+    sources = [areas_by_id[area_id] for area_id in source_ids]
+    if canonical.merged_into_plant_area_id is not None:
+        raise HTTPException(status_code=409, detail="El área principal ya fue unificada con otra.")
+    if any(area.merged_into_plant_area_id is not None for area in sources):
+        raise HTTPException(status_code=409, detail="Una de las áreas seleccionadas ya fue unificada.")
+
+    active_merges = (await db.execute(
+        select(PlantAreaMergeHistory).where(PlantAreaMergeHistory.status == "ACTIVE")
+    )).scalars().all()
+    already_in_active_merge = {
+        merge.canonical_plant_area_id for merge in active_merges
+    } | {
+        int(area_id)
+        for merge in active_merges
+        for area_id in (merge.source_plant_area_ids or [])
+    }
+    if any(area_id in already_in_active_merge for area_id in all_ids):
+        raise HTTPException(
+            status_code=409,
+            detail="Una de estas áreas ya participa en una unificación activa. Reviértela primero o selecciona juntas todas las duplicadas.",
+        )
+    aliases_by_key: dict[str, int] = {}
+    for active_merge in active_merges:
+        for alias in active_merge.source_plant_area_names or []:
+            aliases_by_key[_plant_area_key(alias)] = active_merge.canonical_plant_area_id
+    for source in sources:
+        existing_canonical = aliases_by_key.get(_plant_area_key(source.name))
+        if existing_canonical is not None and existing_canonical != canonical.id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"El nombre histórico «{source.name}» ya corresponde a otra área principal.",
+            )
+
+    equipment_rows = (await db.execute(
+        select(Equipment.id, Equipment.plant_area_id)
+        .where(Equipment.plant_area_id.in_(all_ids))
+        .order_by(Equipment.id)
+    )).all()
+    section_rows = (await db.execute(
+        select(plant_area_sections.c.plant_area_id, plant_area_sections.c.section_id)
+        .where(plant_area_sections.c.plant_area_id.in_(all_ids))
+        .order_by(plant_area_sections.c.plant_area_id, plant_area_sections.c.section_id)
+    )).all()
+    supervisor_rows = (await db.execute(
+        select(supervisor_plant_areas.c.supervisor_id, supervisor_plant_areas.c.plant_area_id)
+        .where(supervisor_plant_areas.c.plant_area_id.in_(all_ids))
+        .order_by(supervisor_plant_areas.c.supervisor_id, supervisor_plant_areas.c.plant_area_id)
+    )).all()
+    snapshot = {
+        "canonical": {"name": canonical.name, "is_active": canonical.is_active},
+        "canonical_after": {
+            "name": canonical.name,
+            "is_active": bool(canonical.is_active or any(source.is_active for source in sources)),
+        },
+        "sources": [
+            {"id": source.id, "name": source.name, "is_active": source.is_active}
+            for source in sources
+        ],
+        "equipment": [{"id": row.id, "plant_area_id": row.plant_area_id} for row in equipment_rows],
+        "plant_area_sections": [
+            {"plant_area_id": row.plant_area_id, "section_id": row.section_id}
+            for row in section_rows
+        ],
+        "supervisor_plant_areas": [
+            {"supervisor_id": row.supervisor_id, "plant_area_id": row.plant_area_id}
+            for row in supervisor_rows
+        ],
+    }
+
+    source_set = set(source_ids)
+    canonical_section_ids = {row.section_id for row in section_rows if row.plant_area_id == canonical.id}
+    source_section_ids = {row.section_id for row in section_rows if row.plant_area_id in source_set}
+    canonical_supervisors = {row.supervisor_id for row in supervisor_rows if row.plant_area_id == canonical.id}
+    source_supervisors = {row.supervisor_id for row in supervisor_rows if row.plant_area_id in source_set}
+    sections_moved = len(source_section_ids - canonical_section_ids)
+    supervisors_moved = len(source_supervisors - canonical_supervisors)
+
+    await db.execute(
+        update(Equipment).where(Equipment.plant_area_id.in_(source_ids)).values(plant_area_id=canonical.id)
+    )
+    for section_id in source_section_ids - canonical_section_ids:
+        await db.execute(insert(plant_area_sections).values(plant_area_id=canonical.id, section_id=section_id))
+    await db.execute(delete(plant_area_sections).where(plant_area_sections.c.plant_area_id.in_(source_ids)))
+    for supervisor_id in source_supervisors - canonical_supervisors:
+        await db.execute(insert(supervisor_plant_areas).values(supervisor_id=supervisor_id, plant_area_id=canonical.id))
+    await db.execute(delete(supervisor_plant_areas).where(supervisor_plant_areas.c.plant_area_id.in_(source_ids)))
+
+    for source in sources:
+        source.merged_into_plant_area_id = canonical.id
+        source.is_active = False
+    canonical.is_active = snapshot["canonical_after"]["is_active"]
+    history = PlantAreaMergeHistory(
+        canonical_plant_area_id=canonical.id,
+        canonical_plant_area_name=canonical.name,
+        source_plant_area_ids=source_ids,
+        source_plant_area_names=[source.name for source in sources],
+        equipment_moved=sum(row.plant_area_id in source_set for row in equipment_rows),
+        sections_moved=sections_moved,
+        supervisor_assignments_moved=supervisors_moved,
+        snapshot=snapshot,
+        created_by_user_id=current_user.id,
+    )
+    db.add(history)
+    await create_audit_log(
+        db,
+        user_id=current_user.id,
+        action="MERGE_PLANT_AREAS",
+        entity_type="PlantArea",
+        entity_id=canonical.id,
+        previous_data={"merged_plant_area_ids": source_ids, "names": [area.name for area in sources]},
+        new_data={
+            "canonical_plant_area_id": canonical.id,
+            "equipment_moved": history.equipment_moved,
+            "sections_moved": sections_moved,
+            "supervisor_assignments_moved": supervisors_moved,
+        },
+    )
+    await db.commit()
+    return PlantAreaMergeResponse(
+        canonical_plant_area_id=canonical.id,
+        merged_plant_area_ids=source_ids,
+        equipment_moved=history.equipment_moved,
+        sections_moved=sections_moved,
+        supervisor_assignments_moved=supervisors_moved,
+    )
+
+
+@router.get("/plant-area-merges", response_model=list[PlantAreaMergeHistoryResponse])
+async def list_plant_area_merges(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(admin_only),
+):
+    rows = (await db.execute(
+        select(PlantAreaMergeHistory).order_by(
+            PlantAreaMergeHistory.created_at.desc(), PlantAreaMergeHistory.id.desc()
+        )
+    )).scalars().all()
+    return [
+        PlantAreaMergeHistoryResponse(
+            id=row.id,
+            canonical_plant_area_id=row.canonical_plant_area_id,
+            canonical_plant_area_name=row.canonical_plant_area_name,
+            source_plant_area_ids=row.source_plant_area_ids,
+            source_plant_area_names=row.source_plant_area_names,
+            equipment_moved=row.equipment_moved,
+            sections_moved=row.sections_moved,
+            supervisor_assignments_moved=row.supervisor_assignments_moved,
+            status=row.status,
+            created_at=row.created_at,
+            reverted_at=row.reverted_at,
+        )
+        for row in rows
+    ]
+
+
+@router.post("/plant-area-merges/{merge_id}/revert", response_model=PlantAreaMergeRevertResponse)
+async def revert_plant_area_merge(
+    merge_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(admin_only),
+):
+    merge = await db.scalar(
+        select(PlantAreaMergeHistory).where(PlantAreaMergeHistory.id == merge_id).with_for_update()
+    )
+    if merge is None:
+        raise HTTPException(status_code=404, detail="No se encontró el historial de unificación.")
+    if merge.status != "ACTIVE":
+        raise HTTPException(status_code=409, detail="Esta unificación ya fue revertida.")
+
+    snapshot = merge.snapshot or {}
+    source_ids = merge.source_plant_area_ids or []
+    all_ids = [merge.canonical_plant_area_id, *source_ids]
+    areas = (await db.execute(
+        select(PlantArea).where(PlantArea.id.in_(all_ids)).order_by(PlantArea.id).with_for_update()
+    )).scalars().all()
+    areas_by_id = {area.id: area for area in areas}
+    if len(areas_by_id) != len(set(all_ids)):
+        raise HTTPException(status_code=409, detail="Falta un área del registro original; no se revirtió ningún cambio.")
+    canonical = areas_by_id[merge.canonical_plant_area_id]
+    if (
+        canonical.merged_into_plant_area_id is not None
+        or canonical.name != snapshot["canonical_after"]["name"]
+        or canonical.is_active != snapshot["canonical_after"]["is_active"]
+    ):
+        raise HTTPException(status_code=409, detail="El área principal cambió después de la unión; no se revirtió ningún cambio.")
+    for source in snapshot.get("sources", []):
+        area = areas_by_id[int(source["id"])]
+        if area.merged_into_plant_area_id != canonical.id:
+            raise HTTPException(status_code=409, detail="Los vínculos de áreas cambiaron; no se revirtió ningún cambio.")
+
+    expected_equipment = {int(row["id"]) for row in snapshot.get("equipment", [])}
+    current_equipment = set((await db.execute(
+        select(Equipment.id).where(Equipment.plant_area_id == canonical.id)
+    )).scalars().all())
+    if current_equipment != expected_equipment:
+        raise HTTPException(status_code=409, detail="Se modificó el inventario desde la unificación; revierte o reasigna esos cambios primero.")
+
+    expected_sections = {
+        int(row["section_id"]) for row in snapshot.get("plant_area_sections", [])
+    }
+    current_sections = set((await db.execute(
+        select(plant_area_sections.c.section_id).where(plant_area_sections.c.plant_area_id == canonical.id)
+    )).scalars().all())
+    remaining_source_sections = await db.scalar(
+        select(plant_area_sections.c.section_id).where(plant_area_sections.c.plant_area_id.in_(source_ids)).limit(1)
+    )
+    if current_sections != expected_sections or remaining_source_sections is not None:
+        raise HTTPException(status_code=409, detail="Se modificaron las secciones desde la unificación; no se revirtió ningún cambio.")
+
+    expected_supervisors = {
+        int(row["supervisor_id"]) for row in snapshot.get("supervisor_plant_areas", [])
+    }
+    current_supervisors = set((await db.execute(
+        select(supervisor_plant_areas.c.supervisor_id).where(
+            supervisor_plant_areas.c.plant_area_id == canonical.id
+        )
+    )).scalars().all())
+    remaining_source_supervisors = await db.scalar(
+        select(supervisor_plant_areas.c.supervisor_id)
+        .where(supervisor_plant_areas.c.plant_area_id.in_(source_ids)).limit(1)
+    )
+    if current_supervisors != expected_supervisors or remaining_source_supervisors is not None:
+        raise HTTPException(status_code=409, detail="Se modificaron los permisos desde la unificación; no se revirtió ningún cambio.")
+
+    for row in snapshot.get("equipment", []):
+        if row["plant_area_id"] != canonical.id:
+            await db.execute(
+                update(Equipment).where(Equipment.id == int(row["id"])).values(plant_area_id=int(row["plant_area_id"]))
+            )
+    await db.execute(delete(plant_area_sections).where(plant_area_sections.c.plant_area_id.in_(all_ids)))
+    for row in snapshot.get("plant_area_sections", []):
+        await db.execute(insert(plant_area_sections).values(
+            plant_area_id=int(row["plant_area_id"]), section_id=int(row["section_id"])
+        ))
+    await db.execute(delete(supervisor_plant_areas).where(supervisor_plant_areas.c.plant_area_id.in_(all_ids)))
+    for row in snapshot.get("supervisor_plant_areas", []):
+        await db.execute(insert(supervisor_plant_areas).values(
+            supervisor_id=int(row["supervisor_id"]), plant_area_id=int(row["plant_area_id"])
+        ))
+
+    canonical.name = snapshot["canonical"]["name"]
+    canonical.is_active = snapshot["canonical"]["is_active"]
+    for source_data in snapshot.get("sources", []):
+        source = areas_by_id[int(source_data["id"])]
+        source.merged_into_plant_area_id = None
+        source.is_active = source_data["is_active"]
+    merge.status = "REVERTED"
+    merge.reverted_by_user_id = current_user.id
+    merge.reverted_at = datetime.now(timezone.utc)
+    await create_audit_log(
+        db,
+        user_id=current_user.id,
+        action="REVERT_PLANT_AREA_MERGE",
+        entity_type="PlantAreaMergeHistory",
+        entity_id=merge.id,
+        previous_data={"status": "ACTIVE", "canonical_plant_area_id": canonical.id, "source_plant_area_ids": source_ids},
+        new_data={"status": "REVERTED"},
+    )
+    await db.commit()
+    return PlantAreaMergeRevertResponse(merge_id=merge.id, status=merge.status)
 
 
 @router.get("/plant-areas/{plant_area_id}/work-orders", response_model=list[PlantAreaWorkOrderBrief])
@@ -658,6 +965,20 @@ async def import_inventory_catalog(
     equipment_created = equipment_updated = skipped = 0
     errors: list[str] = []
 
+    current_areas = (await db.execute(
+        select(PlantArea).where(PlantArea.merged_into_plant_area_id.is_(None))
+    )).scalars().all()
+    plant_areas.update({_plant_area_key(area.name): area for area in current_areas})
+    current_by_id = {area.id: area for area in current_areas}
+    active_area_merges = (await db.execute(
+        select(PlantAreaMergeHistory).where(PlantAreaMergeHistory.status == "ACTIVE")
+    )).scalars().all()
+    for merge in active_area_merges:
+        canonical_area = current_by_id.get(merge.canonical_plant_area_id)
+        if canonical_area:
+            for historical_name in merge.source_plant_area_names or []:
+                plant_areas.setdefault(_plant_area_key(historical_name), canonical_area)
+
     def clean(value: str | None) -> str:
         return " ".join((value or "").strip().split())
 
@@ -686,13 +1007,11 @@ async def import_inventory_catalog(
         plant_key = key(plant_name)
         plant = plant_areas.get(plant_key)
         if plant is None:
-            plant_rows = (await db.execute(select(PlantArea))).scalars().all()
-            plant = next((row for row in plant_rows if key(row.name) == plant_key), None)
-            if plant is None:
-                plant = PlantArea(name=plant_name)
-                db.add(plant)
-                await db.flush()
-                areas_created += 1
+            plant = PlantArea(name=plant_name)
+            db.add(plant)
+            await db.flush()
+            current_by_id[plant.id] = plant
+            areas_created += 1
             plant_areas[plant_key] = plant
 
         section_key = key(section_name)
@@ -1564,8 +1883,12 @@ async def create_equipment(
         if duplicate_code is not None:
             raise HTTPException(status_code=409, detail="Ya existe un equipo con ese ID de inventario")
     plant_area_id = payload.plant_area_id
-    if plant_area_id is not None and await db.get(PlantArea, plant_area_id) is None:
-        raise HTTPException(status_code=400, detail="Área de planta no válida")
+    if plant_area_id is not None:
+        selected_plant_area = await db.get(PlantArea, plant_area_id)
+        if selected_plant_area is None:
+            raise HTTPException(status_code=400, detail="Área de planta no válida")
+        if selected_plant_area.merged_into_plant_area_id is not None:
+            raise HTTPException(status_code=409, detail="El área fue unificada; selecciona el área principal.")
     if plant_area_id is not None:
         linked = await db.scalar(
             select(plant_area_sections.c.section_id).where(
@@ -1628,8 +1951,11 @@ async def update_equipment(
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Área no válida")
         equipment.area_id = payload.area_id
     if payload.plant_area_id is not None:
-        if await db.get(PlantArea, payload.plant_area_id) is None:
+        selected_plant_area = await db.get(PlantArea, payload.plant_area_id)
+        if selected_plant_area is None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Área de planta no válida")
+        if selected_plant_area.merged_into_plant_area_id is not None:
+            raise HTTPException(status_code=409, detail="El área fue unificada; selecciona el área principal.")
         equipment.plant_area_id = payload.plant_area_id
     target_area_id = payload.area_id if payload.area_id is not None else equipment.area_id
     target_plant_area_id = (

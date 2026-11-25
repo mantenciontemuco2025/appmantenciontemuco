@@ -54,10 +54,50 @@ class PlantAreaResponse(BaseModel):
     id: int
     name: str
     is_active: bool = True
+    merged_into_plant_area_id: int | None = None
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class PlantAreaMergeRequest(BaseModel):
+    source_plant_area_ids: list[int] = Field(min_length=1, max_length=100)
+
+    @field_validator("source_plant_area_ids")
+    @classmethod
+    def validate_source_ids(cls, value: list[int]) -> list[int]:
+        normalized = list(dict.fromkeys(value))
+        if any(item <= 0 for item in normalized):
+            raise ValueError("Las áreas seleccionadas no son válidas.")
+        return normalized
+
+
+class PlantAreaMergeResponse(BaseModel):
+    canonical_plant_area_id: int
+    merged_plant_area_ids: list[int]
+    equipment_moved: int
+    sections_moved: int
+    supervisor_assignments_moved: int
+
+
+class PlantAreaMergeHistoryResponse(BaseModel):
+    id: int
+    canonical_plant_area_id: int
+    canonical_plant_area_name: str
+    source_plant_area_ids: list[int]
+    source_plant_area_names: list[str]
+    equipment_moved: int
+    sections_moved: int
+    supervisor_assignments_moved: int
+    status: str
+    created_at: datetime
+    reverted_at: datetime | None = None
+
+
+class PlantAreaMergeRevertResponse(BaseModel):
+    merge_id: int
+    status: str
 
 
 class PlantAreaWorkOrderBrief(BaseModel):
