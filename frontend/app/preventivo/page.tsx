@@ -41,7 +41,15 @@ type ImportMatch = {
 };
 type ImportPreview = { total_with_id: number; matched: number; unmatched: ImportMatch[]; existing: number };
 type ImportResult = { imported: number; already_imported: number; unmatched: ImportMatch[] };
-type WorkOrderSummary = { id: number; ot_number: string; status: string; created_at: string; completed_at: string | null };
+type WorkOrderSummary = {
+  id: number;
+  ot_number: string;
+  status: string;
+  created_at: string;
+  completed_at: string | null;
+  responsible_user_id: number | null;
+  responsible_user_name: string | null;
+};
 type PreventiveAlertSettings = { alert_days: number; updated_at: string | null };
 type Plan = {
   id: number;
@@ -357,7 +365,8 @@ export default function PreventivoPage() {
     const query = normalizedHeader(search);
     return monthPlans.filter((plan) => {
       if (statusFilter !== "ALL" && plan.status !== statusFilter) return false;
-      if (responsibleFilter !== "ALL" && (!plan.active || String(plan.default_responsible_user_id ?? "") !== responsibleFilter)) return false;
+      const responsibleId = plan.latest_work_order?.responsible_user_id ?? plan.default_responsible_user_id;
+      if (responsibleFilter !== "ALL" && (!plan.active || String(responsibleId ?? "") !== responsibleFilter)) return false;
       const source = normalizedHeader([plan.equipment_name, plan.inventory_code, plan.area_name, plan.section_name, plan.description, plan.source_plan_id].join(" "));
       return !query || source.includes(query);
     });
@@ -390,27 +399,27 @@ export default function PreventivoPage() {
 
   const assignmentSummary = useMemo(() => {
     const activePlans = monthPlans.filter((plan) => plan.active);
-    const byWorker = workers.map((worker) => ({
-      ...worker,
-      count: activePlans.filter((plan) => plan.default_responsible_user_id === worker.id).length,
-    }));
-    const listedIds = new Set(byWorker.map((worker) => worker.id));
-    const unlistedAssignees = new Map<number, { id: number; full_name: string; count: number }>();
+    const byWorker = new Map<number, { id: number; full_name: string; count: number }>(
+      workers.map((worker) => [worker.id, { ...worker, count: 0 }]),
+    );
+    let unassigned = 0;
     for (const plan of activePlans) {
-      const workerId = plan.default_responsible_user_id;
-      if (workerId == null || listedIds.has(workerId)) continue;
-      const entry = unlistedAssignees.get(workerId) || {
-        id: workerId,
-        full_name: plan.default_responsible_name || `Usuario ${workerId}`,
+      const assignedUserId = plan.latest_work_order?.responsible_user_id ?? plan.default_responsible_user_id;
+      if (assignedUserId == null) {
+        unassigned += 1;
+        continue;
+      }
+      const entry = byWorker.get(assignedUserId) || {
+        id: assignedUserId,
+        full_name: plan.latest_work_order?.responsible_user_name || plan.default_responsible_name || `Usuario ${assignedUserId}`,
         count: 0,
       };
+      entry.full_name = plan.latest_work_order?.responsible_user_name || entry.full_name;
       entry.count += 1;
-      unlistedAssignees.set(workerId, entry);
+      byWorker.set(assignedUserId, entry);
     }
-    byWorker.push(...unlistedAssignees.values());
-    byWorker.sort((a, b) => b.count - a.count || a.full_name.localeCompare(b.full_name, "es"));
-    const assigned = activePlans.filter((plan) => plan.default_responsible_user_id != null).length;
-    return { assigned, unassigned: activePlans.length - assigned, byWorker };
+    const sortedWorkers = [...byWorker.values()].sort((a, b) => b.count - a.count || a.full_name.localeCompare(b.full_name, "es"));
+    return { assigned: activePlans.length - unassigned, unassigned, byWorker: sortedWorkers };
   }, [monthPlans, workers]);
 
   function resetDraft() { setDraft(emptyDraft); setEditingId(null); }
@@ -554,16 +563,16 @@ export default function PreventivoPage() {
 
         <section className="rounded-xl border bg-card p-4 shadow-sm">
           <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-            <div><h2 className="font-semibold">Asignación de preventivos</h2><p className="mt-1 text-sm text-muted-foreground">Resumen de planes activos con responsable sugerido guardado · {monthFilter === "ALL" ? "Todos los meses" : `Solo ${MONTHS.find((month) => String(month.value) === monthFilter)?.label || "mes seleccionado"}`}</p></div>
+            <div><h2 className="font-semibold">Asignación de preventivos</h2><p className="mt-1 text-sm text-muted-foreground">Cuenta al responsable actual de la OT; si aún no hay OT asignada, usa el responsable sugerido del plan · {monthFilter === "ALL" ? "Todos los meses" : `Solo ${MONTHS.find((month) => String(month.value) === monthFilter)?.label || "mes seleccionado"}`}</p></div>
             <div className="grid min-w-64 grid-cols-2 gap-2">
               <div className="rounded-lg border bg-emerald-50/70 px-3 py-2"><div className="text-xs text-muted-foreground">Asignados</div><div className="text-xl font-bold text-emerald-700">{assignmentSummary.assigned}</div></div>
               <div className="rounded-lg border bg-amber-50/70 px-3 py-2"><div className="text-xs text-muted-foreground">Sin asignar</div><div className="text-xl font-bold text-amber-700">{assignmentSummary.unassigned}</div></div>
             </div>
           </div>
           <div className="border-t pt-3">
-            <div className="mb-2 flex flex-wrap items-center gap-2"><h3 className="mr-auto text-sm font-medium">Planes asignados por usuario</h3>{responsibleFilter !== "ALL" && <Button type="button" variant="outline" size="sm" onClick={() => setResponsibleFilter("ALL")}>Mostrar todos</Button>}</div>
+            <div className="mb-2 flex flex-wrap items-center gap-2"><h3 className="mr-auto text-sm font-medium">Preventivos por responsable de OT</h3>{responsibleFilter !== "ALL" && <Button type="button" variant="outline" size="sm" onClick={() => setResponsibleFilter("ALL")}>Mostrar todos</Button>}</div>
             {assignmentSummary.byWorker.length ? <div className="grid max-h-56 gap-x-6 gap-y-1 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">{assignmentSummary.byWorker.map((worker) => { const selected = responsibleFilter === String(worker.id); return <button key={worker.id} type="button" aria-pressed={selected} onClick={() => { setResponsibleFilter(selected ? "ALL" : String(worker.id)); requestAnimationFrame(() => planListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })); }} className={`flex items-center justify-between gap-3 rounded-md border px-2 py-1.5 text-left text-sm hover:bg-muted/40 ${selected ? "border-primary bg-primary/10 text-primary" : "border-transparent"}`} title={`Mostrar preventivos activos asignados a ${worker.full_name}`}><span className="truncate">{worker.full_name}</span><span className="min-w-8 rounded-full bg-muted px-2 py-0.5 text-center text-xs font-semibold">{worker.count}</span></button>; })}</div> : <p className="text-sm text-muted-foreground">No hay usuarios disponibles para asignar.</p>}
-            {responsibleFilter !== "ALL" && <p className="mt-2 text-xs text-muted-foreground">La lista de abajo muestra solo planes activos asignados a {assignmentSummary.byWorker.find((worker) => String(worker.id) === responsibleFilter)?.full_name || "este usuario"}.</p>}
+            {responsibleFilter !== "ALL" && <p className="mt-2 text-xs text-muted-foreground">La lista de abajo muestra solo planes activos cuya OT o responsable sugerido está asignado a {assignmentSummary.byWorker.find((worker) => String(worker.id) === responsibleFilter)?.full_name || "este usuario"}.</p>}
           </div>
         </section>
 

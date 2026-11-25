@@ -137,6 +137,8 @@ class PreventiveWorkOrderSummary(BaseModel):
     status: str
     created_at: datetime
     completed_at: datetime | None = None
+    responsible_user_id: int | None = None
+    responsible_user_name: str | None = None
 
 
 class GeneratePreventiveWorkOrder(BaseModel):

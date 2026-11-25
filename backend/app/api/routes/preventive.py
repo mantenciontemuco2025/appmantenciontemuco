@@ -191,6 +191,8 @@ def _plan_response(plan: PreventivePlan, equipment: Equipment, area: Area,
         status=latest.status,
         created_at=latest.created_at,
         completed_at=latest.completed_at,
+        responsible_user_id=latest.responsible_user_id,
+        responsible_user_name=(latest.responsible_user.full_name if latest.responsible_user else None),
     ) if latest else None
     return PreventivePlanResponse(
         id=plan.id,
