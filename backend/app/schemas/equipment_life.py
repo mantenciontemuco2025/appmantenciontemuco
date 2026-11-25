@@ -34,6 +34,9 @@ class EquipmentLifeRecord(BaseModel):
     description: str | None = None
     performed_by: str | None = None
     observations: str | None = None
+    resources_required: str | None = None
+    worked_duration: str | None = None
+    google_ot_url: str | None = None
     status: str
     maintenance_type: str
 
@@ -42,12 +45,36 @@ class EquipmentLifeDetail(EquipmentLifeSummary):
     records: list[EquipmentLifeRecord]
 
 
+class PublicEquipmentLifeRecord(BaseModel):
+    work_order_id: int
+    ot_number: str
+    event_date: date | None = None
+    title: str
+    description: str | None = None
+    performed_by: str | None = None
+    observations: str | None = None
+    resources_required: str | None = None
+    worked_duration: str | None = None
+    google_ot_url: str | None = None
+    status: str
+    maintenance_type: str
+
+
+class PublicEquipmentLifeDetail(BaseModel):
+    equipment_name: str
+    section_name: str | None = None
+    plant_area_name: str | None = None
+    life_sheet_url: str | None = None
+    records: list[PublicEquipmentLifeRecord]
+
+
 class EquipmentLifeWorkOrderView(BaseModel):
     """Read-only OT fields exposed from the equipment life history."""
 
     work_order_id: int
     equipment_id: int
     ot_number: str
+    google_ot_url: str | None = None
     original_ot_number: str | None = None
     event_date: date | None = None
     title: str
@@ -151,6 +178,8 @@ class EquipmentLifeBackfillStatus(BaseModel):
     equipment_total: int = 0
     equipment_processed: int = 0
     equipment_with_work_orders: int = 0
+    sheets_total: int = 0
+    sheets_processed: int = 0
     work_orders_total: int = 0
     work_orders_synced: int = 0
     sheets_synced: int = 0

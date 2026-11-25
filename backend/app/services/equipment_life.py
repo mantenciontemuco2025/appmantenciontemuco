@@ -17,7 +17,6 @@ from app.services.google_drive import (
     _build_sheets_write_service,
     _copy_template,
     _find_child,
-    _get_file_parent,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,20 +49,6 @@ def is_configured() -> bool:
 def _sheet_range(sheet_title: str, cell_range: str) -> str:
     safe_title = sheet_title.replace("'", "''")
     return f"'{safe_title}'!{cell_range}"
-
-
-def _first_sheet_title(sheets, spreadsheet_id: str) -> str:
-    metadata = sheets.spreadsheets().get(
-        spreadsheetId=spreadsheet_id,
-        fields="sheets(properties(sheetId,title,index))",
-    ).execute()
-    entries = sorted(
-        metadata.get("sheets", []),
-        key=lambda item: (item.get("properties", {}).get("index", 0)),
-    )
-    if not entries:
-        raise RuntimeError("La plantilla de hoja de vida no contiene ninguna pestaña.")
-    return entries[0]["properties"]["title"]
 
 
 def _ensure_section_folder(section_name: str) -> str:
@@ -115,6 +100,36 @@ def _performed_by(work_order) -> str:
     )
 
 
+def _worked_duration_minutes(work_order) -> int | None:
+    minutes = getattr(work_order, "actual_duration_minutes", None)
+    if minutes is None or float(minutes) <= 0:
+        minutes = getattr(work_order, "worked_duration_minutes", None)
+    if minutes is None and getattr(work_order, "work_time_mode", None) == "RANGE":
+        start = getattr(work_order, "work_start_time", None)
+        end = getattr(work_order, "work_end_time", None)
+        if start and end:
+            start_minutes = start.hour * 60 + start.minute
+            end_minutes = end.hour * 60 + end.minute
+            if end_minutes > start_minutes:
+                minutes = end_minutes - start_minutes
+    if minutes is None:
+        return None
+    result = int(round(float(minutes)))
+    return result if result > 0 else None
+
+
+def _worked_duration_text(work_order) -> str:
+    minutes = _worked_duration_minutes(work_order)
+    if minutes is None:
+        return ""
+    hours, remainder = divmod(minutes, 60)
+    if hours and remainder:
+        return f"{hours} h {remainder} min"
+    if hours:
+        return f"{hours} h"
+    return f"{remainder} min"
+
+
 def _work_order_row(work_order) -> list[str]:
     description = (work_order.description or work_order.title or "").strip()
     observations = (work_order.observations or "").strip()
@@ -134,6 +149,8 @@ def _work_order_row(work_order) -> list[str]:
         observations,
         _status_text(work_order.status),
         _maintenance_text(work_order.maintenance_type),
+        (work_order.resources_required or "").strip(),
+        _worked_duration_text(work_order),
     ]
 
 
@@ -147,24 +164,6 @@ def _work_order_sort_key(work_order):
     if isinstance(event_date, datetime):
         event_date = event_date.date()
     return (event_date or date.min, work_order.ot_number or "")
-
-
-def work_order_needs_sync(work_order, synced_at: datetime) -> bool:
-    """Return whether an OT changed after the equipment sheet was synced."""
-    def is_after(value) -> bool:
-        if not value:
-            return False
-        left = value
-        right = synced_at
-        if left.tzinfo is None and right.tzinfo is not None:
-            left = left.replace(tzinfo=right.tzinfo)
-        elif left.tzinfo is not None and right.tzinfo is None:
-            right = right.replace(tzinfo=left.tzinfo)
-        return left > right
-
-    return is_after(getattr(work_order, "updated_at", None)) or is_after(
-        getattr(work_order, "created_at", None)
-    )
 
 
 def sync_equipment_history(
@@ -198,27 +197,195 @@ def sync_equipment_history(
         url = copied.get("url") or f"https://docs.google.com/spreadsheets/d/{file_id}/edit"
 
     sheets = _build_sheets_write_service()
-    sheet_title = _first_sheet_title(sheets, file_id)
+    spreadsheet = sheets.spreadsheets().get(
+        spreadsheetId=file_id,
+        fields="sheets(properties(sheetId,title,index,gridProperties(columnCount,rowCount)),bandedRanges(bandedRangeId,range))",
+    ).execute()
+    sheet_entries = sorted(
+        spreadsheet.get("sheets", []),
+        key=lambda item: item.get("properties", {}).get("index", 0),
+    )
+    if not sheet_entries:
+        raise RuntimeError("La hoja de vida no contiene ninguna pestaña.")
+    sheet_properties = sheet_entries[0]["properties"]
+    sheet_id = sheet_properties["sheetId"]
+    sheet_title = sheet_properties["title"]
+    grid = sheet_properties.get("gridProperties", {})
+    current_columns = int(grid.get("columnCount", 0))
+    current_rows = int(grid.get("rowCount", 0))
+    rows = [_work_order_row(item) for item in sorted(work_orders, key=_work_order_sort_key)]
+    required_rows = max(11, 10 + len(rows))
+    requests = []
+    if current_columns < 8:
+        requests.append({
+            "insertDimension": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "COLUMNS",
+                    "startIndex": current_columns,
+                    "endIndex": 8,
+                },
+                "inheritFromBefore": current_columns > 0,
+            }
+        })
+    if current_rows < required_rows:
+        requests.append({
+            "insertDimension": {
+                "range": {
+                    "sheetId": sheet_id,
+                    "dimension": "ROWS",
+                    "startIndex": current_rows,
+                    "endIndex": required_rows,
+                },
+                "inheritFromBefore": current_rows > 0,
+            }
+        })
+
+    end_row_index = max(10, required_rows)
+    for existing_band in sheet_entries[0].get("bandedRanges", []):
+        band_range = existing_band.get("range", {})
+        if (
+            band_range.get("sheetId") == sheet_id
+            and band_range.get("startRowIndex", 0) <= 9
+            and band_range.get("endRowIndex", 0) > 9
+        ):
+            requests.append({"deleteBanding": {"bandedRangeId": existing_band["bandedRangeId"]}})
+
+    requests.extend([
+        {
+            "updateSheetProperties": {
+                "properties": {
+                    "sheetId": sheet_id,
+                    "gridProperties": {"frozenRowCount": 10},
+                },
+                "fields": "gridProperties.frozenRowCount",
+            }
+        },
+        {
+            "repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 2, "startColumnIndex": 0, "endColumnIndex": 8},
+                "cell": {"userEnteredFormat": {"backgroundColor": {"red": 0.09, "green": 0.20, "blue": 0.32}, "textFormat": {"foregroundColor": {"red": 1, "green": 1, "blue": 1}, "bold": True, "fontFamily": "Arial", "fontSize": 11}, "verticalAlignment": "MIDDLE"}},
+                "fields": "userEnteredFormat(backgroundColor,textFormat,verticalAlignment)",
+            }
+        },
+        {
+            "repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 3, "endRowIndex": 4, "startColumnIndex": 0, "endColumnIndex": 8},
+                "cell": {"userEnteredFormat": {"backgroundColor": {"red": 0.09, "green": 0.20, "blue": 0.32}, "textFormat": {"foregroundColor": {"red": 1, "green": 1, "blue": 1}, "bold": True, "fontFamily": "Arial", "fontSize": 20}, "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE"}},
+                "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
+            }
+        },
+        {
+            "repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 4, "endRowIndex": 5, "startColumnIndex": 0, "endColumnIndex": 8},
+                "cell": {"userEnteredFormat": {"backgroundColor": {"red": 0.93, "green": 0.68, "blue": 0.13}, "textFormat": {"foregroundColor": {"red": 0.12, "green": 0.17, "blue": 0.24}, "bold": True, "fontFamily": "Arial", "fontSize": 12}, "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE"}},
+                "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
+            }
+        },
+        {
+            "repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 6, "endRowIndex": 7, "startColumnIndex": 0, "endColumnIndex": 8},
+                "cell": {"userEnteredFormat": {"backgroundColor": {"red": 0.91, "green": 0.94, "blue": 0.97}, "textFormat": {"foregroundColor": {"red": 0.09, "green": 0.20, "blue": 0.32}, "bold": True, "fontFamily": "Arial", "fontSize": 14}, "verticalAlignment": "MIDDLE"}},
+                "fields": "userEnteredFormat(backgroundColor,textFormat,verticalAlignment)",
+            }
+        },
+        {
+            "repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 9, "endRowIndex": 10, "startColumnIndex": 0, "endColumnIndex": 8},
+                "cell": {"userEnteredFormat": {"backgroundColor": {"red": 0.09, "green": 0.20, "blue": 0.32}, "textFormat": {"foregroundColor": {"red": 1, "green": 1, "blue": 1}, "bold": True, "fontFamily": "Arial", "fontSize": 10}, "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP"}},
+                "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy)",
+            }
+        },
+        {
+            "repeatCell": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 10, "endRowIndex": end_row_index, "startColumnIndex": 0, "endColumnIndex": 8},
+                "cell": {"userEnteredFormat": {"textFormat": {"foregroundColor": {"red": 0.12, "green": 0.17, "blue": 0.24}, "fontFamily": "Arial", "fontSize": 10}, "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP"}},
+                "fields": "userEnteredFormat(textFormat,verticalAlignment,wrapStrategy)",
+            }
+        },
+        {
+            "addBanding": {
+                "bandedRange": {
+                    "range": {"sheetId": sheet_id, "startRowIndex": 9, "endRowIndex": end_row_index, "startColumnIndex": 0, "endColumnIndex": 8},
+                    "rowProperties": {
+                        "headerColor": {"red": 0.09, "green": 0.20, "blue": 0.32},
+                        "firstBandColor": {"red": 1, "green": 1, "blue": 1},
+                        "secondBandColor": {"red": 0.95, "green": 0.97, "blue": 0.99},
+                    },
+                }
+            }
+        },
+        {
+            "updateBorders": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 9, "endRowIndex": end_row_index, "startColumnIndex": 0, "endColumnIndex": 8},
+                "top": {"style": "SOLID_MEDIUM", "color": {"red": 0.09, "green": 0.20, "blue": 0.32}},
+                "bottom": {"style": "SOLID_MEDIUM", "color": {"red": 0.09, "green": 0.20, "blue": 0.32}},
+                "left": {"style": "SOLID", "color": {"red": 0.78, "green": 0.82, "blue": 0.87}},
+                "right": {"style": "SOLID", "color": {"red": 0.78, "green": 0.82, "blue": 0.87}},
+                "innerHorizontal": {"style": "SOLID", "color": {"red": 0.84, "green": 0.87, "blue": 0.90}},
+                "innerVertical": {"style": "SOLID", "color": {"red": 0.84, "green": 0.87, "blue": 0.90}},
+            }
+        },
+        {
+            "updateDimensionProperties": {
+                "range": {"sheetId": sheet_id, "dimension": "ROWS", "startIndex": 9, "endIndex": 10},
+                "properties": {"pixelSize": 44},
+                "fields": "pixelSize",
+            }
+        },
+        {
+            "updateDimensionProperties": {
+                "range": {"sheetId": sheet_id, "dimension": "ROWS", "startIndex": 10, "endIndex": end_row_index},
+                "properties": {"pixelSize": 40},
+                "fields": "pixelSize",
+            }
+        },
+    ])
+    for column_index, width in enumerate([110, 310, 190, 300, 125, 190, 300, 160]):
+        requests.append({
+            "updateDimensionProperties": {
+                "range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": column_index, "endIndex": column_index + 1},
+                "properties": {"pixelSize": width},
+                "fields": "pixelSize",
+            }
+        })
+    sheets.spreadsheets().batchUpdate(
+        spreadsheetId=file_id,
+        body={"requests": requests},
+    ).execute()
+
     header_values = [
         {"range": _sheet_range(sheet_title, "A5"), "values": [[f"MANTENCIÓN - {plant_area_name or 'ÁREA'}"]]},
         {"range": _sheet_range(sheet_title, "B7"), "values": [[equipment_name]]},
+        {
+            "range": _sheet_range(sheet_title, "A10:H10"),
+            "values": [[
+                "Fecha",
+                "Descripción del trabajo",
+                "Realizado por",
+                "Observaciones",
+                "Estado",
+                "Tipo de mantenimiento",
+                "Repuestos",
+                "Tiempo real trabajado",
+            ]],
+        },
     ]
     sheets.spreadsheets().values().batchUpdate(
         spreadsheetId=file_id,
         body={"valueInputOption": "USER_ENTERED", "data": header_values},
     ).execute()
 
-    rows = [_work_order_row(item) for item in sorted(work_orders, key=_work_order_sort_key)]
     sheets.spreadsheets().values().clear(
         spreadsheetId=file_id,
-        range=_sheet_range(sheet_title, "A11:F10000"),
+        range=_sheet_range(sheet_title, f"A11:H{max(current_rows, required_rows)}"),
         body={},
     ).execute()
     if rows:
         end_row = 10 + len(rows)
         sheets.spreadsheets().values().update(
             spreadsheetId=file_id,
-            range=_sheet_range(sheet_title, f"A11:F{end_row}"),
+            range=_sheet_range(sheet_title, f"A11:H{end_row}"),
             valueInputOption="USER_ENTERED",
             body={"values": rows},
         ).execute()

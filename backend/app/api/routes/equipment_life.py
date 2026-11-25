@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -26,6 +27,8 @@ from app.schemas.equipment_life import (
     EquipmentLifeRecord,
     EquipmentLifeSummary,
     EquipmentLifeWorkOrderView,
+    PublicEquipmentLifeDetail,
+    PublicEquipmentLifeRecord,
 )
 from app.services import equipment_life as life_service
 from app.services import google_drive as drive_service
@@ -96,6 +99,9 @@ def _records(work_orders: list[WorkOrder]) -> list[EquipmentLifeRecord]:
                 description=wo.description,
                 performed_by=_performer_name(wo),
                 observations=observations or None,
+                resources_required=(wo.resources_required or "").strip() or None,
+                worked_duration=life_service._worked_duration_text(wo) or None,
+                google_ot_url=wo.google_ot_url,
                 status=life_service._status_text(wo.status),
                 maintenance_type=life_service._maintenance_text(wo.maintenance_type),
             )
@@ -256,7 +262,7 @@ async def enable_equipment_life_public_link(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(admin_only),
 ):
-    """Enable link-only public viewing for this equipment's Drive history sheet."""
+    """Enable Drive reading and return an unguessable app link token."""
     equipment = await db.get(Equipment, equipment_id)
     if equipment and equipment.merged_into_equipment_id is not None:
         equipment_id = equipment.merged_into_equipment_id
@@ -270,6 +276,8 @@ async def enable_equipment_life_public_link(
         )
     file_id = equipment.life_sheet_file_id
     sheet_url = equipment.life_sheet_url
+    if not equipment.public_life_sheet_token:
+        equipment.public_life_sheet_token = secrets.token_urlsafe(32)
     await db.commit()
     try:
         public_url = await asyncio.to_thread(
@@ -283,7 +291,111 @@ async def enable_equipment_life_public_link(
             status_code=502,
             detail="Google Drive no permitió compartir esta hoja de vida. Revisa los permisos de la cuenta y de la carpeta.",
         ) from exc
-    return {"url": public_url}
+    return {"token": equipment.public_life_sheet_token, "drive_url": public_url}
+
+
+async def _equipment_for_public_token(
+    token: str,
+    db: AsyncSession,
+) -> Equipment:
+    equipment = await db.scalar(
+        select(Equipment)
+        .options(selectinload(Equipment.area), selectinload(Equipment.plant_area))
+        .where(Equipment.public_life_sheet_token == token)
+    )
+    if equipment is None:
+        raise HTTPException(status_code=404, detail="Hoja de vida pública no encontrada")
+    if equipment.merged_into_equipment_id is not None:
+        equipment = await db.scalar(
+            select(Equipment)
+            .options(selectinload(Equipment.area), selectinload(Equipment.plant_area))
+            .where(Equipment.id == equipment.merged_into_equipment_id)
+        )
+        if equipment is None:
+            raise HTTPException(status_code=404, detail="Hoja de vida pública no encontrada")
+    return equipment
+
+
+@router.get("/public/{token}", response_model=PublicEquipmentLifeDetail)
+async def get_public_equipment_life(
+    token: str,
+    db: AsyncSession = Depends(get_db),
+) -> PublicEquipmentLifeDetail:
+    """Read-only equipment history available through its QR bearer token."""
+    equipment = await _equipment_for_public_token(token, db)
+    result = await db.execute(
+        select(WorkOrder)
+        .options(
+            selectinload(WorkOrder.completed_by_user),
+            selectinload(WorkOrder.responsible_user),
+        )
+        .where(WorkOrder.equipment_id == equipment.id)
+        .order_by(WorkOrder.execution_date, WorkOrder.ot_number)
+    )
+    work_orders = [wo for wo in result.scalars().all() if _eligible_work_order(wo)]
+    records = [
+        PublicEquipmentLifeRecord(
+            work_order_id=record.work_order_id,
+            ot_number=record.ot_number,
+            event_date=record.event_date,
+            title=record.title,
+            description=record.description,
+            performed_by=record.performed_by,
+            observations=record.observations,
+            resources_required=record.resources_required,
+            worked_duration=record.worked_duration,
+            google_ot_url=record.google_ot_url,
+            status=record.status,
+            maintenance_type=record.maintenance_type,
+        )
+        for record in _records(work_orders)
+    ]
+    response = PublicEquipmentLifeDetail(
+        equipment_name=equipment.name,
+        section_name=equipment.area.name if equipment.area else None,
+        plant_area_name=equipment.plant_area.name if equipment.plant_area else None,
+        life_sheet_url=equipment.life_sheet_url,
+        records=records,
+    )
+    await db.commit()
+    return response
+
+
+@router.get(
+    "/public/{token}/work-orders/{work_order_id}",
+    response_model=EquipmentLifeWorkOrderView,
+)
+async def get_public_equipment_life_work_order(
+    token: str,
+    work_order_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> EquipmentLifeWorkOrderView:
+    equipment = await _equipment_for_public_token(token, db)
+    return await get_equipment_life_work_order(
+        equipment_id=equipment.id,
+        work_order_id=work_order_id,
+        db=db,
+        _=None,
+    )
+
+
+@router.get(
+    "/public/{token}/work-orders/{work_order_id}/evidence/{evidence_id}/content"
+)
+async def get_public_equipment_life_evidence_content(
+    token: str,
+    work_order_id: int,
+    evidence_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    equipment = await _equipment_for_public_token(token, db)
+    return await get_equipment_life_work_order_evidence_content(
+        equipment_id=equipment.id,
+        work_order_id=work_order_id,
+        evidence_id=evidence_id,
+        db=db,
+        _=None,
+    )
 
 
 @router.get(
@@ -350,6 +462,7 @@ async def get_equipment_life_work_order(
         work_order_id=wo.id,
         equipment_id=equipment.id,
         ot_number=wo.ot_number,
+        google_ot_url=wo.google_ot_url,
         original_ot_number=wo.original_ot_number,
         is_historical=wo.is_historical,
         hallazgo_folio=wo.hallazgo_folio,
@@ -529,6 +642,7 @@ async def _run_equipment_life_backfill(
     synced_orders = 0
     errors: list[str] = []
     processed_equipment = 0
+    processed_sheets = 0
     total_work_orders = sum(len(items) for items in orders_by_equipment.values())
     equipment_with_work_orders = sum(bool(items) for items in orders_by_equipment.values())
     sync_targets: set[int] = set()
@@ -537,18 +651,12 @@ async def _run_equipment_life_backfill(
 
     for item in equipment:
         work_orders = orders_by_equipment.get(item.id, [])
-        synced_at = item.life_sheet_synced_at
-        needs_sync = bool(work_orders) and (
-            not item.life_sheet_file_id
-            or item.life_sheet_sync_status != "SYNCED"
-            or not synced_at
-            or any(life_service.work_order_needs_sync(order, synced_at) for order in work_orders)
-        )
+        # The backfill action also upgrades existing sheets to the latest
+        # columns and formatting, so process every existing sheet and every
+        # equipment with eligible history, even when its current sync is fresh.
+        needs_sync = bool(work_orders) or bool(item.life_sheet_file_id)
         if needs_sync:
             sync_targets.add(item.id)
-        elif item.life_sheet_file_id and item.life_sheet_sync_status == "SYNCED":
-            skipped_equipment += 1
-            skipped_work_orders += len(work_orders)
 
     total_work_orders = sum(len(orders_by_equipment.get(item_id, [])) for item_id in sync_targets)
 
@@ -559,6 +667,8 @@ async def _run_equipment_life_backfill(
                 "equipment_total": len(equipment),
                 "equipment_processed": processed_equipment,
                 "equipment_with_work_orders": equipment_with_work_orders,
+                "sheets_total": len(sync_targets),
+                "sheets_processed": processed_sheets,
                 "work_orders_total": total_work_orders,
                 "work_orders_synced": synced_orders,
                 "sheets_synced": synced_sheets,
@@ -577,6 +687,7 @@ async def _run_equipment_life_backfill(
             continue
         update_progress(item.name)
         try:
+            # Await each Drive/Sheets operation before starting the next sheet.
             result = await asyncio.to_thread(
                 life_service.sync_equipment_history,
                 equipment_id=item.id,
@@ -599,6 +710,7 @@ async def _run_equipment_life_backfill(
             errors.append(f"{item.name} (ID {item.id}): {str(exc)[:250]}")
         await db.commit()
         processed_equipment += 1
+        processed_sheets += 1
         update_progress(None)
 
     return EquipmentLifeBackfillResult(
@@ -645,6 +757,8 @@ async def _run_equipment_life_backfill_job(payload: EquipmentLifeBackfillPayload
                 equipment_total=result.equipment_total,
                 equipment_processed=result.equipment_total,
                 equipment_with_work_orders=result.equipment_with_work_orders,
+                sheets_total=_equipment_life_backfill_state.sheets_total,
+                sheets_processed=_equipment_life_backfill_state.sheets_processed,
                 work_orders_total=_equipment_life_backfill_state.work_orders_total,
                 work_orders_synced=result.work_orders_synced,
                 sheets_synced=result.sheets_synced,
@@ -660,6 +774,8 @@ async def _run_equipment_life_backfill_job(payload: EquipmentLifeBackfillPayload
                 equipment_total=_equipment_life_backfill_state.equipment_total,
                 equipment_processed=_equipment_life_backfill_state.equipment_processed,
                 equipment_with_work_orders=_equipment_life_backfill_state.equipment_with_work_orders,
+                sheets_total=_equipment_life_backfill_state.sheets_total,
+                sheets_processed=_equipment_life_backfill_state.sheets_processed,
                 work_orders_total=_equipment_life_backfill_state.work_orders_total,
                 work_orders_synced=_equipment_life_backfill_state.work_orders_synced,
                 sheets_synced=_equipment_life_backfill_state.sheets_synced,

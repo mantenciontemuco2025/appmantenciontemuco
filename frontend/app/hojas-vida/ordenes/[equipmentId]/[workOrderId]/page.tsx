@@ -9,6 +9,7 @@ import { InlineAlert } from "@/components/ui/inline-alert";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
+import { signatureImageUrl } from "@/lib/signatures";
 import { LOTO_CONTROL_LABELS } from "@/lib/loto";
 import type { EquipmentLifeWorkOrderView } from "@/lib/types";
 
@@ -86,7 +87,11 @@ function EvidencePhoto({ equipmentId, workOrderId, evidence }: {
 
 function SignatureField({ label, value }: { label: string; value: string | null }) {
   if (!value) return null;
-  const source = value.startsWith("data:image/") || /^https?:\/\//i.test(value) ? value : null;
+  const source = value.startsWith("data:image/")
+    ? value
+    : /^https?:\/\//i.test(value)
+      ? signatureImageUrl(value)
+      : null;
   return <div className="rounded-lg border p-3"><div className="text-xs font-medium text-muted-foreground">{label}</div>{source ? <img src={source} alt={label} className="mt-2 max-h-24 max-w-48 object-contain" /> : <div className="mt-1 text-sm">Firma registrada</div>}</div>;
 }
 

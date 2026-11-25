@@ -105,6 +105,9 @@ export interface EquipmentLifeRecord {
   description: string | null;
   performed_by: string | null;
   observations: string | null;
+  resources_required: string | null;
+  worked_duration: string | null;
+  google_ot_url: string | null;
   status: string;
   maintenance_type: string;
 }
@@ -113,10 +116,34 @@ export interface EquipmentLifeDetail extends EquipmentLifeSummary {
   records: EquipmentLifeRecord[];
 }
 
+export interface PublicEquipmentLifeRecord {
+  work_order_id: number;
+  ot_number: string;
+  event_date: string | null;
+  title: string;
+  description: string | null;
+  performed_by: string | null;
+  observations: string | null;
+  resources_required: string | null;
+  worked_duration: string | null;
+  google_ot_url: string | null;
+  status: string;
+  maintenance_type: string;
+}
+
+export interface PublicEquipmentLifeDetail {
+  equipment_name: string;
+  section_name: string | null;
+  plant_area_name: string | null;
+  life_sheet_url: string | null;
+  records: PublicEquipmentLifeRecord[];
+}
+
 export interface EquipmentLifeWorkOrderView {
   work_order_id: number;
   equipment_id: number;
   ot_number: string;
+  google_ot_url: string | null;
   original_ot_number: string | null;
   is_historical: boolean;
   hallazgo_folio: string | null;
@@ -224,6 +251,8 @@ export interface EquipmentLifeBackfillStatus {
   equipment_total: number;
   equipment_processed: number;
   equipment_with_work_orders: number;
+  sheets_total: number;
+  sheets_processed: number;
   work_orders_total: number;
   work_orders_synced: number;
   sheets_synced: number;

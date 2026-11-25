@@ -57,6 +57,9 @@ class Equipment(Base):
     # la plantilla maestra.
     life_sheet_file_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     life_sheet_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    public_life_sheet_token: Mapped[str | None] = mapped_column(
+        String(64), unique=True, nullable=True, index=True
+    )
     life_sheet_sync_status: Mapped[str] = mapped_column(
         String(20), default="PENDING", server_default="PENDING", nullable=False
     )
