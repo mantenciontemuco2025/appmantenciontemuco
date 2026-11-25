@@ -2,14 +2,90 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Download, ExternalLink, FileSpreadsheet, Loader2, QrCode, RefreshCw, Search, X } from "lucide-react";
-import { QRCodeCanvas } from "qrcode.react";
+import { AlignmentType, BorderStyle, Document, Footer, Header, ImageRun, PageBreak, Packer, Paragraph, Table, TableCell, TableRow, VerticalAlign, WidthType } from "docx";
+import { Download, ExternalLink, FileSpreadsheet, FileText, Loader2, QrCode, RefreshCw, Search, X } from "lucide-react";
+import { QRCodeCanvas, QRCodeSVG } from "qrcode.react";
+import { flushSync } from "react-dom";
+import { createRoot } from "react-dom/client";
 import { Shell } from "@/components/layout/shell";
 import { PageLoading } from "@/components/ui/page-loading";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { EquipmentLifeBackfillAccepted, EquipmentLifeBackfillStatus, EquipmentLifeDetail, EquipmentLifeSummary } from "@/lib/types";
+
+async function createQrLabelImage(url: string, equipmentName: string): Promise<Uint8Array> {
+  const qrHost = document.createElement("div");
+  qrHost.style.position = "fixed";
+  qrHost.style.left = "-10000px";
+  qrHost.style.top = "0";
+  document.body.appendChild(qrHost);
+  const qrRoot = createRoot(qrHost);
+  try {
+    flushSync(() => qrRoot.render(<QRCodeCanvas value={url} size={620} level="M" includeMargin />));
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    const qrCanvas = qrHost.querySelector("canvas");
+    if (!qrCanvas) throw new Error("El navegador no pudo dibujar el código QR.");
+
+    const logo = new Image();
+    logo.src = "/logo.png";
+    try {
+      await logo.decode();
+    } catch {
+      throw new Error("No se pudo cargar el logo para la etiqueta.");
+    }
+
+    const canvas = document.createElement("canvas");
+    canvas.width = 760;
+    canvas.height = 960;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("No se pudo preparar una etiqueta QR.");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    const logoWidth = 540;
+    const logoHeight = logoWidth * (logo.height / logo.width);
+    context.drawImage(logo, (canvas.width - logoWidth) / 2, 30, logoWidth, logoHeight);
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillStyle = "#52504b";
+    context.font = "bold 28px Arial, sans-serif";
+    context.fillText("HOJA DE VIDA DEL EQUIPO", canvas.width / 2, 250);
+
+    context.fillStyle = "#172033";
+    context.font = "bold 36px Arial, sans-serif";
+    const lines: string[] = [];
+    let line = "";
+    for (const word of equipmentName.trim().split(/\s+/)) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (line && context.measureText(candidate).width > 680) {
+        lines.push(line);
+        line = word;
+      } else {
+        line = candidate;
+      }
+    }
+    if (line) lines.push(line);
+    const nameStart = 300;
+    lines.slice(0, 3).forEach((nameLine, index) => context.fillText(nameLine, canvas.width / 2, nameStart + index * 44, 680));
+
+    const qrSize = 420;
+    const qrTop = Math.max(440, nameStart + Math.min(lines.length, 3) * 44 + 20);
+    context.drawImage(qrCanvas, (canvas.width - qrSize) / 2, qrTop, qrSize, qrSize);
+    context.fillStyle = "#f2b51b";
+    context.fillRect(100, 930, canvas.width - 200, 5);
+
+    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((value) => value ? resolve(value) : reject(new Error("No se pudo crear la imagen QR.")), "image/png"));
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally {
+    qrRoot.unmount();
+    qrHost.remove();
+  }
+}
+
+function safeFileName(value: string) {
+  return value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9-_]+/gi, "-").replace(/^-|-$/g, "") || "area";
+}
 
 function statusLabel(status: string) {
   if (status === "SYNCED") return "Sincronizada";
@@ -39,6 +115,8 @@ export default function EquipmentLifePage() {
   const [qrEquipment, setQrEquipment] = useState<{ name: string; url: string } | null>(null);
   const qrCanvasContainer = useRef<HTMLDivElement>(null);
   const [sharingQrEquipmentId, setSharingQrEquipmentId] = useState<number | null>(null);
+  const [qrDocumentArea, setQrDocumentArea] = useState("");
+  const [qrDocumentProgress, setQrDocumentProgress] = useState<{ done: number; total: number; equipment: string } | null>(null);
 
   async function loadItems() {
     setLoadingData(true);
@@ -219,6 +297,82 @@ export default function EquipmentLifePage() {
     }
   }
 
+  async function downloadAreaQrDocument() {
+    const areaItems = items.filter((item) => item.plant_area_name === qrDocumentArea && item.life_sheet_file_id && item.life_sheet_url);
+    if (!areaItems.length || !user || user.role !== "ADMIN") return;
+    if (!window.confirm(`Se preparará un Word para “${qrDocumentArea}” con ${areaItems.length} equipos. Para que sus QR funcionen, se habilitará el acceso público de solo lectura a cada hoja de vida en Drive. ¿Continuar?`)) return;
+
+    setQrDocumentProgress({ done: 0, total: areaItems.length, equipment: areaItems[0].equipment_name });
+    setMessage(null);
+    const labels: { name: string; image: Uint8Array }[] = [];
+    const failures: string[] = [];
+    try {
+      for (let index = 0; index < areaItems.length; index += 1) {
+        const item = areaItems[index];
+        setQrDocumentProgress({ done: index, total: areaItems.length, equipment: item.equipment_name });
+        try {
+          const result = await api.post<{ token: string; drive_url: string }>(`/api/equipment-life/${item.equipment_id}/public-link`, {});
+          const url = new URL(`/public/hojas-vida/${encodeURIComponent(result.token)}`, window.location.origin).toString();
+          labels.push({ name: item.equipment_name, image: await createQrLabelImage(url, item.equipment_name) });
+        } catch (error) {
+          failures.push(`${item.equipment_name}: ${error instanceof Error ? error.message : "no se pudo crear el QR"}`);
+        }
+        setQrDocumentProgress({ done: index + 1, total: areaItems.length, equipment: item.equipment_name });
+      }
+      if (!labels.length) {
+        const detail = failures.slice(0, 3).join(" | ");
+        throw new Error(`No se pudo generar ningún QR para esta área.${detail ? ` Detalle: ${detail}` : ""}`);
+      }
+
+      const tableBorder = { style: BorderStyle.SINGLE, size: 6, color: "D4D9E2" };
+      const tableCellFor = (label?: { name: string; image: Uint8Array }) => new TableCell({
+        width: { size: 4680, type: WidthType.DXA },
+        verticalAlign: VerticalAlign.CENTER,
+        margins: { top: 45, bottom: 45, left: 60, right: 60 },
+        borders: { top: tableBorder, bottom: tableBorder, left: tableBorder, right: tableBorder },
+        children: [new Paragraph({
+          alignment: AlignmentType.CENTER,
+          children: label ? [new ImageRun({ type: "png", data: label.image, transformation: { width: 338, height: 427 } })] : [],
+        })],
+      });
+      const pageChildren = [];
+      for (let offset = 0; offset < labels.length; offset += 4) {
+        if (offset > 0) pageChildren.push(new Paragraph({ children: [new PageBreak()] }));
+        const pageLabels = labels.slice(offset, offset + 4);
+        pageChildren.push(new Table({
+          width: { size: 10800, type: WidthType.DXA },
+          columnWidths: [5400, 5400],
+          rows: [
+            new TableRow({ cantSplit: true, children: [tableCellFor(pageLabels[0]), tableCellFor(pageLabels[1])] }),
+            new TableRow({ cantSplit: true, children: [tableCellFor(pageLabels[2]), tableCellFor(pageLabels[3])] }),
+          ],
+        }));
+      }
+      const document = new Document({
+        sections: [{
+          properties: { page: { size: { width: 12240, height: 15840 }, margin: { top: 720, bottom: 720, left: 720, right: 720 } } },
+          headers: { default: new Header({ children: [new Paragraph({ text: `MALTEXCO · ${qrDocumentArea.toLocaleUpperCase("es")}`, alignment: AlignmentType.CENTER })] }) },
+          footers: { default: new Footer({ children: [new Paragraph({ text: "Escanea el código para abrir la hoja de vida del equipo", alignment: AlignmentType.CENTER })] }) },
+          children: pageChildren,
+        }],
+      });
+      const blob = await Packer.toBlob(document);
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = window.document.createElement("a");
+      link.href = downloadUrl;
+      link.download = `QR-${safeFileName(qrDocumentArea)}.docx`;
+      link.click();
+      URL.revokeObjectURL(downloadUrl);
+      setMessage(failures.length
+        ? { kind: "error", text: `Se creó el Word con ${labels.length} QR. ${failures.length} equipos se omitieron: ${failures.slice(0, 3).join(" | ")}` }
+        : { kind: "success", text: `Documento Word creado para ${qrDocumentArea}: ${labels.length} QR, cuatro por página.` });
+    } catch (error) {
+      setMessage({ kind: "error", text: error instanceof Error ? error.message : "No se pudo crear el documento Word." });
+    } finally {
+      setQrDocumentProgress(null);
+    }
+  }
+
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
     if (!needle) return items;
@@ -226,6 +380,8 @@ export default function EquipmentLifePage() {
   }, [items, search]);
 
   const sections = useMemo(() => Array.from(new Set(items.filter((item) => item.work_order_count > 0 && item.section_name).map((item) => item.section_name as string))).sort((a, b) => a.localeCompare(b, "es")), [items]);
+  const qrDocumentAreas = useMemo(() => Array.from(new Set(items.filter((item) => item.life_sheet_file_id && item.life_sheet_url && item.plant_area_name).map((item) => item.plant_area_name as string))).sort((a, b) => a.localeCompare(b, "es")), [items]);
+  const qrDocumentEquipmentCount = items.filter((item) => item.plant_area_name === qrDocumentArea && item.life_sheet_file_id && item.life_sheet_url).length;
   const visibleItems = useMemo(() => filtered.filter((item) => (!onlyWithRecords || item.work_order_count > 0) && (!sectionFilter || item.section_name === sectionFilter)), [filtered, onlyWithRecords, sectionFilter]);
 
   if (loading || !user) return <PageLoading message={loading ? "Validando sesión..." : "Redirigiendo..."} />;
@@ -238,6 +394,8 @@ export default function EquipmentLifePage() {
       </div>
 
       {message && <div className={`mb-4 rounded-lg border p-3 text-sm ${message.kind === "error" ? "border-red-200 bg-red-50 text-red-800" : "border-green-200 bg-green-50 text-green-800"}`}>{message.text}</div>}
+
+      {user.role === "ADMIN" && <section className="mb-4 rounded-xl border bg-card p-4 shadow-sm"><div className="flex flex-wrap items-end gap-3"><div className="min-w-64 flex-1"><h2 className="font-semibold">Imprimir códigos QR por área</h2><p className="mt-1 text-sm text-muted-foreground">Crea un Word por área, con cuatro etiquetas por página. Se incluyen equipos con hoja de vida en Drive.</p><label className="mt-3 block text-sm font-medium">Área general<select className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal" value={qrDocumentArea} onChange={(event) => setQrDocumentArea(event.target.value)} disabled={!!qrDocumentProgress}><option value="">Selecciona un área</option>{qrDocumentAreas.map((area) => <option key={area} value={area}>{area}</option>)}</select></label></div><Button onClick={() => void downloadAreaQrDocument()} disabled={!qrDocumentArea || !qrDocumentEquipmentCount || !!qrDocumentProgress}><FileText className="mr-2 h-4 w-4" />{qrDocumentProgress ? `Preparando ${qrDocumentProgress.done}/${qrDocumentProgress.total}...` : "Descargar Word del área"}</Button></div>{qrDocumentArea && <p className="mt-2 text-xs text-muted-foreground">{qrDocumentEquipmentCount} equipos incluidos. El proceso habilita lectura pública de sus hojas de vida en Drive para que los QR puedan abrirlas.</p>}{qrDocumentProgress && <div className="mt-3"><div className="mb-1 flex justify-between text-xs text-muted-foreground"><span>Preparando: {qrDocumentProgress.equipment}</span><span>{Math.round((qrDocumentProgress.done / qrDocumentProgress.total) * 100)}%</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary transition-all" style={{ width: `${Math.round((qrDocumentProgress.done / qrDocumentProgress.total) * 100)}%` }} /></div></div>}</section>}
 
       {backfilling && backfillStatus?.status === "running" && (() => {
         const percent = backfillStatus.sheets_total > 0 ? Math.min(100, Math.round((backfillStatus.sheets_processed / backfillStatus.sheets_total) * 100)) : 0;
