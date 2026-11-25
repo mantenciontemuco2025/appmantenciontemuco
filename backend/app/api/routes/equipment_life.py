@@ -659,10 +659,12 @@ async def _run_equipment_life_backfill(
 
     for item in equipment:
         work_orders = orders_by_equipment.get(item.id, [])
-        # The backfill action also upgrades existing sheets to the latest
-        # columns and formatting, so process every existing sheet and every
-        # equipment with eligible history, even when its current sync is fresh.
-        needs_sync = bool(work_orders) or bool(item.life_sheet_file_id)
+        if payload.retry_failed_only:
+            needs_sync = item.life_sheet_sync_status == "FAILED"
+        else:
+            # A full refresh also upgrades every existing sheet's columns and
+            # formatting, including sheets that were already synchronized.
+            needs_sync = bool(work_orders) or bool(item.life_sheet_file_id)
         if needs_sync:
             sync_targets.add(item.id)
 

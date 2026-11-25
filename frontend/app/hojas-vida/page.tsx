@@ -33,6 +33,7 @@ export default function EquipmentLifePage() {
   const [loadingData, setLoadingData] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
+  const [backfillMode, setBackfillMode] = useState<"all" | "failed" | null>(null);
   const [backfillStatus, setBackfillStatus] = useState<EquipmentLifeBackfillStatus | null>(null);
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [qrEquipment, setQrEquipment] = useState<{ name: string; url: string } | null>(null);
@@ -80,13 +81,18 @@ export default function EquipmentLifePage() {
     throw lastError instanceof Error ? lastError : new Error("No se pudo consultar el avance de la importación.");
   }
 
-  async function backfill() {
-    if (!window.confirm("Se reconstruirán las hojas de vida desde las OT guardadas en la app. Se reemplazará la tabla del historial en Drive, incluidas ediciones manuales hechas directamente en esas hojas. ¿Continuar?")) return;
+  async function backfill(retryFailedOnly = false) {
+    const failedCount = items.filter((item) => item.life_sheet_sync_status === "FAILED").length;
+    const confirmation = retryFailedOnly
+      ? `Se reintentará la sincronización de ${failedCount} hoja(s) con error. Las hojas ya sincronizadas no se modificarán. ¿Continuar?`
+      : "Se reconstruirán todas las hojas de vida desde las OT guardadas en la app. Se reemplazará la tabla del historial en Drive, incluidas ediciones manuales hechas directamente en esas hojas. ¿Continuar?";
+    if (!window.confirm(confirmation)) return;
     setBackfilling(true);
+    setBackfillMode(retryFailedOnly ? "failed" : "all");
     setBackfillStatus(null);
     setMessage(null);
     try {
-      const accepted = await api.post<EquipmentLifeBackfillAccepted>("/api/equipment-life/backfill", { include_drafts: false }, 30000);
+      const accepted = await api.post<EquipmentLifeBackfillAccepted>("/api/equipment-life/backfill", { include_drafts: false, retry_failed_only: retryFailedOnly }, 30000);
       setMessage({ kind: "success", text: accepted.message });
       let statusFailures = 0;
       for (let attempt = 0; attempt < 180; attempt += 1) {
@@ -126,6 +132,7 @@ export default function EquipmentLifePage() {
       setMessage({ kind: "error", text: error instanceof Error ? error.message : "No se pudo ejecutar la importación." });
     } finally {
       setBackfilling(false);
+      setBackfillMode(null);
     }
   }
 
@@ -227,7 +234,7 @@ export default function EquipmentLifePage() {
     <Shell fullName={user.full_name} role={user.role} onLogout={logout}>
       <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div><h1 className="text-2xl font-bold">Hojas de vida de equipos</h1><p className="mt-1 text-sm text-muted-foreground">Historial de trabajos por equipo, guardado en la base de datos y en Google Drive.</p></div>
-        <div className="flex gap-2"><Button variant="outline" onClick={() => void loadItems()} disabled={loadingData}><RefreshCw className="mr-2 h-4 w-4" />Actualizar</Button>{user.role === "ADMIN" && <Button onClick={() => void backfill()} disabled={backfilling}>{backfilling ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileSpreadsheet className="mr-2 h-4 w-4" />}{backfilling ? "Actualizando hojas..." : "Actualizar todas las hojas"}</Button>}</div>
+        <div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => void loadItems()} disabled={loadingData}><RefreshCw className="mr-2 h-4 w-4" />Actualizar</Button>{user.role === "ADMIN" && items.some((item) => item.life_sheet_sync_status === "FAILED") && <Button variant="outline" onClick={() => void backfill(true)} disabled={backfilling}><RefreshCw className={`mr-2 h-4 w-4 ${backfilling && backfillMode === "failed" ? "animate-spin" : ""}`} />{backfilling && backfillMode === "failed" ? "Reintentando con error..." : `Reintentar con error (${items.filter((item) => item.life_sheet_sync_status === "FAILED").length})`}</Button>}{user.role === "ADMIN" && <Button onClick={() => void backfill(false)} disabled={backfilling}>{backfilling && backfillMode === "all" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileSpreadsheet className="mr-2 h-4 w-4" />}{backfilling && backfillMode === "all" ? "Actualizando hojas..." : "Actualizar todas las hojas"}</Button>}</div>
       </div>
 
       {message && <div className={`mb-4 rounded-lg border p-3 text-sm ${message.kind === "error" ? "border-red-200 bg-red-50 text-red-800" : "border-green-200 bg-green-50 text-green-800"}`}>{message.text}</div>}
@@ -235,7 +242,7 @@ export default function EquipmentLifePage() {
       {backfilling && backfillStatus?.status === "running" && (() => {
         const percent = backfillStatus.sheets_total > 0 ? Math.min(100, Math.round((backfillStatus.sheets_processed / backfillStatus.sheets_total) * 100)) : 0;
         return <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950">
-          <div className="mb-2 flex items-center justify-between font-semibold"><span>Actualizando hojas una por una</span><span>{percent}%</span></div>
+          <div className="mb-2 flex items-center justify-between font-semibold"><span>{backfillMode === "failed" ? "Reintentando solo las hojas con error" : "Actualizando hojas una por una"}</span><span>{percent}%</span></div>
           <div className="h-2 overflow-hidden rounded-full bg-blue-100"><div className="h-full rounded-full bg-blue-600 transition-all" style={{ width: `${percent}%` }} /></div>
           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs"><span>Hojas completas: {backfillStatus.sheets_processed}/{backfillStatus.sheets_total}</span><span>OT sincronizadas: {backfillStatus.work_orders_synced}/{backfillStatus.work_orders_total}</span>{backfillStatus.errors_count > 0 && <span>Hojas con error: {backfillStatus.errors_count}</span>}{backfillStatus.current_equipment && <span>Actualizando: {backfillStatus.current_equipment}</span>}</div>
         </div>;

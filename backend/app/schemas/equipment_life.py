@@ -155,6 +155,7 @@ class EquipmentLifeEvidence(BaseModel):
 
 class EquipmentLifeBackfillPayload(BaseModel):
     include_drafts: bool = False
+    retry_failed_only: bool = False
 
 
 class EquipmentLifeBackfillResult(BaseModel):
