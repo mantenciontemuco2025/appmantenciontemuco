@@ -14,6 +14,8 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import type { EquipmentLifeBackfillAccepted, EquipmentLifeBackfillStatus, EquipmentLifeDetail, EquipmentLifeSummary } from "@/lib/types";
 
+const UNASSIGNED_AREA_KEY = "__sin_area_general__";
+
 async function createQrLabelImage(url: string, equipmentName: string): Promise<Uint8Array> {
   const qrHost = document.createElement("div");
   qrHost.style.position = "fixed";
@@ -298,9 +300,15 @@ export default function EquipmentLifePage() {
   }
 
   async function downloadAreaQrDocument() {
-    const areaItems = items.filter((item) => item.plant_area_name === qrDocumentArea && item.life_sheet_file_id && item.life_sheet_url);
+    const areaItems = items.filter((item) => {
+      const matchesArea = qrDocumentArea === UNASSIGNED_AREA_KEY
+        ? !item.plant_area_name?.trim()
+        : item.plant_area_name === qrDocumentArea;
+      return matchesArea && item.life_sheet_file_id && item.life_sheet_url;
+    });
     if (!areaItems.length || !user || user.role !== "ADMIN") return;
-    if (!window.confirm(`Se preparará un Word para “${qrDocumentArea}” con ${areaItems.length} equipos. Para que sus QR funcionen, se habilitará el acceso público de solo lectura a cada hoja de vida en Drive. ¿Continuar?`)) return;
+    const areaLabel = qrDocumentArea === UNASSIGNED_AREA_KEY ? "Sin área" : qrDocumentArea;
+    if (!window.confirm(`Se preparará un Word para “${areaLabel}” con ${areaItems.length} equipos. Para que sus QR funcionen, se habilitará el acceso público de solo lectura a cada hoja de vida en Drive. ¿Continuar?`)) return;
 
     setQrDocumentProgress({ done: 0, total: areaItems.length, equipment: areaItems[0].equipment_name });
     setMessage(null);
@@ -351,7 +359,7 @@ export default function EquipmentLifePage() {
       const document = new Document({
         sections: [{
           properties: { page: { size: { width: 12240, height: 15840 }, margin: { top: 720, bottom: 720, left: 720, right: 720 } } },
-          headers: { default: new Header({ children: [new Paragraph({ text: `MALTEXCO · ${qrDocumentArea.toLocaleUpperCase("es")}`, alignment: AlignmentType.CENTER })] }) },
+          headers: { default: new Header({ children: [new Paragraph({ text: `MALTEXCO · ${areaLabel.toLocaleUpperCase("es")}`, alignment: AlignmentType.CENTER })] }) },
           footers: { default: new Footer({ children: [new Paragraph({ text: "Escanea el código para abrir la hoja de vida del equipo", alignment: AlignmentType.CENTER })] }) },
           children: pageChildren,
         }],
@@ -360,12 +368,12 @@ export default function EquipmentLifePage() {
       const downloadUrl = URL.createObjectURL(blob);
       const link = window.document.createElement("a");
       link.href = downloadUrl;
-      link.download = `QR-${safeFileName(qrDocumentArea)}.docx`;
+      link.download = `QR-${safeFileName(areaLabel)}.docx`;
       link.click();
       URL.revokeObjectURL(downloadUrl);
       setMessage(failures.length
         ? { kind: "error", text: `Se creó el Word con ${labels.length} QR. ${failures.length} equipos se omitieron: ${failures.slice(0, 3).join(" | ")}` }
-        : { kind: "success", text: `Documento Word creado para ${qrDocumentArea}: ${labels.length} QR, cuatro por página.` });
+        : { kind: "success", text: `Documento Word creado para ${areaLabel}: ${labels.length} QR, cuatro por página.` });
     } catch (error) {
       setMessage({ kind: "error", text: error instanceof Error ? error.message : "No se pudo crear el documento Word." });
     } finally {
@@ -380,8 +388,18 @@ export default function EquipmentLifePage() {
   }, [items, search]);
 
   const sections = useMemo(() => Array.from(new Set(items.filter((item) => item.work_order_count > 0 && item.section_name).map((item) => item.section_name as string))).sort((a, b) => a.localeCompare(b, "es")), [items]);
-  const qrDocumentAreas = useMemo(() => Array.from(new Set(items.filter((item) => item.life_sheet_file_id && item.life_sheet_url && item.plant_area_name).map((item) => item.plant_area_name as string))).sort((a, b) => a.localeCompare(b, "es")), [items]);
-  const qrDocumentEquipmentCount = items.filter((item) => item.plant_area_name === qrDocumentArea && item.life_sheet_file_id && item.life_sheet_url).length;
+  const qrDocumentAreas = useMemo(() => {
+    const assigned = Array.from(new Set(items.filter((item) => item.life_sheet_file_id && item.life_sheet_url && item.plant_area_name?.trim()).map((item) => item.plant_area_name as string))).sort((a, b) => a.localeCompare(b, "es"));
+    const hasUnassigned = items.some((item) => item.life_sheet_file_id && item.life_sheet_url && !item.plant_area_name?.trim());
+    return hasUnassigned ? [UNASSIGNED_AREA_KEY, ...assigned] : assigned;
+  }, [items]);
+  const qrDocumentEquipmentCount = items.filter((item) => {
+    const matchesArea = qrDocumentArea === UNASSIGNED_AREA_KEY
+      ? !item.plant_area_name?.trim()
+      : item.plant_area_name === qrDocumentArea;
+    return matchesArea && item.life_sheet_file_id && item.life_sheet_url;
+  }).length;
+  const qrDocumentAreaLabel = qrDocumentArea === UNASSIGNED_AREA_KEY ? "Sin área" : qrDocumentArea;
   const visibleItems = useMemo(() => filtered.filter((item) => (!onlyWithRecords || item.work_order_count > 0) && (!sectionFilter || item.section_name === sectionFilter)), [filtered, onlyWithRecords, sectionFilter]);
 
   if (loading || !user) return <PageLoading message={loading ? "Validando sesión..." : "Redirigiendo..."} />;
@@ -395,7 +413,7 @@ export default function EquipmentLifePage() {
 
       {message && <div className={`mb-4 rounded-lg border p-3 text-sm ${message.kind === "error" ? "border-red-200 bg-red-50 text-red-800" : "border-green-200 bg-green-50 text-green-800"}`}>{message.text}</div>}
 
-      {user.role === "ADMIN" && <section className="mb-4 rounded-xl border bg-card p-4 shadow-sm"><div className="flex flex-wrap items-end gap-3"><div className="min-w-64 flex-1"><h2 className="font-semibold">Imprimir códigos QR por área</h2><p className="mt-1 text-sm text-muted-foreground">Crea un Word por área, con cuatro etiquetas por página. Se incluyen equipos con hoja de vida en Drive.</p><label className="mt-3 block text-sm font-medium">Área general<select className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal" value={qrDocumentArea} onChange={(event) => setQrDocumentArea(event.target.value)} disabled={!!qrDocumentProgress}><option value="">Selecciona un área</option>{qrDocumentAreas.map((area) => <option key={area} value={area}>{area}</option>)}</select></label></div><Button onClick={() => void downloadAreaQrDocument()} disabled={!qrDocumentArea || !qrDocumentEquipmentCount || !!qrDocumentProgress}><FileText className="mr-2 h-4 w-4" />{qrDocumentProgress ? `Preparando ${qrDocumentProgress.done}/${qrDocumentProgress.total}...` : "Descargar Word del área"}</Button></div>{qrDocumentArea && <p className="mt-2 text-xs text-muted-foreground">{qrDocumentEquipmentCount} equipos incluidos. El proceso habilita lectura pública de sus hojas de vida en Drive para que los QR puedan abrirlas.</p>}{qrDocumentProgress && <div className="mt-3"><div className="mb-1 flex justify-between text-xs text-muted-foreground"><span>Preparando: {qrDocumentProgress.equipment}</span><span>{Math.round((qrDocumentProgress.done / qrDocumentProgress.total) * 100)}%</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary transition-all" style={{ width: `${Math.round((qrDocumentProgress.done / qrDocumentProgress.total) * 100)}%` }} /></div></div>}</section>}
+      {user.role === "ADMIN" && <section className="mb-4 rounded-xl border bg-card p-4 shadow-sm"><div className="flex flex-wrap items-end gap-3"><div className="min-w-64 flex-1"><h2 className="font-semibold">Imprimir códigos QR por área</h2><p className="mt-1 text-sm text-muted-foreground">Crea un Word por área, con cuatro etiquetas por página. Se incluyen equipos con hoja de vida en Drive.</p><label className="mt-3 block text-sm font-medium">Área general<select className="mt-1 h-10 w-full rounded-md border bg-background px-3 font-normal" value={qrDocumentArea} onChange={(event) => setQrDocumentArea(event.target.value)} disabled={!!qrDocumentProgress}><option value="">Selecciona un área</option>{qrDocumentAreas.map((area) => <option key={area} value={area}>{area === UNASSIGNED_AREA_KEY ? "Sin área" : area}</option>)}</select></label></div><Button onClick={() => void downloadAreaQrDocument()} disabled={!qrDocumentArea || !qrDocumentEquipmentCount || !!qrDocumentProgress}><FileText className="mr-2 h-4 w-4" />{qrDocumentProgress ? `Preparando ${qrDocumentProgress.done}/${qrDocumentProgress.total}...` : `Descargar Word de ${qrDocumentAreaLabel || "área"}`}</Button></div>{qrDocumentArea && <p className="mt-2 text-xs text-muted-foreground">{qrDocumentEquipmentCount} equipos incluidos. El proceso habilita lectura pública de sus hojas de vida en Drive para que los QR puedan abrirlas.</p>}{qrDocumentProgress && <div className="mt-3"><div className="mb-1 flex justify-between text-xs text-muted-foreground"><span>Preparando: {qrDocumentProgress.equipment}</span><span>{Math.round((qrDocumentProgress.done / qrDocumentProgress.total) * 100)}%</span></div><div className="h-2 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary transition-all" style={{ width: `${Math.round((qrDocumentProgress.done / qrDocumentProgress.total) * 100)}%` }} /></div></div>}</section>}
 
       {backfilling && backfillStatus?.status === "running" && (() => {
         const percent = backfillStatus.sheets_total > 0 ? Math.min(100, Math.round((backfillStatus.sheets_processed / backfillStatus.sheets_total) * 100)) : 0;
