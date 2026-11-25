@@ -98,6 +98,10 @@ def _records(work_orders: list[WorkOrder]) -> list[EquipmentLifeRecord]:
                 title=wo.title,
                 description=wo.description,
                 performed_by=_performer_name(wo),
+                authorized_by=(
+                    (wo.approved_by_user.full_name if wo.approved_by_user else None)
+                    or wo.approved_by
+                ),
                 observations=observations or None,
                 resources_required=(wo.resources_required or "").strip() or None,
                 worked_duration=life_service._worked_duration_text(wo) or None,
@@ -121,6 +125,7 @@ async def _load_catalog_and_orders(db: AsyncSession, include_drafts: bool = Fals
         select(WorkOrder)
         .options(
             selectinload(WorkOrder.completed_by_user),
+            selectinload(WorkOrder.approved_by_user),
             selectinload(WorkOrder.responsible_user),
         )
         .where(WorkOrder.equipment_id.is_not(None))
@@ -163,6 +168,7 @@ async def sync_equipment_from_database(
         select(WorkOrder)
         .options(
             selectinload(WorkOrder.completed_by_user),
+            selectinload(WorkOrder.approved_by_user),
             selectinload(WorkOrder.responsible_user),
         )
         .where(WorkOrder.equipment_id == equipment_id)
@@ -240,6 +246,7 @@ async def get_equipment_life(
         select(WorkOrder)
         .options(
             selectinload(WorkOrder.completed_by_user),
+            selectinload(WorkOrder.approved_by_user),
             selectinload(WorkOrder.responsible_user),
         )
         .where(WorkOrder.equipment_id == equipment_id)
@@ -341,6 +348,7 @@ async def get_public_equipment_life(
             title=record.title,
             description=record.description,
             performed_by=record.performed_by,
+            authorized_by=record.authorized_by,
             observations=record.observations,
             resources_required=record.resources_required,
             worked_duration=record.worked_duration,
@@ -679,7 +687,12 @@ async def _run_equipment_life_backfill(
 
     update_progress(None)
 
-    for item in equipment:
+    # Retry failed sheets first so a new click immediately resumes where the
+    # previous run left errors, while still upgrading/syncing every other sheet.
+    for item in sorted(
+        equipment,
+        key=lambda row: (row.id not in sync_targets, row.life_sheet_sync_status != "FAILED", row.name.casefold()),
+    ):
         work_orders = orders_by_equipment.get(item.id, [])
         if item.id not in sync_targets:
             processed_equipment += 1

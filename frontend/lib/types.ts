@@ -104,6 +104,7 @@ export interface EquipmentLifeRecord {
   title: string;
   description: string | null;
   performed_by: string | null;
+  authorized_by: string | null;
   observations: string | null;
   resources_required: string | null;
   worked_duration: string | null;
@@ -123,6 +124,7 @@ export interface PublicEquipmentLifeRecord {
   title: string;
   description: string | null;
   performed_by: string | null;
+  authorized_by: string | null;
   observations: string | null;
   resources_required: string | null;
   worked_duration: string | null;

@@ -53,8 +53,9 @@ export default function PublicEquipmentLifePage({ params }: { params: Promise<{ 
               <div className="text-sm text-slate-600">{dateLabel(record.event_date)}</div>
             </div>
             {record.description && <p className="mt-3 whitespace-pre-wrap text-sm text-slate-700">{record.description}</p>}
-            <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+            <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-5">
               <div><span className="text-xs text-slate-500">Realizado por</span><p>{record.performed_by || "—"}</p></div>
+              <div><span className="text-xs text-slate-500">Autorizado por</span><p>{record.authorized_by || "—"}</p></div>
               <div><span className="text-xs text-slate-500">Duración real</span><p>{record.worked_duration || "—"}</p></div>
               <div className="sm:col-span-2"><span className="text-xs text-slate-500">Repuestos</span><p className="whitespace-pre-wrap">{record.resources_required || "—"}</p></div>
             </div>

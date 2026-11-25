@@ -33,6 +33,7 @@ class EquipmentLifeRecord(BaseModel):
     title: str
     description: str | None = None
     performed_by: str | None = None
+    authorized_by: str | None = None
     observations: str | None = None
     resources_required: str | None = None
     worked_duration: str | None = None
@@ -52,6 +53,7 @@ class PublicEquipmentLifeRecord(BaseModel):
     title: str
     description: str | None = None
     performed_by: str | None = None
+    authorized_by: str | None = None
     observations: str | None = None
     resources_required: str | None = None
     worked_duration: str | None = None

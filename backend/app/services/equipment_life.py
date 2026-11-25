@@ -100,6 +100,11 @@ def _performed_by(work_order) -> str:
     )
 
 
+def _authorized_by(work_order) -> str:
+    approver = getattr(work_order, "approved_by_user", None)
+    return getattr(approver, "full_name", None) or getattr(work_order, "approved_by", None) or ""
+
+
 def _worked_duration_minutes(work_order) -> int | None:
     minutes = getattr(work_order, "actual_duration_minutes", None)
     if minutes is None or float(minutes) <= 0:
@@ -146,6 +151,7 @@ def _work_order_row(work_order) -> list[str]:
         _date_text(event_date),
         description,
         _performed_by(work_order),
+        _authorized_by(work_order),
         observations,
         _status_text(work_order.status),
         _maintenance_text(work_order.maintenance_type),
@@ -197,10 +203,35 @@ def sync_equipment_history(
         url = copied.get("url") or f"https://docs.google.com/spreadsheets/d/{file_id}/edit"
 
     sheets = _build_sheets_write_service()
-    spreadsheet = sheets.spreadsheets().get(
-        spreadsheetId=file_id,
-        fields="sheets(properties(sheetId,title,index,gridProperties(columnCount,rowCount)),bandedRanges(bandedRangeId,range))",
-    ).execute()
+    try:
+        spreadsheet = sheets.spreadsheets().get(
+            spreadsheetId=file_id,
+            fields="sheets(properties(sheetId,title,index,gridProperties(columnCount,rowCount)),bandedRanges(bandedRangeId,range))",
+        ).execute()
+    except Exception as exc:
+        # A removed spreadsheet leaves a stale ID in the equipment row. On
+        # retry, replace only a confirmed missing file with a fresh template
+        # copy; permission, quota, and transient errors must remain visible.
+        response = getattr(exc, "resp", None)
+        status_code = getattr(response, "status", None) or getattr(exc, "status_code", None)
+        if not existing_file_id or status_code not in (404, 410):
+            raise
+        logger.warning(
+            "La hoja de vida %s del equipo %s ya no existe; se creará una copia nueva.",
+            existing_file_id,
+            equipment_id,
+        )
+        copied = _copy_template(
+            file_name,
+            section_folder_id,
+            template_file_id=settings.GOOGLE_EQUIPMENT_LIFE_TEMPLATE_FILE_ID,
+        )
+        file_id = copied["file_id"]
+        url = copied.get("url") or f"https://docs.google.com/spreadsheets/d/{file_id}/edit"
+        spreadsheet = sheets.spreadsheets().get(
+            spreadsheetId=file_id,
+            fields="sheets(properties(sheetId,title,index,gridProperties(columnCount,rowCount)),bandedRanges(bandedRangeId,range))",
+        ).execute()
     sheet_entries = sorted(
         spreadsheet.get("sheets", []),
         key=lambda item: item.get("properties", {}).get("index", 0),
@@ -216,14 +247,14 @@ def sync_equipment_history(
     rows = [_work_order_row(item) for item in sorted(work_orders, key=_work_order_sort_key)]
     required_rows = max(11, 10 + len(rows))
     requests = []
-    if current_columns < 8:
+    if current_columns < 9:
         requests.append({
             "insertDimension": {
                 "range": {
                     "sheetId": sheet_id,
                     "dimension": "COLUMNS",
                     "startIndex": current_columns,
-                    "endIndex": 8,
+                    "endIndex": 9,
                 },
                 "inheritFromBefore": current_columns > 0,
             }
@@ -244,11 +275,22 @@ def sync_equipment_history(
     end_row_index = max(10, required_rows)
     for existing_band in sheet_entries[0].get("bandedRanges", []):
         band_range = existing_band.get("range", {})
-        if (
-            band_range.get("sheetId") == sheet_id
-            and band_range.get("startRowIndex", 0) <= 9
-            and band_range.get("endRowIndex", 0) > 9
-        ):
+        # A banding returned inside a Sheet can omit range.sheetId because
+        # its parent already identifies the sheet. Treat that as this sheet,
+        # and check for any overlap with the history table rather than only
+        # ranges whose first row is exactly the header row.
+        band_sheet_id = band_range.get("sheetId", sheet_id)
+        band_start_row = band_range.get("startRowIndex", 0)
+        band_end_row = band_range.get("endRowIndex")
+        band_start_column = band_range.get("startColumnIndex", 0)
+        band_end_column = band_range.get("endColumnIndex")
+        overlaps_history = (
+            band_start_row < end_row_index
+            and (band_end_row is None or band_end_row > 9)
+            and band_start_column < 9
+            and (band_end_column is None or band_end_column > 0)
+        )
+        if band_sheet_id == sheet_id and overlaps_history:
             requests.append({"deleteBanding": {"bandedRangeId": existing_band["bandedRangeId"]}})
 
     requests.extend([
@@ -263,42 +305,42 @@ def sync_equipment_history(
         },
         {
             "repeatCell": {
-                "range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 2, "startColumnIndex": 0, "endColumnIndex": 8},
+                "range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 2, "startColumnIndex": 0, "endColumnIndex": 9},
                 "cell": {"userEnteredFormat": {"backgroundColor": {"red": 0.09, "green": 0.20, "blue": 0.32}, "textFormat": {"foregroundColor": {"red": 1, "green": 1, "blue": 1}, "bold": True, "fontFamily": "Arial", "fontSize": 11}, "verticalAlignment": "MIDDLE"}},
                 "fields": "userEnteredFormat(backgroundColor,textFormat,verticalAlignment)",
             }
         },
         {
             "repeatCell": {
-                "range": {"sheetId": sheet_id, "startRowIndex": 3, "endRowIndex": 4, "startColumnIndex": 0, "endColumnIndex": 8},
+                "range": {"sheetId": sheet_id, "startRowIndex": 3, "endRowIndex": 4, "startColumnIndex": 0, "endColumnIndex": 9},
                 "cell": {"userEnteredFormat": {"backgroundColor": {"red": 0.09, "green": 0.20, "blue": 0.32}, "textFormat": {"foregroundColor": {"red": 1, "green": 1, "blue": 1}, "bold": True, "fontFamily": "Arial", "fontSize": 20}, "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE"}},
                 "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
             }
         },
         {
             "repeatCell": {
-                "range": {"sheetId": sheet_id, "startRowIndex": 4, "endRowIndex": 5, "startColumnIndex": 0, "endColumnIndex": 8},
+                "range": {"sheetId": sheet_id, "startRowIndex": 4, "endRowIndex": 5, "startColumnIndex": 0, "endColumnIndex": 9},
                 "cell": {"userEnteredFormat": {"backgroundColor": {"red": 0.93, "green": 0.68, "blue": 0.13}, "textFormat": {"foregroundColor": {"red": 0.12, "green": 0.17, "blue": 0.24}, "bold": True, "fontFamily": "Arial", "fontSize": 12}, "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE"}},
                 "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)",
             }
         },
         {
             "repeatCell": {
-                "range": {"sheetId": sheet_id, "startRowIndex": 6, "endRowIndex": 7, "startColumnIndex": 0, "endColumnIndex": 8},
+                "range": {"sheetId": sheet_id, "startRowIndex": 6, "endRowIndex": 7, "startColumnIndex": 0, "endColumnIndex": 9},
                 "cell": {"userEnteredFormat": {"backgroundColor": {"red": 0.91, "green": 0.94, "blue": 0.97}, "textFormat": {"foregroundColor": {"red": 0.09, "green": 0.20, "blue": 0.32}, "bold": True, "fontFamily": "Arial", "fontSize": 14}, "verticalAlignment": "MIDDLE"}},
                 "fields": "userEnteredFormat(backgroundColor,textFormat,verticalAlignment)",
             }
         },
         {
             "repeatCell": {
-                "range": {"sheetId": sheet_id, "startRowIndex": 9, "endRowIndex": 10, "startColumnIndex": 0, "endColumnIndex": 8},
+                "range": {"sheetId": sheet_id, "startRowIndex": 9, "endRowIndex": 10, "startColumnIndex": 0, "endColumnIndex": 9},
                 "cell": {"userEnteredFormat": {"backgroundColor": {"red": 0.09, "green": 0.20, "blue": 0.32}, "textFormat": {"foregroundColor": {"red": 1, "green": 1, "blue": 1}, "bold": True, "fontFamily": "Arial", "fontSize": 10}, "horizontalAlignment": "CENTER", "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP"}},
                 "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment,wrapStrategy)",
             }
         },
         {
             "repeatCell": {
-                "range": {"sheetId": sheet_id, "startRowIndex": 10, "endRowIndex": end_row_index, "startColumnIndex": 0, "endColumnIndex": 8},
+                "range": {"sheetId": sheet_id, "startRowIndex": 10, "endRowIndex": end_row_index, "startColumnIndex": 0, "endColumnIndex": 9},
                 "cell": {"userEnteredFormat": {"textFormat": {"foregroundColor": {"red": 0.12, "green": 0.17, "blue": 0.24}, "fontFamily": "Arial", "fontSize": 10}, "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP"}},
                 "fields": "userEnteredFormat(textFormat,verticalAlignment,wrapStrategy)",
             }
@@ -306,7 +348,7 @@ def sync_equipment_history(
         {
             "addBanding": {
                 "bandedRange": {
-                    "range": {"sheetId": sheet_id, "startRowIndex": 9, "endRowIndex": end_row_index, "startColumnIndex": 0, "endColumnIndex": 8},
+                    "range": {"sheetId": sheet_id, "startRowIndex": 9, "endRowIndex": end_row_index, "startColumnIndex": 0, "endColumnIndex": 9},
                     "rowProperties": {
                         "headerColor": {"red": 0.09, "green": 0.20, "blue": 0.32},
                         "firstBandColor": {"red": 1, "green": 1, "blue": 1},
@@ -317,7 +359,7 @@ def sync_equipment_history(
         },
         {
             "updateBorders": {
-                "range": {"sheetId": sheet_id, "startRowIndex": 9, "endRowIndex": end_row_index, "startColumnIndex": 0, "endColumnIndex": 8},
+                "range": {"sheetId": sheet_id, "startRowIndex": 9, "endRowIndex": end_row_index, "startColumnIndex": 0, "endColumnIndex": 9},
                 "top": {"style": "SOLID_MEDIUM", "color": {"red": 0.09, "green": 0.20, "blue": 0.32}},
                 "bottom": {"style": "SOLID_MEDIUM", "color": {"red": 0.09, "green": 0.20, "blue": 0.32}},
                 "left": {"style": "SOLID", "color": {"red": 0.78, "green": 0.82, "blue": 0.87}},
@@ -341,7 +383,7 @@ def sync_equipment_history(
             }
         },
     ])
-    for column_index, width in enumerate([110, 310, 190, 300, 125, 190, 300, 160]):
+    for column_index, width in enumerate([110, 310, 190, 190, 300, 125, 190, 300, 160]):
         requests.append({
             "updateDimensionProperties": {
                 "range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": column_index, "endIndex": column_index + 1},
@@ -358,11 +400,12 @@ def sync_equipment_history(
         {"range": _sheet_range(sheet_title, "A5"), "values": [[f"MANTENCIÓN - {plant_area_name or 'ÁREA'}"]]},
         {"range": _sheet_range(sheet_title, "B7"), "values": [[equipment_name]]},
         {
-            "range": _sheet_range(sheet_title, "A10:H10"),
+            "range": _sheet_range(sheet_title, "A10:I10"),
             "values": [[
                 "Fecha",
                 "Descripción del trabajo",
                 "Realizado por",
+                "Autorizado por",
                 "Observaciones",
                 "Estado",
                 "Tipo de mantenimiento",
@@ -378,14 +421,14 @@ def sync_equipment_history(
 
     sheets.spreadsheets().values().clear(
         spreadsheetId=file_id,
-        range=_sheet_range(sheet_title, f"A11:H{max(current_rows, required_rows)}"),
+        range=_sheet_range(sheet_title, f"A11:I{max(current_rows, required_rows)}"),
         body={},
     ).execute()
     if rows:
         end_row = 10 + len(rows)
         sheets.spreadsheets().values().update(
             spreadsheetId=file_id,
-            range=_sheet_range(sheet_title, f"A11:H{end_row}"),
+            range=_sheet_range(sheet_title, f"A11:I{end_row}"),
             valueInputOption="USER_ENTERED",
             body={"values": rows},
         ).execute()
