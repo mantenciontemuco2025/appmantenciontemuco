@@ -14,16 +14,22 @@ export default function manifest(): MetadataRoute.Manifest {
     lang: "es-CL",
     icons: [
       {
-        src: "/icons/icon-192.svg",
+        src: "/icons/app-icon-v3-192.png",
         sizes: "192x192",
-        type: "image/svg+xml",
-        purpose: "maskable",
+        type: "image/png",
+        purpose: "any",
       },
       {
-        src: "/icons/icon-512.svg",
+        src: "/icons/app-icon-v3-512.png",
         sizes: "512x512",
+        type: "image/png",
+        purpose: "any",
+      },
+      {
+        src: "/icons/app-icon-v3.svg",
+        sizes: "any",
         type: "image/svg+xml",
-        purpose: "maskable",
+        purpose: "any",
       },
     ],
   };

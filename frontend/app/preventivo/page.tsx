@@ -225,6 +225,33 @@ function calculateSelectedMonthDueDate(baseDate: string, months: number[]): stri
   return "";
 }
 
+function greatestCommonDivisor(a: number, b: number): number {
+  let left = a;
+  let right = b;
+  while (right !== 0) [left, right] = [right, left % right];
+  return left;
+}
+
+function planOccursInMonth(plan: Plan, selectedMonth: string): boolean {
+  if (selectedMonth === "ALL") return true;
+  const month = Number(selectedMonth);
+  if (!Number.isInteger(month) || month < 1 || month > 12) return false;
+  if (plan.periodicity === "SELECTED_MONTHS" && plan.scheduled_months?.length) {
+    return plan.scheduled_months.includes(month);
+  }
+  if (!plan.next_due_date) return false;
+  const fixedIntervals: Record<string, number> = { MONTHLY: 1, QUARTERLY: 3, SEMIANNUAL: 6, ANNUAL: 12 };
+  const interval = plan.periodicity === "CUSTOM" ? plan.interval_months : fixedIntervals[plan.periodicity || ""];
+  const dueMonth = Number(plan.next_due_date.slice(5, 7));
+  if (!Number.isInteger(dueMonth) || dueMonth < 1 || dueMonth > 12) return false;
+  if (!interval || interval < 1) return dueMonth === month;
+  const cycleLength = 12 / greatestCommonDivisor(12, interval);
+  for (let occurrence = 0; occurrence < cycleLength; occurrence += 1) {
+    if (((dueMonth - 1 + occurrence * interval) % 12) + 1 === month) return true;
+  }
+  return false;
+}
+
 const statusLabels: Record<string, string> = {
   ON_TIME: "Al día", DUE_SOON: "Próximo", OVERDUE: "Vencido", NEEDS_CONFIGURATION: "Falta configurar",
   OT_OPEN: "OT abierta", INACTIVE: "Inactivo",
@@ -250,6 +277,7 @@ export default function PreventivoPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [monthFilter, setMonthFilter] = useState("ALL");
+  const [responsibleFilter, setResponsibleFilter] = useState("ALL");
   const [draft, setDraft] = useState<PlanDraft>(emptyDraft);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [createPlanOpen, setCreatePlanOpen] = useState(false);
@@ -320,15 +348,20 @@ export default function PreventivoPage() {
     }
   }
 
+  const monthPlans = useMemo(
+    () => plans.filter((plan) => planOccursInMonth(plan, monthFilter)),
+    [plans, monthFilter],
+  );
+
   const filteredPlans = useMemo(() => {
     const query = normalizedHeader(search);
-    return plans.filter((plan) => {
+    return monthPlans.filter((plan) => {
       if (statusFilter !== "ALL" && plan.status !== statusFilter) return false;
-      if (monthFilter !== "ALL" && Number(plan.next_due_date?.slice(5, 7)) !== Number(monthFilter)) return false;
+      if (responsibleFilter !== "ALL" && (!plan.active || String(plan.default_responsible_user_id ?? "") !== responsibleFilter)) return false;
       const source = normalizedHeader([plan.equipment_name, plan.inventory_code, plan.area_name, plan.section_name, plan.description, plan.source_plan_id].join(" "));
       return !query || source.includes(query);
     });
-  }, [plans, search, statusFilter, monthFilter]);
+  }, [monthPlans, search, statusFilter, responsibleFilter]);
 
   useEffect(() => {
     if (deepLinkHandledRef.current || plans.length === 0) return;
@@ -350,10 +383,35 @@ export default function PreventivoPage() {
     requestAnimationFrame(() => planListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }, [plans]);
 
-  const counters = useMemo(() => plans.reduce((acc, plan) => {
+  const counters = useMemo(() => monthPlans.reduce((acc, plan) => {
     acc[plan.status] = (acc[plan.status] || 0) + 1;
     return acc;
-  }, {} as Record<string, number>), [plans]);
+  }, {} as Record<string, number>), [monthPlans]);
+
+  const assignmentSummary = useMemo(() => {
+    const activePlans = monthPlans.filter((plan) => plan.active);
+    const byWorker = workers.map((worker) => ({
+      ...worker,
+      count: activePlans.filter((plan) => plan.default_responsible_user_id === worker.id).length,
+    }));
+    const listedIds = new Set(byWorker.map((worker) => worker.id));
+    const unlistedAssignees = new Map<number, { id: number; full_name: string; count: number }>();
+    for (const plan of activePlans) {
+      const workerId = plan.default_responsible_user_id;
+      if (workerId == null || listedIds.has(workerId)) continue;
+      const entry = unlistedAssignees.get(workerId) || {
+        id: workerId,
+        full_name: plan.default_responsible_name || `Usuario ${workerId}`,
+        count: 0,
+      };
+      entry.count += 1;
+      unlistedAssignees.set(workerId, entry);
+    }
+    byWorker.push(...unlistedAssignees.values());
+    byWorker.sort((a, b) => b.count - a.count || a.full_name.localeCompare(b.full_name, "es"));
+    const assigned = activePlans.filter((plan) => plan.default_responsible_user_id != null).length;
+    return { assigned, unassigned: activePlans.length - assigned, byWorker };
+  }, [monthPlans, workers]);
 
   function resetDraft() { setDraft(emptyDraft); setEditingId(null); }
 
@@ -492,6 +550,21 @@ export default function PreventivoPage() {
               <div className="text-sm text-muted-foreground">{label}</div><div className={`mt-1 text-2xl font-bold ${color}`}>{value}</div>
             </button>
           ))}
+        </section>
+
+        <section className="rounded-xl border bg-card p-4 shadow-sm">
+          <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+            <div><h2 className="font-semibold">Asignación de preventivos</h2><p className="mt-1 text-sm text-muted-foreground">Resumen de planes activos con responsable sugerido guardado · {monthFilter === "ALL" ? "Todos los meses" : `Solo ${MONTHS.find((month) => String(month.value) === monthFilter)?.label || "mes seleccionado"}`}</p></div>
+            <div className="grid min-w-64 grid-cols-2 gap-2">
+              <div className="rounded-lg border bg-emerald-50/70 px-3 py-2"><div className="text-xs text-muted-foreground">Asignados</div><div className="text-xl font-bold text-emerald-700">{assignmentSummary.assigned}</div></div>
+              <div className="rounded-lg border bg-amber-50/70 px-3 py-2"><div className="text-xs text-muted-foreground">Sin asignar</div><div className="text-xl font-bold text-amber-700">{assignmentSummary.unassigned}</div></div>
+            </div>
+          </div>
+          <div className="border-t pt-3">
+            <div className="mb-2 flex flex-wrap items-center gap-2"><h3 className="mr-auto text-sm font-medium">Planes asignados por usuario</h3>{responsibleFilter !== "ALL" && <Button type="button" variant="outline" size="sm" onClick={() => setResponsibleFilter("ALL")}>Mostrar todos</Button>}</div>
+            {assignmentSummary.byWorker.length ? <div className="grid max-h-56 gap-x-6 gap-y-1 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">{assignmentSummary.byWorker.map((worker) => { const selected = responsibleFilter === String(worker.id); return <button key={worker.id} type="button" aria-pressed={selected} onClick={() => { setResponsibleFilter(selected ? "ALL" : String(worker.id)); requestAnimationFrame(() => planListRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })); }} className={`flex items-center justify-between gap-3 rounded-md border px-2 py-1.5 text-left text-sm hover:bg-muted/40 ${selected ? "border-primary bg-primary/10 text-primary" : "border-transparent"}`} title={`Mostrar preventivos activos asignados a ${worker.full_name}`}><span className="truncate">{worker.full_name}</span><span className="min-w-8 rounded-full bg-muted px-2 py-0.5 text-center text-xs font-semibold">{worker.count}</span></button>; })}</div> : <p className="text-sm text-muted-foreground">No hay usuarios disponibles para asignar.</p>}
+            {responsibleFilter !== "ALL" && <p className="mt-2 text-xs text-muted-foreground">La lista de abajo muestra solo planes activos asignados a {assignmentSummary.byWorker.find((worker) => String(worker.id) === responsibleFilter)?.full_name || "este usuario"}.</p>}
+          </div>
         </section>
 
         <section className="flex flex-wrap items-end gap-4 rounded-xl border bg-card p-4 shadow-sm">

@@ -1,4 +1,5 @@
-const CACHE_NAME = "mantencion-shell-v4";
+const CACHE_NAME = "mantencion-shell-v5";
+const APP_ICON = "/icons/app-icon-v3-192.png";
 const OFFLINE_URL = "/offline.html";
 const NAVIGATION_TIMEOUT_MS = 2500;
 
@@ -18,8 +19,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     self.registration.showNotification(data.title || "Mantención", {
       body: data.body || "Tienes una nueva notificación.",
-      icon: "/icons/icon-192.svg",
-      badge: "/icons/icon-192.svg",
+      icon: APP_ICON,
+      badge: APP_ICON,
       data: { url: data.url || "/dashboard" },
     })
   );
@@ -45,7 +46,7 @@ self.addEventListener("notificationclick", (event) => {
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll([OFFLINE_URL, "/icons/icon-192.svg"]))
+    caches.open(CACHE_NAME).then((cache) => cache.addAll([OFFLINE_URL, APP_ICON]))
   );
   self.skipWaiting();
 });

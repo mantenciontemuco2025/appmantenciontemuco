@@ -26,7 +26,7 @@ export function PwaClientFeatures() {
 
   useEffect(() => {
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").catch(() => {
+      navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).catch(() => {
         // PWA support is optional; the application remains usable normally.
       });
     }
