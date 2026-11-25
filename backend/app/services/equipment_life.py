@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 from datetime import date, datetime
 
 from app.core.config import settings
@@ -20,6 +22,56 @@ from app.services.google_drive import (
 )
 
 logger = logging.getLogger(__name__)
+_sheets_write_lock = threading.Lock()
+_next_sheets_write_at = 0.0
+_SHEETS_WRITE_INTERVAL_SECONDS = 1.25
+_SHEETS_WRITE_MAX_ATTEMPTS = 6
+
+
+def _execute_sheets_write(request):
+    """Serialize and pace Sheets writes, retrying quota 429 responses."""
+    global _next_sheets_write_at
+    for attempt in range(_SHEETS_WRITE_MAX_ATTEMPTS):
+        with _sheets_write_lock:
+            delay = _next_sheets_write_at - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            started_at = time.monotonic()
+            try:
+                result = request.execute()
+            except Exception as exc:
+                response = getattr(exc, "resp", None)
+                status_code = getattr(response, "status", None) or getattr(exc, "status_code", None)
+                if status_code != 429 or attempt + 1 >= _SHEETS_WRITE_MAX_ATTEMPTS:
+                    _next_sheets_write_at = started_at + _SHEETS_WRITE_INTERVAL_SECONDS
+                    raise
+                retry_after = None
+                if response is not None and hasattr(response, "get"):
+                    try:
+                        retry_after = float(response.get("retry-after"))
+                    except (TypeError, ValueError):
+                        retry_after = None
+                backoff = min(5 * (2 ** attempt), 60)
+                _next_sheets_write_at = time.monotonic() + max(backoff, retry_after or 0)
+                logger.warning(
+                    "Cuota de escritura de Google Sheets excedida; reintento %s/%s en %.0f segundos.",
+                    attempt + 1,
+                    _SHEETS_WRITE_MAX_ATTEMPTS - 1,
+                    max(backoff, retry_after or 0),
+                )
+                continue
+            _next_sheets_write_at = started_at + _SHEETS_WRITE_INTERVAL_SECONDS
+            return result
+    raise RuntimeError("No se pudo completar la escritura en Google Sheets.")
+
+
+def _string_cells(values: list[str]) -> dict:
+    return {
+        "values": [
+            {"userEnteredValue": {"stringValue": value}}
+            for value in values
+        ]
+    }
 
 _STATUS_LABELS = {
     "DRAFT": "Borrador",
@@ -391,47 +443,53 @@ def sync_equipment_history(
                 "fields": "pixelSize",
             }
         })
-    sheets.spreadsheets().batchUpdate(
+
+    header = [
+        "Fecha",
+        "Descripción del trabajo",
+        "Realizado por",
+        "Autorizado por",
+        "Observaciones",
+        "Estado",
+        "Tipo de mantenimiento",
+        "Repuestos",
+        "Tiempo real trabajado",
+    ]
+    sheet_end_row_index = max(current_rows, required_rows)
+    requests.extend([
+        {
+            "updateCells": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 4, "endRowIndex": 5, "startColumnIndex": 0, "endColumnIndex": 1},
+                "rows": [_string_cells([f"MANTENCIÓN - {plant_area_name or 'ÁREA'}"])],
+                "fields": "userEnteredValue",
+            }
+        },
+        {
+            "updateCells": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 6, "endRowIndex": 7, "startColumnIndex": 1, "endColumnIndex": 2},
+                "rows": [_string_cells([equipment_name])],
+                "fields": "userEnteredValue",
+            }
+        },
+        {
+            "updateCells": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 9, "endRowIndex": 10, "startColumnIndex": 0, "endColumnIndex": 9},
+                "rows": [_string_cells(header)],
+                "fields": "userEnteredValue",
+            }
+        },
+        {
+            "updateCells": {
+                "range": {"sheetId": sheet_id, "startRowIndex": 10, "endRowIndex": sheet_end_row_index, "startColumnIndex": 0, "endColumnIndex": 9},
+                "rows": [_string_cells(row) for row in rows],
+                "fields": "userEnteredValue",
+            }
+        },
+    ])
+    _execute_sheets_write(sheets.spreadsheets().batchUpdate(
         spreadsheetId=file_id,
         body={"requests": requests},
-    ).execute()
-
-    header_values = [
-        {"range": _sheet_range(sheet_title, "A5"), "values": [[f"MANTENCIÓN - {plant_area_name or 'ÁREA'}"]]},
-        {"range": _sheet_range(sheet_title, "B7"), "values": [[equipment_name]]},
-        {
-            "range": _sheet_range(sheet_title, "A10:I10"),
-            "values": [[
-                "Fecha",
-                "Descripción del trabajo",
-                "Realizado por",
-                "Autorizado por",
-                "Observaciones",
-                "Estado",
-                "Tipo de mantenimiento",
-                "Repuestos",
-                "Tiempo real trabajado",
-            ]],
-        },
-    ]
-    sheets.spreadsheets().values().batchUpdate(
-        spreadsheetId=file_id,
-        body={"valueInputOption": "USER_ENTERED", "data": header_values},
-    ).execute()
-
-    sheets.spreadsheets().values().clear(
-        spreadsheetId=file_id,
-        range=_sheet_range(sheet_title, f"A11:I{max(current_rows, required_rows)}"),
-        body={},
-    ).execute()
-    if rows:
-        end_row = 10 + len(rows)
-        sheets.spreadsheets().values().update(
-            spreadsheetId=file_id,
-            range=_sheet_range(sheet_title, f"A11:I{end_row}"),
-            valueInputOption="USER_ENTERED",
-            body={"values": rows},
-        ).execute()
+    ))
 
     return {
         "file_id": file_id,
